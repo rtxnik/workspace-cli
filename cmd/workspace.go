@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -109,6 +111,93 @@ var detectCmd = &cobra.Command{
 	},
 }
 
+var startCmd = &cobra.Command{
+	Use:         "start <name>",
+	Short:       "Start a workspace",
+	Args:        cobra.ExactArgs(1),
+	Annotations: wsAnnotation,
+	Run: func(cmd *cobra.Command, args []string) {
+		cfg := config.Load()
+		name := args[0]
+		if !workspace.Exists(cfg, name) {
+			output.Die(fmt.Sprintf("workspace %q not found", name))
+		}
+		source := filepath.Join(cfg.WorkspacesDir, name)
+		output.Info(fmt.Sprintf("Starting workspace %q...", name))
+		if err := workspace.DevpodUp(name, source); err != nil {
+			output.Die(err.Error())
+		}
+		output.Success(fmt.Sprintf("Workspace %q started", name))
+	},
+}
+
+var stopCmd = &cobra.Command{
+	Use:         "stop <name>",
+	Short:       "Stop a workspace",
+	Args:        cobra.ExactArgs(1),
+	Annotations: wsAnnotation,
+	Run: func(cmd *cobra.Command, args []string) {
+		name := args[0]
+		output.Info(fmt.Sprintf("Stopping workspace %q...", name))
+		if err := workspace.DevpodStop(name); err != nil {
+			output.Die(err.Error())
+		}
+		output.Success(fmt.Sprintf("Workspace %q stopped", name))
+	},
+}
+
+var deleteCmd = &cobra.Command{
+	Use:         "delete <name>",
+	Aliases:     []string{"rm"},
+	Short:       "Delete a workspace",
+	Args:        cobra.ExactArgs(1),
+	Annotations: wsAnnotation,
+	Run: func(cmd *cobra.Command, args []string) {
+		cfg := config.Load()
+		name := args[0]
+		output.Info(fmt.Sprintf("Deleting workspace %q...", name))
+		if err := workspace.DevpodDelete(name); err != nil {
+			output.Warn(fmt.Sprintf("devpod delete: %s", err))
+		}
+		wsDir := filepath.Join(cfg.WorkspacesDir, name)
+		if err := os.RemoveAll(wsDir); err != nil {
+			output.Die(fmt.Sprintf("remove directory: %s", err))
+		}
+		output.Success(fmt.Sprintf("Workspace %q deleted", name))
+	},
+}
+
+var sshCmd = &cobra.Command{
+	Use:         "ssh <name>",
+	Short:       "SSH into a workspace",
+	Args:        cobra.ExactArgs(1),
+	Annotations: wsAnnotation,
+	Run: func(cmd *cobra.Command, args []string) {
+		name := args[0]
+		// Rename tmux window if inside tmux.
+		if tmux := os.Getenv("TMUX"); tmux != "" {
+			_ = exec.Command("tmux", "rename-window", name).Run()
+		}
+		if err := workspace.DevpodSSH(name); err != nil {
+			output.Die(err.Error())
+		}
+	},
+}
+
+var codeCmd = &cobra.Command{
+	Use:         "code <name>",
+	Short:       "Open workspace in VS Code",
+	Args:        cobra.ExactArgs(1),
+	Annotations: wsAnnotation,
+	Run: func(cmd *cobra.Command, args []string) {
+		name := args[0]
+		output.Info(fmt.Sprintf("Opening workspace %q in VS Code...", name))
+		if err := workspace.DevpodCode(name); err != nil {
+			output.Die(err.Error())
+		}
+	},
+}
+
 func formatStatus(s string) string {
 	s = strings.ToLower(s)
 	switch {
@@ -128,4 +217,9 @@ func init() {
 	rootCmd.AddCommand(newCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(detectCmd)
+	rootCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(stopCmd)
+	rootCmd.AddCommand(deleteCmd)
+	rootCmd.AddCommand(sshCmd)
+	rootCmd.AddCommand(codeCmd)
 }
