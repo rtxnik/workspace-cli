@@ -268,9 +268,8 @@ func warnProxyConnected(cfg config.Config) {
 		return
 	}
 
-	output.Warn(fmt.Sprintf("Active workspaces using proxy: %s", strings.Join(names, ", ")))
-	output.Detail("This will interrupt network for these workspaces.")
-	if !output.Confirm("Continue?") {
+	desc := fmt.Sprintf("Active workspaces: %s\nThis will interrupt network for these workspaces.", strings.Join(names, ", "))
+	if !output.Confirm("Continue?", desc) {
 		output.Info("Aborted")
 		os.Exit(0)
 	}

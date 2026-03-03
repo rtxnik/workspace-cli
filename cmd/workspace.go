@@ -159,6 +159,15 @@ var deleteCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		name := args[0]
+
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			if !output.Confirm(fmt.Sprintf("Delete workspace %q?", name), "This will remove the workspace and its local files.") {
+				output.Info("Aborted")
+				return
+			}
+		}
+
 		output.Info(fmt.Sprintf("Deleting workspace %q...", name))
 		if err := workspace.DevpodDelete(name); err != nil {
 			output.Warn(fmt.Sprintf("devpod delete: %s", err))
@@ -249,6 +258,7 @@ func formatStatus(s string) string {
 
 func init() {
 	newCmd.Flags().Bool("proxy", false, "Enable proxy networking")
+	deleteCmd.Flags().BoolP("force", "f", false, "Skip delete confirmation")
 	rootCmd.AddCommand(newCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(detectCmd)

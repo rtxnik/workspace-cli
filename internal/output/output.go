@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -43,13 +44,20 @@ func Die(msg string) {
 	os.Exit(1)
 }
 
-// Confirm prints a prompt and waits for y/N input. Returns true only if
-// the user types "y" or "Y".
-func Confirm(prompt string) bool {
-	fmt.Fprintf(os.Stderr, "%s [y/N] ", warnStyle.Render("⚠ "+prompt))
-	var answer string
-	if _, err := fmt.Scanln(&answer); err != nil {
+// Confirm shows an interactive confirmation dialog. Returns true only if
+// the user explicitly confirms. Default is No (safe default).
+func Confirm(title string, description string) bool {
+	var confirmed bool
+	err := huh.NewConfirm().
+		Title("⚠ " + title).
+		Description(description).
+		Affirmative("Yes").
+		Negative("No").
+		Value(&confirmed).
+		Run()
+
+	if err != nil {
 		return false
 	}
-	return answer == "y" || answer == "Y"
+	return confirmed
 }
