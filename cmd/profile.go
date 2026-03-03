@@ -59,6 +59,10 @@ var profileCreateCmd = &cobra.Command{
 		cfg := config.Load()
 		name := args[0]
 
+		if err := profile.ValidateName(name); err != nil {
+			output.Die(err.Error())
+		}
+
 		if profile.Exists(cfg, name) {
 			output.Die(fmt.Sprintf("profile %q already exists", name))
 		}

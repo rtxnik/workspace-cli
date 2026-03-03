@@ -11,9 +11,9 @@ func TestParse(t *testing.T) {
 	}{
 		{
 			name: "tcp-reality",
-			uri:  "vless://uuid-1234@example.com:443?encryption=none&flow=xtls-rprx-vision&type=tcp&security=reality&sni=www.google.com&fp=chrome&pbk=pub123&sid=ab&spx=%2F#my-node",
+			uri:  "vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none&flow=xtls-rprx-vision&type=tcp&security=reality&sni=www.google.com&fp=chrome&pbk=pub123&sid=ab&spx=%2F#my-node",
 			want: VLESSConfig{
-				UUID: "uuid-1234", Address: "example.com", Port: 443,
+				UUID: "11111111-1111-1111-1111-111111111111", Address: "example.com", Port: 443,
 				Encryption: "none", Flow: "xtls-rprx-vision",
 				Network: "tcp", Security: "reality",
 				SNI: "www.google.com", Fp: "chrome",
@@ -23,9 +23,9 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "tcp-http-header",
-			uri:  "vless://uuid-5678@example.com:80?type=tcp&security=none&headerType=http&host=cdn.example.com&path=%2F#http-node",
+			uri:  "vless://22222222-2222-2222-2222-222222222222@example.com:80?type=tcp&security=none&headerType=http&host=cdn.example.com&path=%2F#http-node",
 			want: VLESSConfig{
-				UUID: "uuid-5678", Address: "example.com", Port: 80,
+				UUID: "22222222-2222-2222-2222-222222222222", Address: "example.com", Port: 80,
 				Encryption: "none",
 				Network: "tcp", Security: "none", Fp: "chrome",
 				HeaderType: "http", Host: "cdn.example.com", Path: "/",
@@ -34,9 +34,9 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "websocket-tls",
-			uri:  "vless://uuid-ws@ws.example.com:443?type=ws&security=tls&sni=ws.example.com&fp=firefox&host=ws.example.com&path=%2Fvless-ws#ws-tls",
+			uri:  "vless://33333333-3333-3333-3333-333333333333@ws.example.com:443?type=ws&security=tls&sni=ws.example.com&fp=firefox&host=ws.example.com&path=%2Fvless-ws#ws-tls",
 			want: VLESSConfig{
-				UUID: "uuid-ws", Address: "ws.example.com", Port: 443,
+				UUID: "33333333-3333-3333-3333-333333333333", Address: "ws.example.com", Port: 443,
 				Encryption: "none",
 				Network: "ws", Security: "tls",
 				SNI: "ws.example.com", Fp: "firefox",
@@ -46,9 +46,9 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "grpc-reality",
-			uri:  "vless://uuid-grpc@grpc.example.com:443?type=grpc&security=reality&sni=www.google.com&fp=chrome&pbk=grpc-pub&sid=cd&serviceName=mygrpc#grpc-node",
+			uri:  "vless://44444444-4444-4444-4444-444444444444@grpc.example.com:443?type=grpc&security=reality&sni=www.google.com&fp=chrome&pbk=grpc-pub&sid=cd&serviceName=mygrpc#grpc-node",
 			want: VLESSConfig{
-				UUID: "uuid-grpc", Address: "grpc.example.com", Port: 443,
+				UUID: "44444444-4444-4444-4444-444444444444", Address: "grpc.example.com", Port: 443,
 				Encryption: "none",
 				Network: "grpc", Security: "reality",
 				SNI: "www.google.com", Fp: "chrome",
@@ -59,9 +59,9 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "h2-tls",
-			uri:  "vless://uuid-h2@h2.example.com:443?type=h2&security=tls&sni=h2.example.com&fp=chrome&host=h2.example.com&path=%2Fh2path#h2-node",
+			uri:  "vless://55555555-5555-5555-5555-555555555555@h2.example.com:443?type=h2&security=tls&sni=h2.example.com&fp=chrome&host=h2.example.com&path=%2Fh2path#h2-node",
 			want: VLESSConfig{
-				UUID: "uuid-h2", Address: "h2.example.com", Port: 443,
+				UUID: "55555555-5555-5555-5555-555555555555", Address: "h2.example.com", Port: 443,
 				Encryption: "none",
 				Network: "h2", Security: "tls",
 				SNI: "h2.example.com", Fp: "chrome",
@@ -71,9 +71,9 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "httpupgrade-tls",
-			uri:  "vless://uuid-hu@hu.example.com:443?type=httpupgrade&security=tls&sni=hu.example.com&fp=safari&host=hu.example.com&path=%2Fupgrade#hu-node",
+			uri:  "vless://66666666-6666-6666-6666-666666666666@hu.example.com:443?type=httpupgrade&security=tls&sni=hu.example.com&fp=safari&host=hu.example.com&path=%2Fupgrade#hu-node",
 			want: VLESSConfig{
-				UUID: "uuid-hu", Address: "hu.example.com", Port: 443,
+				UUID: "66666666-6666-6666-6666-666666666666", Address: "hu.example.com", Port: 443,
 				Encryption: "none",
 				Network: "httpupgrade", Security: "tls",
 				SNI: "hu.example.com", Fp: "safari",
@@ -83,9 +83,9 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "xhttp-reality",
-			uri:  "vless://uuid-xhttp@xhttp.example.com:443?type=xhttp&security=reality&sni=www.google.com&fp=chrome&pbk=xhttp-pub&sid=ef&path=%2Fxpath&mode=auto#xhttp-node",
+			uri:  "vless://77777777-7777-7777-7777-777777777777@xhttp.example.com:443?type=xhttp&security=reality&sni=www.google.com&fp=chrome&pbk=xhttp-pub&sid=ef&path=%2Fxpath&mode=auto#xhttp-node",
 			want: VLESSConfig{
-				UUID: "uuid-xhttp", Address: "xhttp.example.com", Port: 443,
+				UUID: "77777777-7777-7777-7777-777777777777", Address: "xhttp.example.com", Port: 443,
 				Encryption: "none",
 				Network: "xhttp", Security: "reality",
 				SNI: "www.google.com", Fp: "chrome",
@@ -96,9 +96,9 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name: "defaults applied",
-			uri:  "vless://uuid-min@min.example.com:443#minimal",
+			uri:  "vless://88888888-8888-8888-8888-888888888888@min.example.com:443#minimal",
 			want: VLESSConfig{
-				UUID: "uuid-min", Address: "min.example.com", Port: 443,
+				UUID: "88888888-8888-8888-8888-888888888888", Address: "min.example.com", Port: 443,
 				Encryption: "none",
 				Network: "tcp", Security: "none", Fp: "chrome",
 				Remark: "minimal",
@@ -116,7 +116,22 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:    "invalid port",
-			uri:     "vless://uuid@example.com:abc",
+			uri:     "vless://11111111-1111-1111-1111-111111111111@example.com:abc",
+			wantErr: true,
+		},
+		{
+			name:    "invalid UUID format",
+			uri:     "vless://not-a-uuid@example.com:443",
+			wantErr: true,
+		},
+		{
+			name:    "port zero",
+			uri:     "vless://11111111-1111-1111-1111-111111111111@example.com:0",
+			wantErr: true,
+		},
+		{
+			name:    "port too high",
+			uri:     "vless://11111111-1111-1111-1111-111111111111@example.com:70000",
 			wantErr: true,
 		},
 	}

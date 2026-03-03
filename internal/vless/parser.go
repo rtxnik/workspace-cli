@@ -3,9 +3,12 @@ package vless
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // VLESSConfig holds parsed VLESS URI parameters.
 type VLESSConfig struct {
@@ -54,15 +57,23 @@ func Parse(uri string) (VLESSConfig, error) {
 		return VLESSConfig{}, fmt.Errorf("missing UUID in URI")
 	}
 
+	uuid := u.User.Username()
+	if !uuidRegex.MatchString(uuid) {
+		return VLESSConfig{}, fmt.Errorf("invalid UUID format %q: expected 8-4-4-4-12 hex", uuid)
+	}
+
 	port, err := strconv.Atoi(u.Port())
 	if err != nil {
 		return VLESSConfig{}, fmt.Errorf("invalid port %q: %w", u.Port(), err)
+	}
+	if port < 1 || port > 65535 {
+		return VLESSConfig{}, fmt.Errorf("invalid port %d: must be 1-65535", port)
 	}
 
 	q := u.Query()
 
 	cfg := VLESSConfig{
-		UUID:       u.User.Username(),
+		UUID:       uuid,
 		Address:    u.Hostname(),
 		Port:       port,
 		Encryption: q.Get("encryption"),

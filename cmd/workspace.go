@@ -27,6 +27,10 @@ var newCmd = &cobra.Command{
 		cfg := config.Load()
 		name := args[0]
 
+		if err := workspace.ValidateName(name); err != nil {
+			output.Die(err.Error())
+		}
+
 		if workspace.Exists(cfg, name) {
 			output.Die(fmt.Sprintf("workspace %q already exists", name))
 		}

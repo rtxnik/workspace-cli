@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/rtxnik/ws/internal/config"
+	"github.com/rtxnik/ws/internal/output"
 )
 
 type Info struct {
@@ -104,6 +106,11 @@ func devpodStatuses() map[string]string {
 	result := make(map[string]string)
 	out, err := exec.Command("devpod", "list", "--output", "json").Output()
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			output.Warn("devpod not found in PATH, workspace statuses unavailable")
+		} else {
+			output.Warn(fmt.Sprintf("devpod list failed: %s", err))
+		}
 		return result
 	}
 
