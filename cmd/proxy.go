@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/ws/internal/config"
 	"github.com/rtxnik/ws/internal/docker"
 	"github.com/rtxnik/ws/internal/output"
@@ -60,20 +61,42 @@ var proxyStatusCmd = &cobra.Command{
 		if err != nil {
 			output.Die(err.Error())
 		}
-		if !st.Running {
-			fmt.Println("○ Proxy is not running")
-			return
+
+		stateColor := lipgloss.Color("#ef4444")
+		stateText := "○ Stopped"
+		if st.Running {
+			stateColor = lipgloss.Color("#22c55e")
+			stateText = "● Running"
 		}
-		fmt.Println("● Proxy is running")
+
+		var lines []string
+		lines = append(lines, lipgloss.NewStyle().Foreground(stateColor).Bold(true).Render(stateText))
 		if st.Health != "" {
-			output.Detail(fmt.Sprintf("Health: %s", st.Health))
+			healthColor := lipgloss.Color("#6b7280")
+			switch st.Health {
+			case "healthy":
+				healthColor = lipgloss.Color("#22c55e")
+			case "starting":
+				healthColor = lipgloss.Color("#eab308")
+			case "unhealthy":
+				healthColor = lipgloss.Color("#ef4444")
+			}
+			lines = append(lines, fmt.Sprintf("Health:  %s", lipgloss.NewStyle().Foreground(healthColor).Render(st.Health)))
 		}
 		if st.Uptime != "" {
-			output.Detail(fmt.Sprintf("Uptime: %s", st.Uptime))
+			lines = append(lines, fmt.Sprintf("Uptime:  %s", st.Uptime))
 		}
 		if st.Image != "" {
-			output.Detail(fmt.Sprintf("Image:  %s", st.Image))
+			lines = append(lines, fmt.Sprintf("Image:   %s", st.Image))
 		}
+
+		box := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#3b82f6")).
+			Padding(0, 1).
+			Render(strings.Join(lines, "\n"))
+
+		fmt.Println(box)
 	},
 }
 
@@ -83,20 +106,26 @@ var proxyCheckCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		results := docker.ProxyCheck(cfg)
-		failures := 0
+
+		passStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+		failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+
+		passed := 0
 		for _, r := range results {
 			if r.Passed {
-				fmt.Printf("  ✓ %s\n", r.Name)
+				fmt.Printf("  %s %s\n", passStyle.Render("✓"), r.Name)
+				passed++
 			} else {
-				fmt.Printf("  ✗ %s\n", r.Name)
-				failures++
+				fmt.Printf("  %s %s\n", failStyle.Render("✗"), r.Name)
 			}
 		}
+
 		fmt.Println()
-		if failures > 0 {
-			output.Warn(fmt.Sprintf("%d issue(s) found", failures))
+		total := len(results)
+		if passed == total {
+			output.Success(fmt.Sprintf("%d/%d checks passed", passed, total))
 		} else {
-			output.Success("All checks passed")
+			output.Warn(fmt.Sprintf("%d/%d checks passed", passed, total))
 		}
 	},
 }

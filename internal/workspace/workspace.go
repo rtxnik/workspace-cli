@@ -17,6 +17,7 @@ type Info struct {
 	Name    string
 	Status  string
 	Profile string
+	Proxy   bool
 }
 
 // Exists returns true if a workspace directory exists.
@@ -92,6 +93,7 @@ func List(cfg config.Config) ([]Info, error) {
 			Name:    name,
 			Status:  statuses[name],
 			Profile: readProfile(cfg, name),
+			Proxy:   hasProxyNetwork(cfg, name),
 		}
 		if ws.Status == "" {
 			ws.Status = "NotCreated"
@@ -146,6 +148,28 @@ func readProfile(cfg config.Config, name string) string {
 		return ""
 	}
 	return dc.ContainerEnv["WORKSPACE_PROFILE"]
+}
+
+// hasProxyNetwork checks if the workspace devcontainer.json has proxy network.
+func hasProxyNetwork(cfg config.Config, name string) bool {
+	dcPath := filepath.Join(cfg.WorkspacesDir, name, ".devcontainer", "devcontainer.json")
+	data, err := os.ReadFile(dcPath)
+	if err != nil {
+		return false
+	}
+	cleaned := stripJSONCComments(string(data))
+	var dc struct {
+		RunArgs []string `json:"runArgs"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &dc); err != nil {
+		return false
+	}
+	for _, arg := range dc.RunArgs {
+		if strings.HasPrefix(arg, "--network=container:") {
+			return true
+		}
+	}
+	return false
 }
 
 // stripJSONCComments removes single-line // comments from JSONC.

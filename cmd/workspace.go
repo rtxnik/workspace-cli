@@ -78,12 +78,16 @@ var listCmd = &cobra.Command{
 
 		rows := make([][]string, 0, len(workspaces))
 		for _, ws := range workspaces {
-			status := formatStatus(ws.Status)
-			rows = append(rows, []string{ws.Name, status, ws.Profile})
+			status := formatStatusColored(ws.Status)
+			proxy := ""
+			if ws.Proxy {
+				proxy = "⚡"
+			}
+			rows = append(rows, []string{ws.Name, status, ws.Profile, proxy})
 		}
 
 		t := table.New().
-			Headers("NAME", "STATUS", "PROFILE").
+			Headers("NAME", "STATUS", "PROFILE", "PROXY").
 			Rows(rows...).
 			StyleFunc(func(row, col int) lipgloss.Style {
 				if row == table.HeaderRow {
@@ -242,17 +246,24 @@ func selectWorkspace() string {
 	return output.Select("Select workspace:", opts)
 }
 
-func formatStatus(s string) string {
-	s = strings.ToLower(s)
-	switch {
-	case s == "running":
-		return "● Running"
-	case s == "stopped":
-		return "○ Stopped"
-	case s == "busy":
-		return "◉ Busy"
+var (
+	greenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	dimStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	yellowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#eab308"))
+)
+
+func formatStatusColored(s string) string {
+	switch strings.ToLower(s) {
+	case "running":
+		return greenStyle.Render("● Running")
+	case "stopped":
+		return dimStyle.Render("○ Stopped")
+	case "busy":
+		return yellowStyle.Render("◉ Busy")
+	case "notcreated", "":
+		return dimStyle.Render("○ NotCreated")
 	default:
-		return "○ " + s
+		return dimStyle.Render("○ " + s)
 	}
 }
 
