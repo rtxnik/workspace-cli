@@ -108,14 +108,17 @@ func devpodStatuses() map[string]string {
 	}
 
 	var items []struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
+		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(out, &items); err != nil {
 		return result
 	}
 	for _, item := range items {
-		result[item.ID] = item.Status
+		status, err := exec.Command("devpod", "status", item.ID).Output()
+		if err != nil {
+			continue
+		}
+		result[item.ID] = strings.TrimSpace(string(status))
 	}
 	return result
 }

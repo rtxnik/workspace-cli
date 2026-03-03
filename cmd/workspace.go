@@ -124,7 +124,7 @@ var startCmd = &cobra.Command{
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 		output.Info(fmt.Sprintf("Starting workspace %q...", name))
-		if err := workspace.DevpodUp(name, source); err != nil {
+		if err := workspace.DevpodUp(source); err != nil {
 			output.Die(err.Error())
 		}
 		output.Success(fmt.Sprintf("Workspace %q started", name))

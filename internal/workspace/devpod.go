@@ -7,8 +7,8 @@ import (
 )
 
 // DevpodUp starts a workspace using devpod.
-func DevpodUp(name, source string) error {
-	return devpodExec("up", name, "--source", source)
+func DevpodUp(source string) error {
+	return devpodExec("up", source)
 }
 
 // DevpodStop stops a running workspace.
