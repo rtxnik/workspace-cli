@@ -37,13 +37,14 @@ var proxyDownCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Stop the proxy container",
 	Run: func(cmd *cobra.Command, args []string) {
+		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			warnProxyConnected()
+			warnProxyConnected(cfg)
 		}
 
 		output.Info("Stopping proxy...")
-		if err := docker.ProxyDown(); err != nil {
+		if err := docker.ProxyDown(cfg); err != nil {
 			output.Die(err.Error())
 		}
 		output.Success("Proxy stopped")
@@ -54,7 +55,8 @@ var proxyStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show proxy container status",
 	Run: func(cmd *cobra.Command, args []string) {
-		st, err := docker.ProxyStatus()
+		cfg := config.Load()
+		st, err := docker.ProxyStatus(cfg)
 		if err != nil {
 			output.Die(err.Error())
 		}
@@ -103,7 +105,8 @@ var proxyLogsCmd = &cobra.Command{
 	Use:   "logs",
 	Short: "Show proxy container logs",
 	Run: func(cmd *cobra.Command, args []string) {
-		logs, err := docker.ProxyLogs(50)
+		cfg := config.Load()
+		logs, err := docker.ProxyLogs(cfg, 50)
 		if err != nil {
 			output.Die(err.Error())
 		}
@@ -118,7 +121,7 @@ var proxyRebuildCmd = &cobra.Command{
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			warnProxyConnected()
+			warnProxyConnected(cfg)
 		}
 
 		output.Info("Rebuilding proxy image...")
@@ -133,7 +136,8 @@ var proxyTestCmd = &cobra.Command{
 	Use:   "test",
 	Short: "Test proxy connectivity",
 	Run: func(cmd *cobra.Command, args []string) {
-		st, err := docker.ProxyStatus()
+		cfg := config.Load()
+		st, err := docker.ProxyStatus(cfg)
 		if err != nil || !st.Running {
 			output.Die("Proxy is not running")
 		}
@@ -176,7 +180,7 @@ var proxyDebugCmd = &cobra.Command{
 		output.Success(fmt.Sprintf("Log level set to %q", level))
 
 		// Restart proxy if running.
-		st, _ := docker.ProxyStatus()
+		st, _ := docker.ProxyStatus(cfg)
 		if st.Running {
 			output.Info("Restarting proxy...")
 			if err := docker.ProxyRestart(cfg); err != nil {
@@ -214,7 +218,7 @@ var proxyUpdateCmd = &cobra.Command{
 		output.Success(fmt.Sprintf("Proxy image built with xray-core %s", version))
 
 		// Auto-start if config exists.
-		if _, err := docker.ProxyStatus(); err == nil {
+		if _, err := docker.ProxyStatus(cfg); err == nil {
 			output.Info("Starting proxy...")
 			if err := docker.ProxyRestart(cfg); err != nil {
 				output.Warn(err.Error())
@@ -258,8 +262,8 @@ var proxyInitCmd = &cobra.Command{
 
 // warnProxyConnected checks for workspaces sharing the proxy network
 // and asks for confirmation before proceeding. Exits if user declines.
-func warnProxyConnected() {
-	names, err := docker.ProxyConnectedContainers()
+func warnProxyConnected(cfg config.Config) {
+	names, err := docker.ProxyConnectedContainers(cfg)
 	if err != nil || len(names) == 0 {
 		return
 	}

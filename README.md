@@ -62,6 +62,8 @@ Environment variables (with defaults):
 | `PROFILES_DIR` | `~/.config/workspaces/profiles` | Profile definitions |
 | `SHARED_DIR` | `~/.config/workspaces/shared` | Shared scripts |
 | `XRAY_CONFIG` | `~/.config/xray/config.json` | Proxy config path |
+| `WS_PROXY_CONTAINER` | `dev-proxy` | Proxy container name |
+| `WS_PROXY_IMAGE` | `devpod-proxy` | Proxy Docker image name |
 
 ## Build
 

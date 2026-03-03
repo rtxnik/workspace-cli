@@ -27,7 +27,7 @@ func newClient() (*client.Client, error) {
 }
 
 // ProxyStatus returns the current status of the proxy container.
-func ProxyStatus() (Status, error) {
+func ProxyStatus(cfg config.Config) (Status, error) {
 	cli, err := newClient()
 	if err != nil {
 		return Status{}, fmt.Errorf("docker client: %w", err)
@@ -35,7 +35,7 @@ func ProxyStatus() (Status, error) {
 	defer cli.Close()
 
 	ctx := context.Background()
-	info, err := cli.ContainerInspect(ctx, config.ProxyContainer)
+	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
 	if err != nil {
 		return Status{Running: false}, nil
 	}
@@ -70,16 +70,16 @@ func ProxyUp(cfg config.Config) error {
 	ctx := context.Background()
 
 	// Check if container already exists.
-	info, err := cli.ContainerInspect(ctx, config.ProxyContainer)
+	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
 	if err == nil {
 		if info.State.Running {
 			return nil
 		}
-		return cli.ContainerStart(ctx, config.ProxyContainer, container.StartOptions{})
+		return cli.ContainerStart(ctx, cfg.ProxyContainer, container.StartOptions{})
 	}
 
-	if !imageExists(ctx, cli) {
-		return fmt.Errorf("proxy image %q not found, run 'ws proxy rebuild' first", config.ProxyImage)
+	if !imageExists(ctx, cli, cfg.ProxyImage) {
+		return fmt.Errorf("proxy image %q not found, run 'ws proxy rebuild' first", cfg.ProxyImage)
 	}
 
 	if _, err := os.Stat(cfg.XrayConfig); os.IsNotExist(err) {
@@ -88,14 +88,14 @@ func ProxyUp(cfg config.Config) error {
 
 	resp, err := cli.ContainerCreate(ctx,
 		&container.Config{
-			Image: config.ProxyImage,
+			Image: cfg.ProxyImage,
 		},
 		&container.HostConfig{
 			Binds:         []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
 			CapAdd:        []string{"NET_ADMIN"},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		},
-		nil, nil, config.ProxyContainer,
+		nil, nil, cfg.ProxyContainer,
 	)
 	if err != nil {
 		return fmt.Errorf("create container: %w", err)
@@ -105,7 +105,7 @@ func ProxyUp(cfg config.Config) error {
 }
 
 // ProxyDown stops and removes the proxy container.
-func ProxyDown() error {
+func ProxyDown(cfg config.Config) error {
 	cli, err := newClient()
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
@@ -114,8 +114,8 @@ func ProxyDown() error {
 
 	ctx := context.Background()
 	timeout := 10
-	_ = cli.ContainerStop(ctx, config.ProxyContainer, container.StopOptions{Timeout: &timeout})
-	_ = cli.ContainerRemove(ctx, config.ProxyContainer, container.RemoveOptions{Force: true})
+	_ = cli.ContainerStop(ctx, cfg.ProxyContainer, container.StopOptions{Timeout: &timeout})
+	_ = cli.ContainerRemove(ctx, cfg.ProxyContainer, container.RemoveOptions{Force: true})
 	return nil
 }
 
@@ -149,11 +149,11 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 		results[1].Passed = true
 	}
 
-	if imageExists(ctx, cli) {
+	if imageExists(ctx, cli, cfg.ProxyImage) {
 		results[2].Passed = true
 	}
 
-	info, err := cli.ContainerInspect(ctx, config.ProxyContainer)
+	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
 	if err == nil && info.State.Running {
 		results[3].Passed = true
 	}
@@ -162,14 +162,14 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 }
 
 // ProxyLogs returns the last n lines of proxy container logs.
-func ProxyLogs(n int) (string, error) {
+func ProxyLogs(cfg config.Config, n int) (string, error) {
 	cli, err := newClient()
 	if err != nil {
 		return "", fmt.Errorf("docker client: %w", err)
 	}
 	defer cli.Close()
 
-	reader, err := cli.ContainerLogs(context.Background(), config.ProxyContainer, container.LogsOptions{
+	reader, err := cli.ContainerLogs(context.Background(), cfg.ProxyContainer, container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       fmt.Sprintf("%d", n),
@@ -190,7 +190,7 @@ func ProxyLogs(n int) (string, error) {
 // Build happens first (while proxy may still be running), then a quick
 // container restart minimizes the network gap to seconds.
 func ProxyRebuild(cfg config.Config) error {
-	st, _ := ProxyStatus()
+	st, _ := ProxyStatus(cfg)
 	wasRunning := st.Running
 
 	// Build new image first — Docker allows reusing the tag while the
@@ -201,7 +201,7 @@ func ProxyRebuild(cfg config.Config) error {
 
 	// Quick swap: stop old container and start new one.
 	if wasRunning {
-		_ = ProxyDown()
+		_ = ProxyDown(cfg)
 		if err := ProxyUp(cfg); err != nil {
 			return fmt.Errorf("restart after rebuild: %w", err)
 		}
@@ -216,7 +216,7 @@ func ProxyRebuild(cfg config.Config) error {
 
 // ProxyRestart stops and starts the proxy container.
 func ProxyRestart(cfg config.Config) error {
-	_ = ProxyDown()
+	_ = ProxyDown(cfg)
 	return ProxyUp(cfg)
 }
 
@@ -224,7 +224,7 @@ func ProxyRestart(cfg config.Config) error {
 // it's passed as a build arg to override the default xray-core version.
 func BuildProxyImage(cfg config.Config, version string) error {
 	proxyDir := filepath.Join(cfg.ProfilesDir, "proxy")
-	args := []string{"build", "-t", config.ProxyImage}
+	args := []string{"build", "-t", cfg.ProxyImage}
 	if version != "" {
 		args = append(args, "--build-arg", "XRAY_VERSION="+version)
 	}
@@ -238,7 +238,7 @@ func BuildProxyImage(cfg config.Config, version string) error {
 
 // ProxyConnectedContainers returns names of running containers that share
 // the proxy container's network namespace (--network=container:dev-proxy).
-func ProxyConnectedContainers() ([]string, error) {
+func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
 	cli, err := newClient()
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
@@ -251,7 +251,7 @@ func ProxyConnectedContainers() ([]string, error) {
 		return nil, fmt.Errorf("list containers: %w", err)
 	}
 
-	target := "container:" + config.ProxyContainer
+	target := "container:" + cfg.ProxyContainer
 	var names []string
 	for _, c := range containers {
 		if c.HostConfig.NetworkMode == target {
@@ -268,7 +268,7 @@ func ProxyConnectedContainers() ([]string, error) {
 	return names, nil
 }
 
-func imageExists(ctx context.Context, cli *client.Client) bool {
-	_, _, err := cli.ImageInspectWithRaw(ctx, config.ProxyImage)
+func imageExists(ctx context.Context, cli *client.Client, image string) bool {
+	_, _, err := cli.ImageInspectWithRaw(ctx, image)
 	return err == nil
 }
