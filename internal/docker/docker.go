@@ -99,6 +99,7 @@ func ProxyUp(cfg config.Config) error {
 		&container.HostConfig{
 			Binds:         []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
 			CapAdd:        []string{"NET_ADMIN"},
+			Sysctls:       map[string]string{"net.ipv4.ip_forward": "1"},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		},
 		&network.NetworkingConfig{
