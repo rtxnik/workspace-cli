@@ -127,11 +127,11 @@ var startCmd = &cobra.Command{
 			output.Die(fmt.Sprintf("workspace %q not found", name))
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
-		output.Info(fmt.Sprintf("Starting workspace %q...", name))
-		if err := workspace.DevpodUp(source); err != nil {
+		if err := output.RunWithSpinner(fmt.Sprintf("Starting workspace %q", name), func() error {
+			return workspace.DevpodUp(source)
+		}); err != nil {
 			output.Die(err.Error())
 		}
-		output.Success(fmt.Sprintf("Workspace %q started", name))
 	},
 }
 
@@ -142,11 +142,11 @@ var stopCmd = &cobra.Command{
 	Annotations: wsAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
-		output.Info(fmt.Sprintf("Stopping workspace %q...", name))
-		if err := workspace.DevpodStop(name); err != nil {
+		if err := output.RunWithSpinner(fmt.Sprintf("Stopping workspace %q", name), func() error {
+			return workspace.DevpodStop(name)
+		}); err != nil {
 			output.Die(err.Error())
 		}
-		output.Success(fmt.Sprintf("Workspace %q stopped", name))
 	},
 }
 
@@ -168,15 +168,15 @@ var deleteCmd = &cobra.Command{
 			}
 		}
 
-		output.Info(fmt.Sprintf("Deleting workspace %q...", name))
-		if err := workspace.DevpodDelete(name); err != nil {
-			output.Warn(fmt.Sprintf("devpod delete: %s", err))
+		if err := output.RunWithSpinner(fmt.Sprintf("Deleting workspace %q", name), func() error {
+			if err := workspace.DevpodDelete(name); err != nil {
+				output.Warn(fmt.Sprintf("devpod delete: %s", err))
+			}
+			wsDir := filepath.Join(cfg.WorkspacesDir, name)
+			return os.RemoveAll(wsDir)
+		}); err != nil {
+			output.Die(err.Error())
 		}
-		wsDir := filepath.Join(cfg.WorkspacesDir, name)
-		if err := os.RemoveAll(wsDir); err != nil {
-			output.Die(fmt.Sprintf("remove directory: %s", err))
-		}
-		output.Success(fmt.Sprintf("Workspace %q deleted", name))
 	},
 }
 

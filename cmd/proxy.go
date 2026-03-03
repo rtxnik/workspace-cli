@@ -25,11 +25,11 @@ var proxyUpCmd = &cobra.Command{
 	Short: "Start the proxy container",
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
-		output.Info("Starting proxy...")
-		if err := docker.ProxyUp(cfg); err != nil {
+		if err := output.RunWithSpinner("Starting proxy", func() error {
+			return docker.ProxyUp(cfg)
+		}); err != nil {
 			output.Die(err.Error())
 		}
-		output.Success("Proxy started")
 	},
 }
 
@@ -43,11 +43,11 @@ var proxyDownCmd = &cobra.Command{
 			warnProxyConnected(cfg)
 		}
 
-		output.Info("Stopping proxy...")
-		if err := docker.ProxyDown(cfg); err != nil {
+		if err := output.RunWithSpinner("Stopping proxy", func() error {
+			return docker.ProxyDown(cfg)
+		}); err != nil {
 			output.Die(err.Error())
 		}
-		output.Success("Proxy stopped")
 	},
 }
 
@@ -124,11 +124,11 @@ var proxyRebuildCmd = &cobra.Command{
 			warnProxyConnected(cfg)
 		}
 
-		output.Info("Rebuilding proxy image...")
-		if err := docker.ProxyRebuild(cfg); err != nil {
+		if err := output.RunWithSpinner("Rebuilding proxy image", func() error {
+			return docker.ProxyRebuild(cfg)
+		}); err != nil {
 			output.Die(err.Error())
 		}
-		output.Success("Proxy image rebuilt")
 	},
 }
 
@@ -211,11 +211,11 @@ var proxyUpdateCmd = &cobra.Command{
 			output.Detail(fmt.Sprintf("Latest: %s", version))
 		}
 
-		output.Info(fmt.Sprintf("Building proxy image with xray-core %s...", version))
-		if err := docker.BuildProxyImage(cfg, version); err != nil {
+		if err := output.RunWithSpinner(fmt.Sprintf("Building proxy image with xray-core %s", version), func() error {
+			return docker.BuildProxyImage(cfg, version)
+		}); err != nil {
 			output.Die(err.Error())
 		}
-		output.Success(fmt.Sprintf("Proxy image built with xray-core %s", version))
 
 		// Auto-start if config exists.
 		if _, err := docker.ProxyStatus(cfg); err == nil {
