@@ -162,7 +162,7 @@ var proxyRebuildCmd = &cobra.Command{
 			output.Die(err.Error())
 		}
 		if reconnected > 0 {
-			output.Info(fmt.Sprintf("Reconnected %d workspace(s)", reconnected))
+			output.Info(fmt.Sprintf("Removed %d stale workspace container(s)", reconnected))
 		}
 	},
 }
@@ -260,7 +260,7 @@ var proxyUpdateCmd = &cobra.Command{
 		} else {
 			output.Success("Proxy restarted with new version")
 			if n > 0 {
-				output.Info(fmt.Sprintf("Reconnected %d workspace(s)", n))
+				output.Info(fmt.Sprintf("Removed %d stale workspace container(s)", n))
 			}
 		}
 	},

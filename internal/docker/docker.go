@@ -105,10 +105,13 @@ func ProxyUp(cfg config.Config) error {
 		return err
 	}
 
-	// Best-effort: restart workspace containers that reference the proxy
-	// so they re-resolve the network namespace after recreation.
+	// Remove workspace containers that referenced the old proxy.
+	// Docker resolves --network=container:<name> to a container ID at
+	// creation time. After proxy recreation the stored ID is stale and
+	// restart alone cannot fix it — the containers must be removed so
+	// that devpod recreates them with a fresh network reference.
 	ids, _ := connectedContainerIDs(cli, ctx, cfg)
-	restartContainers(cli, ctx, ids)
+	removeContainers(cli, ctx, ids)
 
 	return nil
 }
@@ -233,9 +236,10 @@ func ProxyRestart(cfg config.Config) error {
 	return ProxyUp(cfg)
 }
 
-// ProxyRecreate removes and recreates the proxy container, then restarts
-// workspace containers that share its network namespace.
-// Returns the number of reconnected workspace containers.
+// ProxyRecreate removes and recreates the proxy container, then removes
+// workspace containers with stale network references so that devpod
+// recreates them on next start.
+// Returns the number of removed workspace containers.
 func ProxyRecreate(cfg config.Config) (int, error) {
 	return proxyRecreate(cfg)
 }
@@ -262,8 +266,8 @@ func proxyRecreate(cfg config.Config) (int, error) {
 		return 0, err
 	}
 
-	// Restart connected workspace containers to re-resolve the namespace.
-	n := restartContainers(cli, ctx, ids)
+	// Remove stale workspace containers (see ProxyUp comment).
+	n := removeContainers(cli, ctx, ids)
 	return n, nil
 }
 
@@ -333,18 +337,56 @@ func connectedContainerIDs(cli *client.Client, ctx context.Context, cfg config.C
 	return ids, nil
 }
 
-// restartContainers restarts each container by ID and returns the number
-// of successful restarts.
-func restartContainers(cli *client.Client, ctx context.Context, ids []string) int {
-	timeout := 10
-	opts := container.StopOptions{Timeout: &timeout}
+// removeContainers force-removes each container by ID and returns the
+// number of successful removals.
+func removeContainers(cli *client.Client, ctx context.Context, ids []string) int {
 	var n int
 	for _, id := range ids {
-		if err := cli.ContainerRestart(ctx, id, opts); err == nil {
+		if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err == nil {
 			n++
 		}
 	}
 	return n
+}
+
+// CleanStaleProxyRefs removes stopped containers whose proxy network
+// reference is stale (container created before the current proxy).
+// Returns the number of removed containers.
+func CleanStaleProxyRefs(cfg config.Config) int {
+	cli, err := newClient()
+	if err != nil {
+		return 0
+	}
+	defer cli.Close()
+
+	ctx := context.Background()
+
+	proxyInfo, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
+	if err != nil {
+		// Proxy container doesn't exist — remove all referencing containers.
+		ids, _ := connectedContainerIDs(cli, ctx, cfg)
+		return removeContainers(cli, ctx, ids)
+	}
+
+	proxyCreated, err := time.Parse(time.RFC3339Nano, proxyInfo.Created)
+	if err != nil {
+		return 0
+	}
+
+	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return 0
+	}
+
+	target := "container:" + cfg.ProxyContainer
+	var staleIDs []string
+	for _, c := range containers {
+		if c.HostConfig.NetworkMode == target && c.State != "running" && c.Created < proxyCreated.Unix() {
+			staleIDs = append(staleIDs, c.ID)
+		}
+	}
+
+	return removeContainers(cli, ctx, staleIDs)
 }
 
 func imageExists(ctx context.Context, cli *client.Client, image string) bool {

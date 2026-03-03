@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss/table"
 	"github.com/rtxnik/ws/internal/config"
 	"github.com/rtxnik/ws/internal/detect"
+	"github.com/rtxnik/ws/internal/docker"
 	"github.com/rtxnik/ws/internal/output"
 	"github.com/rtxnik/ws/internal/workspace"
 	"github.com/spf13/cobra"
@@ -130,6 +131,13 @@ var startCmd = &cobra.Command{
 		if !workspace.Exists(cfg, name) {
 			output.Die(fmt.Sprintf("workspace %q not found", name))
 		}
+
+		// Remove workspace containers with stale proxy network references
+		// so that devpod recreates them with the current proxy container.
+		if workspace.HasProxyNetwork(cfg, name) {
+			docker.CleanStaleProxyRefs(cfg)
+		}
+
 		source := filepath.Join(cfg.WorkspacesDir, name)
 		if err := output.RunWithSpinner(fmt.Sprintf("Starting workspace %q", name), func() error {
 			return workspace.DevpodUp(source)

@@ -150,6 +150,11 @@ func readProfile(cfg config.Config, name string) string {
 	return dc.ContainerEnv["WORKSPACE_PROFILE"]
 }
 
+// HasProxyNetwork reports whether the workspace has proxy networking enabled.
+func HasProxyNetwork(cfg config.Config, name string) bool {
+	return hasProxyNetwork(cfg, name)
+}
+
 // hasProxyNetwork checks if the workspace devcontainer.json has proxy network.
 func hasProxyNetwork(cfg config.Config, name string) bool {
 	dcPath := filepath.Join(cfg.WorkspacesDir, name, ".devcontainer", "devcontainer.json")
