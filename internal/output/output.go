@@ -48,6 +48,8 @@ func Die(msg string) {
 func Confirm(prompt string) bool {
 	fmt.Fprintf(os.Stderr, "%s [y/N] ", warnStyle.Render("⚠ "+prompt))
 	var answer string
-	fmt.Scanln(&answer)
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return false
+	}
 	return answer == "y" || answer == "Y"
 }
