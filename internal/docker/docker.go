@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -296,84 +295,6 @@ func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
 		names = append(names, ep.Name)
 	}
 	return names, nil
-}
-
-// proxyNetworkRefs returns the set of NetworkMode values that reference
-// the proxy container. Docker may store either the name or the resolved
-// container ID depending on version, so we match both.
-func proxyNetworkRefs(cli *client.Client, ctx context.Context, cfg config.Config) map[string]bool {
-	refs := map[string]bool{
-		"container:" + cfg.ProxyContainer: true,
-	}
-	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
-	if err == nil {
-		refs["container:"+info.ID] = true
-	}
-	return refs
-}
-
-// connectedContainerIDs returns IDs of all containers (including stopped)
-// that share the proxy container's network namespace.
-func connectedContainerIDs(cli *client.Client, ctx context.Context, cfg config.Config) ([]string, error) {
-	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true})
-	if err != nil {
-		return nil, err
-	}
-
-	refs := proxyNetworkRefs(cli, ctx, cfg)
-	var ids []string
-	for _, c := range containers {
-		if refs[string(c.HostConfig.NetworkMode)] {
-			ids = append(ids, c.ID)
-		}
-	}
-	return ids, nil
-}
-
-// removeContainers force-removes each container by ID and returns the
-// number of successful removals.
-func removeContainers(cli *client.Client, ctx context.Context, ids []string) int {
-	var n int
-	for _, id := range ids {
-		if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err == nil {
-			n++
-		}
-	}
-	return n
-}
-
-// CleanStaleProxyRefs removes stopped containers whose network namespace
-// references a container that no longer exists. Docker resolves
-// --network=container:<name> to a container ID at creation time; after
-// the referenced container is removed the stored ID becomes stale and
-// the container cannot be restarted.
-// Returns the number of removed containers.
-func CleanStaleProxyRefs(cfg config.Config) int {
-	cli, err := newClient()
-	if err != nil {
-		return 0
-	}
-	defer cli.Close()
-
-	ctx := context.Background()
-	containers, err := cli.ContainerList(ctx, container.ListOptions{All: true})
-	if err != nil {
-		return 0
-	}
-
-	var staleIDs []string
-	for _, c := range containers {
-		nm := string(c.HostConfig.NetworkMode)
-		if !strings.HasPrefix(nm, "container:") || c.State == "running" {
-			continue
-		}
-		ref := nm[len("container:"):]
-		if _, err := cli.ContainerInspect(ctx, ref); err != nil {
-			staleIDs = append(staleIDs, c.ID)
-		}
-	}
-
-	return removeContainers(cli, ctx, staleIDs)
 }
 
 // ensureProxyNetwork creates the ws-proxy bridge network if it doesn't exist.
