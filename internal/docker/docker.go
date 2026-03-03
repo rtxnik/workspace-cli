@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/rtxnik/ws/internal/config"
 )
@@ -187,22 +186,32 @@ func ProxyLogs(n int) (string, error) {
 	return string(out), nil
 }
 
-// ProxyRebuild stops the container, removes the image, and rebuilds.
+// ProxyRebuild rebuilds the proxy image with minimal downtime.
+// Build happens first (while proxy may still be running), then a quick
+// container restart minimizes the network gap to seconds.
 func ProxyRebuild(cfg config.Config) error {
-	_ = ProxyDown()
+	st, _ := ProxyStatus()
+	wasRunning := st.Running
 
-	cli, err := newClient()
-	if err != nil {
-		return fmt.Errorf("docker client: %w", err)
-	}
-	defer cli.Close()
-
-	ctx := context.Background()
-	if imageExists(ctx, cli) {
-		_, _ = cli.ImageRemove(ctx, config.ProxyImage, image.RemoveOptions{Force: true})
+	// Build new image first — Docker allows reusing the tag while the
+	// old image is still in use (old image becomes dangling).
+	if err := BuildProxyImage(cfg, ""); err != nil {
+		return err
 	}
 
-	return BuildProxyImage(cfg, "")
+	// Quick swap: stop old container and start new one.
+	if wasRunning {
+		_ = ProxyDown()
+		if err := ProxyUp(cfg); err != nil {
+			return fmt.Errorf("restart after rebuild: %w", err)
+		}
+	}
+
+	// Clean up dangling old image (best-effort).
+	pruneCmd := exec.Command("docker", "image", "prune", "-f")
+	_ = pruneCmd.Run()
+
+	return nil
 }
 
 // ProxyRestart stops and starts the proxy container.
@@ -225,6 +234,38 @@ func BuildProxyImage(cfg config.Config, version string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// ProxyConnectedContainers returns names of running containers that share
+// the proxy container's network namespace (--network=container:dev-proxy).
+func ProxyConnectedContainers() ([]string, error) {
+	cli, err := newClient()
+	if err != nil {
+		return nil, fmt.Errorf("docker client: %w", err)
+	}
+	defer cli.Close()
+
+	ctx := context.Background()
+	containers, err := cli.ContainerList(ctx, container.ListOptions{All: false})
+	if err != nil {
+		return nil, fmt.Errorf("list containers: %w", err)
+	}
+
+	target := "container:" + config.ProxyContainer
+	var names []string
+	for _, c := range containers {
+		if c.HostConfig.NetworkMode == target {
+			name := c.ID[:12]
+			if len(c.Names) > 0 {
+				name = c.Names[0]
+				if len(name) > 0 && name[0] == '/' {
+					name = name[1:]
+				}
+			}
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 func imageExists(ctx context.Context, cli *client.Client) bool {

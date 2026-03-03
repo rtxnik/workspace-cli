@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/rtxnik/ws/internal/config"
 	"github.com/rtxnik/ws/internal/docker"
@@ -35,6 +37,11 @@ var proxyDownCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Stop the proxy container",
 	Run: func(cmd *cobra.Command, args []string) {
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			warnProxyConnected()
+		}
+
 		output.Info("Stopping proxy...")
 		if err := docker.ProxyDown(); err != nil {
 			output.Die(err.Error())
@@ -109,6 +116,11 @@ var proxyRebuildCmd = &cobra.Command{
 	Short: "Rebuild proxy image from scratch",
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			warnProxyConnected()
+		}
+
 		output.Info("Rebuilding proxy image...")
 		if err := docker.ProxyRebuild(cfg); err != nil {
 			output.Die(err.Error())
@@ -244,8 +256,26 @@ var proxyInitCmd = &cobra.Command{
 	},
 }
 
+// warnProxyConnected checks for workspaces sharing the proxy network
+// and asks for confirmation before proceeding. Exits if user declines.
+func warnProxyConnected() {
+	names, err := docker.ProxyConnectedContainers()
+	if err != nil || len(names) == 0 {
+		return
+	}
+
+	output.Warn(fmt.Sprintf("Active workspaces using proxy: %s", strings.Join(names, ", ")))
+	output.Detail("This will interrupt network for these workspaces.")
+	if !output.Confirm("Continue?") {
+		output.Info("Aborted")
+		os.Exit(0)
+	}
+}
+
 func init() {
 	proxyInitCmd.Flags().Bool("add", false, "Add node to existing config instead of creating new")
+	proxyDownCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
+	proxyRebuildCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 
 	proxyCmd.AddCommand(proxyUpCmd)
 	proxyCmd.AddCommand(proxyDownCmd)

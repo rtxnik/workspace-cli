@@ -42,3 +42,12 @@ func Die(msg string) {
 	fmt.Fprintln(os.Stderr, errorStyle.Render("✗ "+msg))
 	os.Exit(1)
 }
+
+// Confirm prints a prompt and waits for y/N input. Returns true only if
+// the user types "y" or "Y".
+func Confirm(prompt string) bool {
+	fmt.Fprintf(os.Stderr, "%s [y/N] ", warnStyle.Render("⚠ "+prompt))
+	var answer string
+	fmt.Scanln(&answer)
+	return answer == "y" || answer == "Y"
+}
