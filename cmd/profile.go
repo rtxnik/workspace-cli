@@ -31,6 +31,25 @@ var profilesCmd = &cobra.Command{
 			return
 		}
 
+		jsonFlag, _ := cmd.Flags().GetBool("json")
+		if jsonFlag {
+			type profileJSON struct {
+				Name      string `json:"name"`
+				BaseImage string `json:"baseImage"`
+				Tools     string `json:"tools"`
+			}
+			items := make([]profileJSON, 0, len(profiles))
+			for _, p := range profiles {
+				items = append(items, profileJSON{
+					Name:      p.Name,
+					BaseImage: p.BaseImage,
+					Tools:     p.Tools,
+				})
+			}
+			output.JSON(items)
+			return
+		}
+
 		// Truncate long tool lists based on terminal width.
 		maxTools := 40
 		if w, _, err := term.GetSize(0); err == nil && w > 80 {

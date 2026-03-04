@@ -44,6 +44,7 @@ func init() {
 	rootCmd.Version = version
 	rootCmd.SetVersionTemplate(logo() + "ws {{.Version}}\n")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	rootCmd.PersistentFlags().Bool("json", false, "Output in JSON format")
 
 	cobra.AddTemplateFunc("groupTag", func(cmd *cobra.Command) []string {
 		if tag, ok := cmd.Annotations["group"]; ok {

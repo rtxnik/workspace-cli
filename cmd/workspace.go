@@ -76,6 +76,27 @@ var listCmd = &cobra.Command{
 			return
 		}
 
+		jsonFlag, _ := cmd.Flags().GetBool("json")
+		if jsonFlag {
+			type wsJSON struct {
+				Name    string `json:"name"`
+				Status  string `json:"status"`
+				Profile string `json:"profile"`
+				Proxy   bool   `json:"proxy"`
+			}
+			items := make([]wsJSON, 0, len(workspaces))
+			for _, ws := range workspaces {
+				items = append(items, wsJSON{
+					Name:    ws.Name,
+					Status:  strings.ToLower(ws.Status),
+					Profile: ws.Profile,
+					Proxy:   ws.Proxy,
+				})
+			}
+			output.JSON(items)
+			return
+		}
+
 		termWidth := 100
 		if w, _, err := term.GetSize(0); err == nil {
 			termWidth = w

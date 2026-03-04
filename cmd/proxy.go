@@ -68,6 +68,27 @@ var proxyStatusCmd = &cobra.Command{
 			output.Die(err.Error())
 		}
 
+		jsonFlag, _ := cmd.Flags().GetBool("json")
+		if jsonFlag {
+			connected, _ := docker.ProxyConnectedContainers(cfg)
+			output.JSON(struct {
+				Running             bool     `json:"running"`
+				Health              string   `json:"health"`
+				Uptime              string   `json:"uptime"`
+				Image               string   `json:"image"`
+				Network             string   `json:"network"`
+				ConnectedWorkspaces []string `json:"connectedWorkspaces"`
+			}{
+				Running:             st.Running,
+				Health:              st.Health,
+				Uptime:              st.Uptime,
+				Image:               st.Image,
+				Network:             cfg.ProxyNetwork,
+				ConnectedWorkspaces: connected,
+			})
+			return
+		}
+
 		stateStatus := "stopped"
 		if st.Running {
 			stateStatus = "running"
