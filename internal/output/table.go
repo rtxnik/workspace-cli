@@ -22,3 +22,12 @@ func NewTable(headers []string) *table.Table {
 			return cellStyle.Foreground(FG2)
 		})
 }
+
+// RenderSection wraps content in a titled bordered box.
+func RenderSection(title string, content string) string {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(BG2).
+		Padding(0, 1).
+		Render(StyleHeader.Render(title) + "\n" + content)
+}

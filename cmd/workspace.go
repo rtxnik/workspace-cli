@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/rtxnik/ws/internal/config"
 	"github.com/rtxnik/ws/internal/detect"
 	"github.com/rtxnik/ws/internal/output"
@@ -71,20 +72,40 @@ var listCmd = &cobra.Command{
 			return
 		}
 
+		termWidth := 100
+		if w, _, err := term.GetSize(0); err == nil {
+			termWidth = w
+		}
+		narrow := termWidth < 80
+
+		running := 0
 		rows := make([][]string, 0, len(workspaces))
 		for _, ws := range workspaces {
-			status := output.StatusText(strings.ToLower(ws.Status))
-			proxy := ""
-			if ws.Proxy {
-				proxy = "⚡"
+			st := strings.ToLower(ws.Status)
+			if st == "running" {
+				running++
 			}
-			rows = append(rows, []string{ws.Name, status, ws.Profile, proxy})
+			proxy := output.StyleDim.Render("–")
+			if ws.Proxy {
+				proxy = output.StyleAccent.Render("⚡")
+			}
+			if narrow {
+				rows = append(rows, []string{ws.Name, output.StatusIcon(st), proxy})
+			} else {
+				rows = append(rows, []string{ws.Name, output.StatusText(st), ws.Profile, proxy})
+			}
 		}
 
-		t := output.NewTable([]string{"NAME", "STATUS", "PROFILE", "PROXY"}).
-			Rows(rows...)
+		var t fmt.Stringer
+		if narrow {
+			t = output.NewTable([]string{"NAME", "STATUS", "PROXY"}).Rows(rows...)
+		} else {
+			t = output.NewTable([]string{"NAME", "STATUS", "PROFILE", "PROXY"}).Rows(rows...)
+		}
 
 		fmt.Println(t)
+		fmt.Fprintf(os.Stderr, "\n%s\n",
+			output.StyleDim.Render(fmt.Sprintf("  %d workspace(s), %d running", len(workspaces), running)))
 	},
 }
 

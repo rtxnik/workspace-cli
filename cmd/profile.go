@@ -43,7 +43,9 @@ var profilesCmd = &cobra.Command{
 			if len(tools) > maxTools {
 				tools = tools[:maxTools-1] + "…"
 			}
-			rows = append(rows, []string{p.Name, p.BaseImage, tools})
+			name := output.StyleAqua.Render(p.Name)
+			image := output.StyleDim.Render(p.BaseImage)
+			rows = append(rows, []string{name, image, tools})
 		}
 
 		t := output.NewTable([]string{"NAME", "BASE IMAGE", "TOOLS"}).

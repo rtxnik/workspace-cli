@@ -35,6 +35,7 @@ var (
 	StyleInfo    = lipgloss.NewStyle().Foreground(Blue)
 	StyleDim     = lipgloss.NewStyle().Foreground(Gray)
 	StyleAccent  = lipgloss.NewStyle().Foreground(Orange)
+	StyleAqua    = lipgloss.NewStyle().Foreground(Aqua)
 	StyleHeader  = lipgloss.NewStyle().Bold(true).Foreground(Blue)
 	StyleSection = lipgloss.NewStyle().Bold(true).Foreground(FG1)
 )
