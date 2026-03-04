@@ -73,23 +73,37 @@ var proxyStatusCmd = &cobra.Command{
 			stateStatus = "running"
 		}
 
+		label := output.StyleDim.Render
 		var lines []string
-		lines = append(lines, output.StyleSection.Render(output.StatusText(stateStatus)))
+		lines = append(lines, fmt.Sprintf("%s  %s", label("State"), output.StatusText(stateStatus)))
 		if st.Health != "" {
-			lines = append(lines, fmt.Sprintf("Health:  %s", output.StatusText(st.Health)))
+			lines = append(lines, fmt.Sprintf("%s %s", label("Health"), output.StatusText(st.Health)))
 		}
 		if st.Uptime != "" {
-			lines = append(lines, fmt.Sprintf("Uptime:  %s", st.Uptime))
+			lines = append(lines, fmt.Sprintf("%s %s", label("Uptime"), st.Uptime))
 		}
 		if st.Image != "" {
-			lines = append(lines, fmt.Sprintf("Image:   %s", st.Image))
+			lines = append(lines, fmt.Sprintf("%s  %s", label("Image"), st.Image))
+		}
+		lines = append(lines, fmt.Sprintf("%s  %s (%s)",
+			label("Network"), cfg.ProxyNetwork, cfg.ProxyIP))
+
+		// Connected workspaces.
+		connected, _ := docker.ProxyConnectedContainers(cfg)
+		if len(connected) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, output.StyleHeader.Render("Connected Workspaces"))
+			for _, name := range connected {
+				lines = append(lines, "  "+name)
+			}
 		}
 
 		box := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(output.Blue).
-			Padding(0, 1).
-			Render(strings.Join(lines, "\n"))
+			BorderTop(true).
+			Padding(0, 2).
+			Render(output.StyleHeader.Render("Proxy") + "\n\n" + strings.Join(lines, "\n"))
 
 		fmt.Println(box)
 	},
