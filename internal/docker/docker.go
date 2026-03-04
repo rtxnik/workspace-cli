@@ -37,7 +37,7 @@ func newClient() (*client.Client, error) {
 
 // ProxyStatus returns the current status of the proxy container.
 func ProxyStatus(cfg config.Config) (Status, error) {
-	cli, err := newClient()
+	cli, err := newClientFunc()
 	if err != nil {
 		return Status{}, fmt.Errorf("docker client: %w", err)
 	}
@@ -76,7 +76,7 @@ func ProxyStatus(cfg config.Config) (Status, error) {
 // ProxyUp starts the proxy container on the ws-proxy bridge network.
 // Requires image to be pre-built.
 func ProxyUp(cfg config.Config) error {
-	cli, err := newClient()
+	cli, err := newClientFunc()
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
@@ -138,7 +138,7 @@ func ProxyUp(cfg config.Config) error {
 // ws-proxy bridge network are unaffected and resume connectivity
 // when the proxy is started again.
 func ProxyDown(cfg config.Config) error {
-	cli, err := newClient()
+	cli, err := newClientFunc()
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
@@ -171,7 +171,7 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 	results[2] = CheckResult{Name: "Proxy image built"}
 	results[3] = CheckResult{Name: "Proxy container running"}
 
-	cli, err := newClient()
+	cli, err := newClientFunc()
 	if err != nil {
 		return results
 	}
@@ -203,7 +203,7 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 
 // ProxyLogs returns the last n lines of proxy container logs.
 func ProxyLogs(cfg config.Config, n int) (string, error) {
-	cli, err := newClient()
+	cli, err := newClientFunc()
 	if err != nil {
 		return "", fmt.Errorf("docker client: %w", err)
 	}
@@ -271,7 +271,7 @@ func ProxyRecreate(cfg config.Config) error {
 }
 
 func proxyRecreate(cfg config.Config) error {
-	cli, err := newClient()
+	cli, err := newClientFunc()
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
@@ -310,7 +310,7 @@ func BuildProxyImage(cfg config.Config, version string) error {
 // ProxyConnectedContainers returns names of running containers on the
 // ws-proxy bridge network (excluding the proxy container itself).
 func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
-	cli, err := newClient()
+	cli, err := newClientFunc()
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}
@@ -335,7 +335,7 @@ func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
 }
 
 // ensureProxyNetwork creates the ws-proxy bridge network if it doesn't exist.
-func ensureProxyNetwork(cli *client.Client, ctx context.Context, cfg config.Config) error {
+func ensureProxyNetwork(cli DockerClient, ctx context.Context, cfg config.Config) error {
 	_, err := cli.NetworkInspect(ctx, cfg.ProxyNetwork, network.InspectOptions{})
 	if err == nil {
 		return nil
@@ -351,7 +351,7 @@ func ensureProxyNetwork(cli *client.Client, ctx context.Context, cfg config.Conf
 	return err
 }
 
-func imageExists(ctx context.Context, cli *client.Client, image string) bool {
+func imageExists(ctx context.Context, cli DockerClient, image string) bool {
 	_, _, err := cli.ImageInspectWithRaw(ctx, image)
 	return err == nil
 }
