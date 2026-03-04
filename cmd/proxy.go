@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -144,9 +145,22 @@ var proxyRebuildCmd = &cobra.Command{
 			warnProxyConnected(cfg)
 		}
 
-		if err := output.RunWithSpinner("Rebuilding proxy image", func() error {
-			return docker.ProxyRebuild(cfg)
-		}); err != nil {
+		runner := output.NewStepRunner(
+			output.Step{Name: "Building proxy image", Fn: func() error {
+				return docker.BuildProxyImage(cfg, "")
+			}},
+			output.Step{Name: "Recreating container", Fn: func() error {
+				st, _ := docker.ProxyStatus(cfg)
+				if st.Running {
+					return docker.ProxyRecreate(cfg)
+				}
+				return nil
+			}},
+			output.Step{Name: "Cleaning old images", Fn: func() error {
+				return exec.Command("docker", "image", "prune", "-f").Run()
+			}},
+		)
+		if err := runner.Run(); err != nil {
 			output.Die(err.Error())
 		}
 	},

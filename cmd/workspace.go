@@ -148,9 +148,18 @@ var startCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
-		if err := output.RunWithSpinner(fmt.Sprintf("Starting workspace %q", name), func() error {
-			return workspace.DevpodUp(source)
-		}); err != nil {
+		runner := output.NewStepRunner(
+			output.Step{Name: "Checking workspace", Fn: func() error {
+				if !workspace.Exists(cfg, name) {
+					return fmt.Errorf("workspace dir missing")
+				}
+				return nil
+			}},
+			output.Step{Name: "Starting container", Fn: func() error {
+				return workspace.DevpodUp(source)
+			}},
+		)
+		if err := runner.Run(); err != nil {
 			output.Die(err.Error())
 		}
 	},
