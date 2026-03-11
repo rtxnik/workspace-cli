@@ -74,7 +74,9 @@ func ProxyStatus(cfg config.Config) (Status, error) {
 }
 
 // ProxyUp starts the proxy container on the ws-proxy bridge network.
-// Requires image to be pre-built.
+// Requires image to be pre-built. After starting, it fixes default routes
+// in all connected workspace containers to restore proxy connectivity
+// (routes are lost when Docker restarts containers after a system reboot).
 func ProxyUp(cfg config.Config) error {
 	cli, err := newClientFunc()
 	if err != nil {
@@ -89,9 +91,16 @@ func ProxyUp(cfg config.Config) error {
 	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
 	if err == nil {
 		if info.State.Running {
+			// Proxy already running — still fix routes for workspaces
+			// that may have lost them after a reboot.
+			ProxyFixRoutes(cfg)
 			return nil
 		}
-		return cli.ContainerStart(ctx, cfg.ProxyContainer, container.StartOptions{})
+		if err := cli.ContainerStart(ctx, cfg.ProxyContainer, container.StartOptions{}); err != nil {
+			return err
+		}
+		ProxyFixRoutes(cfg)
+		return nil
 	}
 
 	if !imageExists(ctx, cli, cfg.ProxyImage) {
@@ -305,6 +314,40 @@ func BuildProxyImage(cfg config.Config, version string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// ProxyFixRoutes sets the default route to the proxy IP in all workspace
+// containers connected to the proxy network. This is needed after a system
+// reboot because Docker restarts containers without running devcontainer
+// lifecycle hooks (postStartCommand), so the route override is lost.
+func ProxyFixRoutes(cfg config.Config) (int, error) {
+	cli, err := newClientFunc()
+	if err != nil {
+		return 0, fmt.Errorf("docker client: %w", err)
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
+	defer cancel()
+
+	info, err := cli.NetworkInspect(ctx, cfg.ProxyNetwork, network.InspectOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("inspect network: %w", err)
+	}
+
+	var fixed int
+	for _, ep := range info.Containers {
+		if ep.Name == cfg.ProxyContainer {
+			continue
+		}
+		cmd := exec.Command("docker", "exec", ep.Name,
+			"ip", "route", "replace", "default", "via", cfg.ProxyIP)
+		if err := cmd.Run(); err != nil {
+			continue
+		}
+		fixed++
+	}
+	return fixed, nil
 }
 
 // ProxyConnectedContainers returns names of running containers on the

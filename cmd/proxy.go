@@ -43,6 +43,13 @@ var proxyUpCmd = &cobra.Command{
 				},
 			})
 		}
+		steps = append(steps, output.Step{
+			Name: "Fixing workspace routes",
+			Fn: func() error {
+				docker.ProxyFixRoutes(cfg)
+				return nil
+			},
+		})
 
 		if err := output.NewStepRunner(steps...).Run(); err != nil {
 			fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
@@ -314,6 +321,29 @@ var proxyUpdateCmd = &cobra.Command{
 	},
 }
 
+var proxyFixRoutesCmd = &cobra.Command{
+	Use:   "fix-routes",
+	Short: "Fix default routes in workspace containers after reboot",
+	Long:  "Restores the default route via proxy in all workspace containers on the proxy network. Useful after a system reboot when Docker restarts containers without running devcontainer lifecycle hooks.",
+	Run: func(cmd *cobra.Command, args []string) {
+		cfg := config.Load()
+		st, err := docker.ProxyStatus(cfg)
+		if err != nil || !st.Running {
+			output.Die("Proxy is not running. Start it first: ws proxy up")
+		}
+
+		fixed, err := docker.ProxyFixRoutes(cfg)
+		if err != nil {
+			output.Die(err.Error())
+		}
+		if fixed == 0 {
+			output.Info("No workspace containers found on proxy network")
+		} else {
+			output.Success(fmt.Sprintf("Fixed routes in %d container(s)", fixed))
+		}
+	},
+}
+
 var proxyInitCmd = &cobra.Command{
 	Use:   "init <vless-uri>",
 	Short: "Generate xray config from VLESS URI",
@@ -376,5 +406,6 @@ func init() {
 	proxyCmd.AddCommand(proxyDebugCmd)
 	proxyCmd.AddCommand(proxyUpdateCmd)
 	proxyCmd.AddCommand(proxyInitCmd)
+	proxyCmd.AddCommand(proxyFixRoutesCmd)
 	rootCmd.AddCommand(proxyCmd)
 }
