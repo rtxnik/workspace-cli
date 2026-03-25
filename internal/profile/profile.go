@@ -13,7 +13,7 @@ import (
 
 var builtinProfiles = map[string]bool{
 	"default": true, "devops": true, "go": true, "k8s": true,
-	"web": true, "proxy": true, "rust": true, "python": true,
+	"matrix": true, "web": true, "proxy": true, "rust": true, "python": true,
 }
 
 // Info holds parsed profile metadata.
