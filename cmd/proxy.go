@@ -46,8 +46,8 @@ var proxyUpCmd = &cobra.Command{
 		steps = append(steps, output.Step{
 			Name: "Fixing workspace routes",
 			Fn: func() error {
-				docker.ProxyFixRoutes(cfg)
-				return nil
+				_, err := docker.ProxyFixRoutes(cfg)
+				return err
 			},
 		})
 
