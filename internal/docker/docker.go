@@ -93,13 +93,17 @@ func ProxyUp(cfg config.Config) error {
 		if info.State.Running {
 			// Proxy already running — still fix routes for workspaces
 			// that may have lost them after a reboot.
-			ProxyFixRoutes(cfg)
+			if _, err := ProxyFixRoutes(cfg); err != nil {
+				return err
+			}
 			return nil
 		}
 		if err := cli.ContainerStart(ctx, cfg.ProxyContainer, container.StartOptions{}); err != nil {
 			return err
 		}
-		ProxyFixRoutes(cfg)
+		if _, err := ProxyFixRoutes(cfg); err != nil {
+			return err
+		}
 		return nil
 	}
 
