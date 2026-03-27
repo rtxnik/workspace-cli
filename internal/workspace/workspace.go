@@ -53,6 +53,15 @@ func Create(cfg config.Config, name, profile string, withProxy bool) error {
 		}
 	}
 
+	// Copy profile-specific .sh scripts (e.g. post-create-synopra.sh).
+	shFiles, _ := filepath.Glob(filepath.Join(profileDir, "*.sh"))
+	for _, sh := range shFiles {
+		dst := filepath.Join(dcDir, filepath.Base(sh))
+		if err := copyFile(sh, dst); err != nil {
+			return fmt.Errorf("copy %s: %w", filepath.Base(sh), err)
+		}
+	}
+
 	// Copy post-create.sh from shared dir.
 	postCreate := filepath.Join(cfg.SharedDir, "post-create.sh")
 	if _, err := os.Stat(postCreate); err == nil {
