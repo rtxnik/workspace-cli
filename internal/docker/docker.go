@@ -13,7 +13,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
-	"github.com/rtxnik/ws/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/config"
 )
 
 // Timeouts for Docker operations.

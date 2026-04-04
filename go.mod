@@ -1,4 +1,4 @@
-module github.com/rtxnik/ws
+module github.com/rtxnik/workspace-cli
 
 go 1.24.2
 

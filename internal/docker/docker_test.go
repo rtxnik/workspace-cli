@@ -13,7 +13,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/rtxnik/ws/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/config"
 )
 
 // mockClient implements DockerClient for testing.

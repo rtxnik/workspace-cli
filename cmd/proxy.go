@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/rtxnik/ws/internal/config"
-	"github.com/rtxnik/ws/internal/docker"
-	"github.com/rtxnik/ws/internal/output"
-	"github.com/rtxnik/ws/internal/vless"
+	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/vless"
 	"github.com/spf13/cobra"
 )
 

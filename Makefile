@@ -1,5 +1,5 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X github.com/rtxnik/ws/cmd.version=$(VERSION)
+LDFLAGS := -s -w -X github.com/rtxnik/workspace-cli/cmd.version=$(VERSION)
 
 .PHONY: build install clean test vet lint
 

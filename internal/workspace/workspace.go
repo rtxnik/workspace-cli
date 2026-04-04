@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rtxnik/ws/internal/config"
-	"github.com/rtxnik/ws/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
 type Info struct {

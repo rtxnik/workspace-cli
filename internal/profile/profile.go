@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/rtxnik/ws/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/config"
 )
 
 var builtinProfiles = map[string]bool{

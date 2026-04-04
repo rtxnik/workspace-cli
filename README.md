@@ -6,10 +6,10 @@ Workspace manager CLI for [DevPod](https://devpod.sh/) environments with transpa
 
 ```bash
 # From source
-go install github.com/rtxnik/ws@latest
+go install github.com/rtxnik/workspace-cli@latest
 
 # Or download from releases
-# https://github.com/rtxnik/ws/releases
+# https://github.com/rtxnik/workspace-cli/releases
 ```
 
 ## Usage

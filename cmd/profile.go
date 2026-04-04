@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/x/term"
 	"github.com/mattn/go-isatty"
-	"github.com/rtxnik/ws/internal/config"
-	"github.com/rtxnik/ws/internal/output"
-	"github.com/rtxnik/ws/internal/profile"
+	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/profile"
 	"github.com/spf13/cobra"
 )
 

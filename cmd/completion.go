@@ -3,9 +3,9 @@ package cmd
 import (
 	"os"
 
-	"github.com/rtxnik/ws/internal/config"
-	"github.com/rtxnik/ws/internal/profile"
-	"github.com/rtxnik/ws/internal/workspace"
+	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/profile"
+	"github.com/rtxnik/workspace-cli/internal/workspace"
 	"github.com/spf13/cobra"
 )
 

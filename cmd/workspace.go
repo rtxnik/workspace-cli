@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/term"
-	"github.com/rtxnik/ws/internal/config"
-	"github.com/rtxnik/ws/internal/detect"
-	"github.com/rtxnik/ws/internal/output"
-	"github.com/rtxnik/ws/internal/workspace"
+	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/detect"
+	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
