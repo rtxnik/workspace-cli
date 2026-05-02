@@ -1,6 +1,6 @@
 ---
 title: ws vault sub-command reference
-mcp_contract_version: "1.0.0"
+mcp_contract_version: "1.1.0"
 status: proposed
 design_only: true
 ships: v2.1+
@@ -21,7 +21,7 @@ The design-only split is intentional — v2.0 milestone ships architectural arte
 
 ## Contract version
 
-Every vault-ai surface with a contract dependency on the MCP 23-tool lockfile stamps `contract_version: "1.0.0"`. Three surfaces participate:
+Every vault-ai surface with a contract dependency on the MCP 23-tool lockfile stamps `contract_version: "1.1.0"`. Three surfaces participate:
 
 | Surface | File | Field |
 |---------|------|-------|
@@ -29,11 +29,13 @@ Every vault-ai surface with a contract dependency on the MCP 23-tool lockfile st
 | MCP registration | [`workflow-kit/.claude/settings.local.json`](../../workflow-kit/.claude/settings.local.json) | `mcp.servers.vault-ai.contract_version` |
 | CLI spec | this document | frontmatter `mcp_contract_version` |
 
-Plan 08 `phase-closure-check.sh` asserts string-parity across all three surfaces (XREPO-01 drift detection). Any bump to one file requires coordinated bumps to the other two in the same PR — CI rejects mismatch at merge time. Semver semantics follow semver.org: PATCH for additive flags, MINOR for new tools or breaking flag changes, MAJOR for tool removals or re-shapes.
+vault-ai's [`_tooling/lint/check-xrepo-contract.sh`](../../vault-ai/_tooling/lint/check-xrepo-contract.sh) asserts byte-identical string-parity across all three surfaces (XREPO-01 drift detection per vault-ai Phase 10 D-23). Any bump to one file requires coordinated bumps to the other two in the same coordinated GO-label PR per [ADR-int-04](../../vault-ai/docs/adr/adr-int-04-adr-merge-blocker.md) — pre-commit + Phase 13 CI reject mismatch at merge time. Semver semantics follow semver.org: PATCH for additive flags, MINOR for new tools, additive error codes, or additive optional fields, MAJOR for tool removals, error-code removals, or contract re-shapes.
+
+**Bump 1.0.0 → 1.1.0** (vault-ai Phase 10, 2026-05-02): additive minor. Two error codes added (`MISSING_DEPENDENCY`, `NOT_IMPLEMENTED`); `tools[].cost_service` optional field added; no removals; backward compatible. See [`vault-ai/_tooling/mcp/contract/CHANGELOG.md`](../../vault-ai/_tooling/mcp/contract/CHANGELOG.md) and [ADR-ai-01 §Amendment History](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md) for the full record.
 
 ## Exit codes
 
-CLI exit codes map the 8-code MCP error envelope to Unix-native semantics (locked in ADR-int-03 §Exit codes). The mapping is fixed and cannot be reshaped without a supersession ADR:
+CLI exit codes map the MCP error envelope to Unix-native semantics (locked in ADR-int-03 §Exit codes). The mapping is fixed and cannot be reshaped without a supersession ADR. The 1.0.0 contract shipped 8 envelope codes mapped onto exit codes 1-4; the 1.1.0 contract (vault-ai Phase 10) extends the envelope to 10 codes by adding `MISSING_DEPENDENCY` (already mapped at exit 4 in 1.0.0; the codeset extension now formalises what this CLI already cited) and `NOT_IMPLEMENTED` (new exit 5):
 
 | Exit | Meaning | MCP envelope error code | Caller action |
 |------|---------|-------------------------|---------------|
@@ -41,9 +43,10 @@ CLI exit codes map the 8-code MCP error envelope to Unix-native semantics (locke
 | 1 | Validation failure (frontmatter malformed, schema violation) | `VALIDATION_FAILED` | Fix note content, re-run |
 | 2 | Budget exceeded (cost cap hit per ADR-int-01 + ADR-int-05) | `BUDGET_EXCEEDED` | Wait for daily/monthly reset or raise caps |
 | 3 | Visibility leak attempted (egress blocked per ADR-ai-02) | `VISIBILITY_LEAK` | Do NOT retry; investigate + file incident (primary security rail) |
-| 4 | Missing dependency (Qdrant container offline, VAULT_AI_TOKEN unset, etc.) | `MISSING_DEPENDENCY` | Fix environment, re-run |
+| 4 | Missing dependency (Qdrant container offline, `VAULT_AI_TOKEN` unset, age identity at `~/.config/age/keys.txt` absent, `~/.config/vault-ai/mcp-token.age` 0600 permissions wrong, sibling repo at stale `mcp_contract_version` per XREPO-01) | `MISSING_DEPENDENCY` | Fix environment, re-run |
+| 5 | Tool deferred to v2.2 backend (`triage_process`, `generate_image`, `summarize_pdf`, `render_card`); handler returns a structured deferral envelope with `error.details = {ships: "v2.2", reference_adr: …}` rather than raising | `NOT_IMPLEMENTED` | Wait for v2.2 release; do NOT retry; consult `error.details.reference_adr` for the v2.2 ADR tracking the backend |
 
-Codes 5-127 are reserved for future sub-command-specific semantics. Codes ≥128 indicate a wrapper or signal-handling issue (bash convention) and are not part of the vault-ai contract.
+Codes 6-127 are reserved for future sub-command-specific semantics. Codes ≥128 indicate a wrapper or signal-handling issue (bash convention) and are not part of the vault-ai contract.
 
 ## Auth
 
