@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
@@ -95,7 +96,14 @@ var profileUseCmd = &cobra.Command{
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
-		output.Die("not implemented; pending Plan 22-03 (profile use)")
+		cfg := config.Load()
+		if err := xray.SwitchTo(cfg, args[0]); err != nil {
+			// SwitchTo already prints a structured RenderError via stderr
+			// on post-swap failures; just exit non-zero so callers detect
+			// the failure. The symlink state is left as-is per D-10 +
+			// feedback_no_auto_state_mutation.
+			os.Exit(1)
+		}
 	},
 }
 
@@ -177,7 +185,10 @@ var profileRegenCmd = &cobra.Command{
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
-		output.Die("not implemented; pending Plan 22-03 (profile regenerate)")
+		cfg := config.Load()
+		if err := xray.RegenerateProfile(cfg, args[0]); err != nil {
+			output.Die(err.Error())
+		}
 	},
 }
 
