@@ -439,3 +439,20 @@ func WaitForHealth(cfg config.Config, timeout time.Duration) error {
 		}
 	}
 }
+
+// ProxyExec runs `docker exec <cfg.ProxyContainer> <args...>` and returns
+// combined stdout+stderr. Mirrors the established shell-out pattern used by
+// BuildProxyImage and ProxyFixRoutes — the SDK ContainerExecCreate +
+// ContainerExecAttach path requires ~25 LOC of stdcopy demux for an identical
+// effect.
+//
+// Used by internal/xray for `xray run -test -config /etc/xray/profiles/<name>.json`
+// validation before symlink swap (CONTEXT.md D-09).
+func ProxyExec(cfg config.Config, args ...string) ([]byte, error) {
+	cmdArgs := append([]string{"exec", cfg.ProxyContainer}, args...)
+	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("docker exec %s %v: %w (output: %s)", cfg.ProxyContainer, args, err, string(out))
+	}
+	return out, nil
+}

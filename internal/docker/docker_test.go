@@ -382,3 +382,19 @@ func TestWaitForHealth_Unhealthy(t *testing.T) {
 		t.Errorf("expected unhealthy error, got: %v", err)
 	}
 }
+
+// --- ProxyExec tests ---
+
+func TestProxyExecSignature(t *testing.T) {
+	cfg := config.Config{ProxyContainer: "this-container-does-not-exist-xx22-test"}
+	_, err := ProxyExec(cfg, "echo", "hello")
+	if err == nil {
+		return // happy coincidence; not a helper failure
+	}
+	if !strings.Contains(err.Error(), "docker exec this-container-does-not-exist-xx22-test") {
+		t.Fatalf("error %q missing `docker exec <container>` prefix", err.Error())
+	}
+	if !strings.Contains(err.Error(), "[echo hello]") {
+		t.Fatalf("error %q missing composed args", err.Error())
+	}
+}
