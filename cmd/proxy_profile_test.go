@@ -48,6 +48,12 @@ func TestProxyProfileCommand(t *testing.T) {
 
 func TestProxyProfileHelpExits0(t *testing.T) {
 	cmd := rootCmd
+	origOut, origErr := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	t.Cleanup(func() {
+		cmd.SetArgs(nil)
+		cmd.SetOut(origOut)
+		cmd.SetErr(origErr)
+	})
 	cmd.SetArgs([]string{"proxy", "profile", "--help"})
 	var out, errOut bytes.Buffer
 	cmd.SetOut(&out)
