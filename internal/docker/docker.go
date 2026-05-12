@@ -125,7 +125,14 @@ func ProxyUp(cfg config.Config) error {
 			Image: cfg.ProxyImage,
 		},
 		&container.HostConfig{
-			Binds:         []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
+			// PROXY-PROFILE-15 / RESEARCH §5: whole-directory bind so
+			// `xray run -test -config /etc/xray/profiles/<name>.json` (D-09)
+			// sees the target profile inside the container. The relative
+			// symlink config.json -> profiles/<name>.json resolves correctly
+			// because both files live under the bound directory. :ro because
+			// a vulnerability in xray must never write back into the
+			// operator's home tree.
+			Binds:         []string{filepath.Dir(cfg.XrayConfig) + ":/etc/xray/:ro"},
 			CapAdd:        []string{"NET_ADMIN"},
 			Sysctls:       map[string]string{"net.ipv4.ip_forward": "1"},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
