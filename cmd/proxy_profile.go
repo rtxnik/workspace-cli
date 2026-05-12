@@ -14,11 +14,31 @@ import (
 // Plans 02-05 fill in the leaf Run bodies; this file ships only the registration
 // scaffolding so all downstream plans land their commands in parallel without
 // merge conflicts on this file.
+//
+// PersistentPreRunE (Plan 22-04 + D-07): every `ws proxy profile *` leaf
+// invocation funnels through EnsureMigrated, which transparently migrates a
+// legacy regular-file ~/.config/xray/config.json to the profiles/primary.json
+// + symlink layout. When --no-migrate is set AND migration WOULD have
+// triggered, EnsureMigrated errors out without mutating state (memory
+// feedback_no_auto_state_mutation). Cobra short-circuits --help / completion
+// before PersistentPreRunE, so help output remains available even on a host
+// with no xray state.
 var profileCmd = &cobra.Command{
 	Use:         "profile",
 	Short:       "Manage xray VLESS profiles",
 	Long:        "Lifecycle management for named xray VLESS configurations.\nReplaces the legacy ad-hoc xray-switch shell wrapper.",
 	Annotations: proxyAnnotation,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Guard against `ws proxy profile help <leaf>` — Cobra short-circuits
+		// the `--help` flag path before PersistentPreRunE, but the explicit
+		// `help` subcommand still walks the chain.
+		if cmd.Name() == "help" {
+			return nil
+		}
+		cfg := config.Load()
+		noMigrate, _ := cmd.Flags().GetBool("no-migrate")
+		return xray.EnsureMigrated(cfg, !noMigrate)
+	},
 }
 
 var profileAddCmd = &cobra.Command{
