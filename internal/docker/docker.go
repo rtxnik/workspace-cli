@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -455,4 +456,48 @@ func ProxyExec(cfg config.Config, args ...string) ([]byte, error) {
 		return out, fmt.Errorf("docker exec %s %v: %w (output: %s)", cfg.ProxyContainer, args, err, string(out))
 	}
 	return out, nil
+}
+
+// BindMountIsWholeDir inspects the running dev-proxy container and returns
+// true if its bind mount uses the whole-directory form (cfg.XrayConfig's
+// parent directory mounted to /etc/xray/), false if it uses the legacy
+// single-file form (cfg.XrayConfig mounted to /etc/xray/config.json).
+// Returns (false, err) if the container is missing or inspect fails.
+//
+// PROXY-PROFILE-15: switching to whole-dir is required for the xray -test
+// validation gate (D-09) to see target profile files inside the container.
+// Existing operators are NOT auto-recreated (feedback_no_auto_state_mutation);
+// the CLI surfaces a one-time recreate prompt via internal/xray.SwitchTo.
+func BindMountIsWholeDir(cfg config.Config) (bool, error) {
+	cli, err := newClientFunc()
+	if err != nil {
+		return false, fmt.Errorf("docker client: %w", err)
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
+	defer cancel()
+
+	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
+	if err != nil {
+		return false, fmt.Errorf("inspect %s: %w", cfg.ProxyContainer, err)
+	}
+
+	// Both forms share the "host:container" prefix; the third (optional) field
+	// is the mount flag (ro/rw/z/Z). HostConfig.Binds may carry the flag, so
+	// match by prefix to be robust against flag variants.
+	wholeDirHost := filepath.Dir(cfg.XrayConfig)
+	wholeDirPrefix := wholeDirHost + ":/etc/xray"
+	singleFilePrefix := cfg.XrayConfig + ":/etc/xray/config.json"
+
+	for _, b := range info.HostConfig.Binds {
+		switch {
+		case b == wholeDirPrefix, strings.HasPrefix(b, wholeDirPrefix+":"):
+			return true, nil
+		case b == singleFilePrefix, strings.HasPrefix(b, singleFilePrefix+":"):
+			return false, nil
+		}
+	}
+	// No xray bind found at all — treat as legacy/missing (caller decides).
+	return false, nil
 }
