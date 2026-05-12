@@ -141,6 +141,35 @@ func ReadActiveProfileName(cfg config.Config) (string, error) {
 	return strings.TrimSuffix(filepath.Base(target), ".json"), nil
 }
 
+// RemoveProfile deletes cfg.XrayProfilesDir/<name>.json after refusing to
+// remove the currently-active profile (D-08 + PROXY-PROFILE-05 + threat
+// T-22-active-delete). The active-profile check uses ReadActiveProfileName,
+// which returns "" with no error when cfg.XrayConfig does not exist — that
+// fresh-install branch lets a removal proceed without refusal. Plan 22-05.
+//
+// Behaviour:
+//   - ValidateProfileName runs FIRST so reserved / regex-invalid names error
+//     before any filesystem op is attempted (T-22-rm-injection).
+//   - When name == active, returns
+//     `cannot remove active profile %q (run `+"`"+`ws proxy profile use <other>`+"`"+` first)`
+//     WITHOUT deleting the file.
+//   - On a non-existent profile, returns a wrapped os.IsNotExist error so
+//     callers can distinguish from real I/O failures.
+func RemoveProfile(cfg config.Config, name string) error {
+	if err := ValidateProfileName(name); err != nil {
+		return err
+	}
+	active, _ := ReadActiveProfileName(cfg) // "" on missing/non-symlink — non-fatal here
+	if active == name {
+		return fmt.Errorf("cannot remove active profile %q (run `ws proxy profile use <other>` first)", name)
+	}
+	target := filepath.Join(cfg.XrayProfilesDir, name+".json")
+	if err := os.Remove(target); err != nil {
+		return fmt.Errorf("remove profile %q at %s: %w", name, target, err)
+	}
+	return nil
+}
+
 // summarizeProfile reads a profile JSON and extracts the first VLESS outbound
 // into a ProfileSummary (UUID masked per D-13).
 func summarizeProfile(path, name string) (ProfileSummary, error) {

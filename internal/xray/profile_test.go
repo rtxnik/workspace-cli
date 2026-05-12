@@ -2,6 +2,7 @@ package xray
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -233,6 +234,69 @@ func TestReadActiveProfileName(t *testing.T) {
 	_, err = ReadActiveProfileName(cfg2)
 	if err == nil || !strings.Contains(err.Error(), "not a symlink") {
 		t.Errorf("want 'not a symlink' error; got %v", err)
+	}
+}
+
+func TestRemoveProfile(t *testing.T) {
+	cfg := mkTestCfg(t)
+	uri := "vless://12345678-1234-1234-1234-123456789012@host:443?type=tcp&security=tls#x"
+	if err := AddProfile(cfg, "primary", uri, false); err != nil {
+		t.Fatalf("seed primary: %v", err)
+	}
+	if err := AddProfile(cfg, "backup", uri, false); err != nil {
+		t.Fatalf("seed backup: %v", err)
+	}
+	// Make primary the active profile via direct symlink (no docker dependency).
+	if err := os.Symlink(filepath.Join("profiles", "primary.json"), cfg.XrayConfig); err != nil {
+		t.Fatalf("seed symlink: %v", err)
+	}
+
+	// Happy path: remove inactive profile → file deleted, no error.
+	if err := RemoveProfile(cfg, "backup"); err != nil {
+		t.Errorf("RemoveProfile(backup): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "backup.json")); !os.IsNotExist(err) {
+		t.Errorf("backup.json not deleted: %v", err)
+	}
+
+	// Refuse-active: try to remove currently-symlinked profile → error contains
+	// "cannot remove active profile" AND the active profile file is NOT
+	// deleted (T-22-active-delete).
+	if err := RemoveProfile(cfg, "primary"); err == nil || !strings.Contains(err.Error(), "cannot remove active profile") {
+		t.Errorf("expected refusal of active profile removal; got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "primary.json")); err != nil {
+		t.Errorf("primary.json should still exist after refused removal: %v", err)
+	}
+
+	// Reserved name rejected BEFORE any filesystem op (T-22-rm-injection).
+	if err := RemoveProfile(cfg, "config"); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("expected reserved-name error; got: %v", err)
+	}
+
+	// Nonexistent profile name → wrapped os.ErrNotExist sentinel
+	// (Plan body says "wrapped os.IsNotExist"; errors.Is walks the wrap chain
+	// whereas the legacy os.IsNotExist predicate does not).
+	err := RemoveProfile(cfg, "nope")
+	if err == nil {
+		t.Fatal("expected error on nonexistent profile")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected wrapped os.ErrNotExist error; got: %v", err)
+	}
+
+	// Invalid name (capital letter) → regex-fail error; no FS op attempted.
+	// Pre-create a file named "Foo.json" so we can prove the validator runs
+	// before any os.Remove call: a stray file at that exact path survives.
+	stray := filepath.Join(cfg.XrayProfilesDir, "Foo.json")
+	if err := os.WriteFile(stray, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("seed stray: %v", err)
+	}
+	if err := RemoveProfile(cfg, "Foo"); err == nil || !strings.Contains(err.Error(), "must match") {
+		t.Errorf("expected regex-fail error; got: %v", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("stray Foo.json should be untouched after validator-fail; got: %v", err)
 	}
 }
 

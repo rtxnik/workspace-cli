@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
@@ -133,7 +134,20 @@ var profileRmCmd = &cobra.Command{
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
-		output.Die("not implemented; pending Plan 22-05 (profile rm)")
+		cfg := config.Load()
+		name := args[0]
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			desc := fmt.Sprintf("Profile file %s will be deleted.", filepath.Join(cfg.XrayProfilesDir, name+".json"))
+			if !output.Confirm(fmt.Sprintf("Remove profile %q?", name), desc) {
+				output.Info("Aborted")
+				return
+			}
+		}
+		if err := xray.RemoveProfile(cfg, name); err != nil {
+			output.Die(err.Error())
+		}
+		output.Success(fmt.Sprintf("Profile %q removed", name))
 	},
 }
 
@@ -218,6 +232,7 @@ func init() {
 	// Plan 22-02: per-command flags. --reveal intentionally NOT persistent on
 	// profileCmd (D-13 leak risk); declared per leaf that may emit credentials.
 	profileAddCmd.Flags().Bool("force", false, "Overwrite existing profile of the same name")
+	profileRmCmd.Flags().BoolP("force", "f", false, "Skip confirmation prompt")
 	profileListCmd.Flags().Bool("json", false, "Emit JSON instead of an aligned table")
 	profileListCmd.Flags().Bool("reveal", false, "Include cleartext UUID (default: masked)")
 	profileShowCmd.Flags().Bool("json", false, "Emit JSON instead of key:value lines")
