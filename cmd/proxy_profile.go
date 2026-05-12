@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"fmt"
+
+	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/xray"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +26,12 @@ var profileAddCmd = &cobra.Command{
 	Args:        cobra.ExactArgs(2),
 	Annotations: proxyAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
-		output.Die("not implemented; pending Plan 22-02 (profile add)")
+		cfg := config.Load()
+		force, _ := cmd.Flags().GetBool("force")
+		if err := xray.AddProfile(cfg, args[0], args[1], force); err != nil {
+			output.Die(err.Error())
+		}
+		output.Success(fmt.Sprintf("Profile %q added", args[0]))
 	},
 }
 
@@ -32,7 +41,51 @@ var profileListCmd = &cobra.Command{
 	Args:        cobra.NoArgs,
 	Annotations: proxyAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
-		output.Die("not implemented; pending Plan 22-02 (profile list)")
+		cfg := config.Load()
+		profiles, err := xray.ListProfiles(cfg)
+		if err != nil {
+			output.Die(err.Error())
+		}
+		jsonFlag, _ := cmd.Flags().GetBool("json")
+		reveal, _ := cmd.Flags().GetBool("reveal")
+
+		if jsonFlag {
+			if reveal {
+				type fullRow struct {
+					xray.ProfileSummary
+					UUIDFull string `json:"uuid_full"`
+				}
+				rows := make([]fullRow, 0, len(profiles))
+				for _, p := range profiles {
+					dp, err := xray.LoadProfile(cfg, p.Name)
+					if err != nil {
+						output.Warn(fmt.Sprintf("load %s: %v", p.Name, err))
+						continue
+					}
+					rows = append(rows, fullRow{ProfileSummary: p, UUIDFull: dp.UUID})
+				}
+				output.JSON(rows)
+				return
+			}
+			output.JSON(profiles)
+			return
+		}
+
+		t := output.NewTable([]string{"ACTIVE", "NAME", "TRANSPORT", "ADDRESS:PORT", "SNI", "UUID"})
+		for _, p := range profiles {
+			active := ""
+			if p.Active {
+				active = "*"
+			}
+			uuid := p.UUIDMasked
+			if reveal {
+				if dp, err := xray.LoadProfile(cfg, p.Name); err == nil {
+					uuid = dp.UUID
+				}
+			}
+			t.Row(active, p.Name, p.Transport, fmt.Sprintf("%s:%d", p.Address, p.Port), p.SNI, uuid)
+		}
+		fmt.Println(t)
 	},
 }
 
@@ -62,7 +115,44 @@ var profileShowCmd = &cobra.Command{
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
-		output.Die("not implemented; pending Plan 22-02 (profile show)")
+		cfg := config.Load()
+		dp, err := xray.LoadProfile(cfg, args[0])
+		if err != nil {
+			output.Die(err.Error())
+		}
+		reveal, _ := cmd.Flags().GetBool("reveal")
+		jsonFlag, _ := cmd.Flags().GetBool("json")
+
+		if !reveal {
+			dp.UUID = xray.MaskUUID(dp.UUID)
+			dp.PublicKey = xray.MaskShort(dp.PublicKey)
+			dp.ShortID = xray.MaskShort(dp.ShortID)
+			dp.SpiderX = xray.MaskShort(dp.SpiderX)
+		}
+
+		if jsonFlag {
+			output.JSON(dp)
+			return
+		}
+		fmt.Printf("Name:       %s\n", dp.Name)
+		if dp.Active {
+			fmt.Println("Active:     yes")
+		} else {
+			fmt.Println("Active:     no")
+		}
+		fmt.Printf("Transport:  %s\n", dp.Transport)
+		fmt.Printf("Address:    %s\n", dp.Address)
+		fmt.Printf("Port:       %d\n", dp.Port)
+		fmt.Printf("Security:   %s\n", dp.Security)
+		if dp.SNI != "" {
+			fmt.Printf("SNI:        %s\n", dp.SNI)
+		}
+		fmt.Printf("UUID:       %s\n", dp.UUID)
+		if dp.Security == "reality" {
+			fmt.Printf("PublicKey:  %s\n", dp.PublicKey)
+			fmt.Printf("ShortID:    %s\n", dp.ShortID)
+			fmt.Printf("SpiderX:    %s\n", dp.SpiderX)
+		}
 	},
 }
 
@@ -72,7 +162,12 @@ var profileCurrentCmd = &cobra.Command{
 	Args:        cobra.NoArgs,
 	Annotations: proxyAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
-		output.Die("not implemented; pending Plan 22-02 (profile current)")
+		cfg := config.Load()
+		name, err := xray.ReadActiveProfileName(cfg)
+		if err != nil {
+			output.Die(err.Error())
+		}
+		fmt.Println(name)
 	},
 }
 
@@ -88,6 +183,14 @@ var profileRegenCmd = &cobra.Command{
 
 func init() {
 	profileCmd.PersistentFlags().Bool("no-migrate", false, "Refuse auto-migration of legacy regular-file config.json; error out instead")
+
+	// Plan 22-02: per-command flags. --reveal intentionally NOT persistent on
+	// profileCmd (D-13 leak risk); declared per leaf that may emit credentials.
+	profileAddCmd.Flags().Bool("force", false, "Overwrite existing profile of the same name")
+	profileListCmd.Flags().Bool("json", false, "Emit JSON instead of an aligned table")
+	profileListCmd.Flags().Bool("reveal", false, "Include cleartext UUID (default: masked)")
+	profileShowCmd.Flags().Bool("json", false, "Emit JSON instead of key:value lines")
+	profileShowCmd.Flags().Bool("reveal", false, "Include cleartext UUID/REALITY fields (default: masked)")
 
 	profileCmd.AddCommand(profileAddCmd)
 	profileCmd.AddCommand(profileListCmd)
