@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -94,11 +95,10 @@ func TestProfileAddCopiesRouting(t *testing.T) {
 	if err := json.Unmarshal(pdata, &primary); err != nil {
 		t.Fatalf("parse primary: %v", err)
 	}
-	primary.Routing.Rules = append(primary.Routing.Rules, vless.Rule{
-		Type:        "field",
-		IP:          []string{"203.0.113.7/32"}, // TEST-NET-3 sentinel
-		OutboundTag: "direct",
-	})
+	primary.Routing.Rules = append(primary.Routing.Rules,
+		// TEST-NET-3 sentinel — survives the unmarshal->marshal round-trip.
+		json.RawMessage(`{"type":"field","ip":["203.0.113.7/32"],"outboundTag":"direct"}`),
+	)
 	new, err := json.MarshalIndent(&primary, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal primary: %v", err)
@@ -129,14 +129,89 @@ func TestProfileAddCopiesRouting(t *testing.T) {
 
 	var found bool
 	for _, r := range backup.Routing.Rules {
-		for _, ip := range r.IP {
-			if ip == "203.0.113.7/32" {
-				found = true
-			}
+		if bytes.Contains(r, []byte(`"203.0.113.7/32"`)) {
+			found = true
+			break
 		}
 	}
 	if !found {
-		t.Errorf("D-05 routing-copy: backup.json missing 203.0.113.7/32 rule from active primary; rules=%+v", backup.Routing.Rules)
+		// Render rules as a single string for the failure message.
+		var dump []string
+		for _, r := range backup.Routing.Rules {
+			dump = append(dump, string(r))
+		}
+		t.Errorf("D-05 routing-copy: backup.json missing 203.0.113.7/32 rule from active primary; rules=[%s]", strings.Join(dump, ", "))
+	}
+}
+
+// TestAddProfilePreservesPortRule is the regression for the prod bug that
+// motivated the D-05 routing-copy fix: a routing rule with a `port` field
+// (e.g. `{"type":"field","port":"22","outboundTag":"direct"}`) must survive
+// AddProfile's unmarshal -> marshal round-trip and appear verbatim in the
+// derived profile. Pre-refactor the typed routing-rule struct in the vless
+// package dropped the `port` field on the way through.
+func TestAddProfilePreservesPortRule(t *testing.T) {
+	cfg := mkTestCfg(t)
+	uri1 := "vless://12345678-1234-1234-1234-123456789012@host.example:443?type=tcp&security=tls&sni=host.example#one"
+	if err := AddProfile(cfg, "primary", uri1, false); err != nil {
+		t.Fatalf("seed primary: %v", err)
+	}
+
+	// Read primary.json, prepend a port-bearing rule, write back.
+	primaryPath := filepath.Join(cfg.XrayProfilesDir, "primary.json")
+	pdata, err := os.ReadFile(primaryPath)
+	if err != nil {
+		t.Fatalf("read primary: %v", err)
+	}
+	var primary vless.XrayConfig
+	if err := json.Unmarshal(pdata, &primary); err != nil {
+		t.Fatalf("parse primary: %v", err)
+	}
+	portRule := json.RawMessage(`{"type":"field","port":"22","outboundTag":"direct"}`)
+	primary.Routing.Rules = append([]json.RawMessage{portRule}, primary.Routing.Rules...)
+	newBytes, err := json.MarshalIndent(&primary, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal primary: %v", err)
+	}
+	if err := os.WriteFile(primaryPath, newBytes, 0o644); err != nil {
+		t.Fatalf("write primary: %v", err)
+	}
+
+	// Symlink config.json -> primary.json to mark primary as active.
+	if err := os.Symlink(filepath.Join("profiles", "primary.json"), cfg.XrayConfig); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	uri2 := "vless://87654321-1234-1234-1234-210987654321@host2.example:8443?type=tcp&security=tls&sni=host2.example#two"
+	if err := AddProfile(cfg, "secondary", uri2, false); err != nil {
+		t.Fatalf("AddProfile secondary: %v", err)
+	}
+
+	secondaryPath := filepath.Join(cfg.XrayProfilesDir, "secondary.json")
+	sdata, err := os.ReadFile(secondaryPath)
+	if err != nil {
+		t.Fatalf("read secondary: %v", err)
+	}
+	var secondary vless.XrayConfig
+	if err := json.Unmarshal(sdata, &secondary); err != nil {
+		t.Fatalf("parse secondary: %v", err)
+	}
+
+	if len(secondary.Routing.Rules) == 0 {
+		t.Fatalf("secondary routing.rules empty; expected port-bearing rule at index 0")
+	}
+	// Compact the raw bytes so the substring check is whitespace-insensitive
+	// (MarshalIndent re-indents RawMessage contents in the on-disk file).
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, secondary.Routing.Rules[0]); err != nil {
+		t.Fatalf("compact rule[0]: %v", err)
+	}
+	first := compact.Bytes()
+	if !bytes.Contains(first, []byte(`"port":"22"`)) {
+		t.Errorf("port field dropped on AddProfile round-trip; rule[0]=%s", string(first))
+	}
+	if !bytes.Contains(first, []byte(`"outboundTag":"direct"`)) {
+		t.Errorf("outboundTag field missing on AddProfile round-trip; rule[0]=%s", string(first))
 	}
 }
 
