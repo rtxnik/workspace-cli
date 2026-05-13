@@ -490,18 +490,23 @@ func BindMountIsWholeDir(cfg config.Config) (bool, error) {
 		return false, fmt.Errorf("inspect %s: %w", cfg.ProxyContainer, err)
 	}
 
-	// Both forms share the "host:container" prefix; the third (optional) field
-	// is the mount flag (ro/rw/z/Z). HostConfig.Binds may carry the flag, so
-	// match by prefix to be robust against flag variants.
+	// HostConfig.Binds entries are colon-separated "host:container[:flag]"
+	// strings. Comparing the host-side path is the reliable discriminator:
+	// whole-dir bind => host == filepath.Dir(cfg.XrayConfig); single-file bind
+	// => host == cfg.XrayConfig. This avoids fragile prefix matching against
+	// the container-side path, which docker may normalize with or without a
+	// trailing slash (ProxyUp writes "/etc/xray/" with the slash — see line
+	// ~135 — and earlier code mis-handled that form).
 	wholeDirHost := filepath.Dir(cfg.XrayConfig)
-	wholeDirPrefix := wholeDirHost + ":/etc/xray"
-	singleFilePrefix := cfg.XrayConfig + ":/etc/xray/config.json"
-
 	for _, b := range info.HostConfig.Binds {
-		switch {
-		case b == wholeDirPrefix, strings.HasPrefix(b, wholeDirPrefix+":"):
+		parts := strings.SplitN(b, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		switch parts[0] {
+		case wholeDirHost:
 			return true, nil
-		case b == singleFilePrefix, strings.HasPrefix(b, singleFilePrefix+":"):
+		case cfg.XrayConfig:
 			return false, nil
 		}
 	}

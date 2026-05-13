@@ -480,3 +480,108 @@ func TestBindMountIsWholeDir_LegacySingleFile(t *testing.T) {
 		t.Error("expected legacy single-file bind to be detected as false")
 	}
 }
+
+// TestBindMountIsWholeDir_TrailingSlash verifies the helper returns true when
+// the running container's HostConfig.Binds carries the docker-normalized form
+// with a trailing slash on the container path, i.e. `<host-dir>:/etc/xray/:ro`.
+// This is the form ProxyUp actually writes (docker.go line ~135). The 2026-05-13
+// prod incident surfaced a regression where the prefix-based comparator failed
+// to recognize this form and falsely reported a legacy single-file bind.
+func TestBindMountIsWholeDir_TrailingSlash(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						// docker-normalized form: ProxyUp writes "/etc/xray/"
+						// with a trailing slash on the container path.
+						Binds: []string{"/home/test/.config/xray:/etc/xray/:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	cfg := config.Config{
+		ProxyContainer: "dev-proxy",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	ok, err := BindMountIsWholeDir(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected trailing-slash whole-dir bind to be detected as true (prod hotfix regression guard)")
+	}
+}
+
+// TestBindMountIsWholeDir_NoSlash verifies the helper returns true when the
+// running container's HostConfig.Binds carries the whole-dir form WITHOUT a
+// trailing slash on the container path, i.e. `<host-dir>:/etc/xray:ro`. Both
+// forms must be tolerated because docker may normalize either way depending on
+// API version. Symmetrical companion of TestBindMountIsWholeDir_TrailingSlash.
+func TestBindMountIsWholeDir_NoSlash(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{"/home/test/.config/xray:/etc/xray:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	cfg := config.Config{
+		ProxyContainer: "dev-proxy",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	ok, err := BindMountIsWholeDir(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected no-slash whole-dir bind to be detected as true")
+	}
+}
+
+// TestBindMountIsWholeDir_SingleFile is the named-for-symmetry companion of
+// TestBindMountIsWholeDir_LegacySingleFile. Kept as a separate test so the
+// 2026-05-13 hotfix spec's three-test list ({TrailingSlash, NoSlash, SingleFile})
+// is satisfied verbatim and regressions of either shape land on a clearly
+// named failure.
+func TestBindMountIsWholeDir_SingleFile(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{"/home/test/.config/xray/config.json:/etc/xray/config.json:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	cfg := config.Config{
+		ProxyContainer: "dev-proxy",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	ok, err := BindMountIsWholeDir(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected single-file bind to be detected as false")
+	}
+}
