@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -465,6 +466,32 @@ func ProxyExec(cfg config.Config, args ...string) ([]byte, error) {
 	return out, nil
 }
 
+// bindMountIsWholeDir is the comparator shared by BindMountIsWholeDir and
+// VerifyProxyReadyForReload. Takes an already-inspected ContainerJSON to
+// avoid a duplicate ContainerInspect round-trip when both checks run.
+//
+// Returns true if HostConfig.Binds contains an entry whose host side is
+// filepath.Dir(cfg.XrayConfig) (whole-dir mount), false if it contains an
+// entry whose host side is cfg.XrayConfig itself (legacy single-file
+// mount). Returns (false, nil) if no xray-related bind is found at all
+// — the caller decides whether that's legacy or missing.
+func bindMountIsWholeDir(info types.ContainerJSON, cfg config.Config) (bool, error) {
+	wholeDirHost := filepath.Dir(cfg.XrayConfig)
+	for _, b := range info.HostConfig.Binds {
+		parts := strings.SplitN(b, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		switch parts[0] {
+		case wholeDirHost:
+			return true, nil
+		case cfg.XrayConfig:
+			return false, nil
+		}
+	}
+	return false, nil
+}
+
 // BindMountIsWholeDir inspects the running dev-proxy container and returns
 // true if its bind mount uses the whole-directory form (cfg.XrayConfig's
 // parent directory mounted to /etc/xray/), false if it uses the legacy
@@ -489,27 +516,50 @@ func BindMountIsWholeDir(cfg config.Config) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("inspect %s: %w", cfg.ProxyContainer, err)
 	}
+	return bindMountIsWholeDir(info, cfg)
+}
 
-	// HostConfig.Binds entries are colon-separated "host:container[:flag]"
-	// strings. Comparing the host-side path is the reliable discriminator:
-	// whole-dir bind => host == filepath.Dir(cfg.XrayConfig); single-file bind
-	// => host == cfg.XrayConfig. This avoids fragile prefix matching against
-	// the container-side path, which docker may normalize with or without a
-	// trailing slash (ProxyUp writes "/etc/xray/" with the slash — see line
-	// ~135 — and earlier code mis-handled that form).
-	wholeDirHost := filepath.Dir(cfg.XrayConfig)
-	for _, b := range info.HostConfig.Binds {
-		parts := strings.SplitN(b, ":", 3)
-		if len(parts) < 2 {
-			continue
-		}
-		switch parts[0] {
-		case wholeDirHost:
-			return true, nil
-		case cfg.XrayConfig:
-			return false, nil
-		}
+// VerifyProxyReadyForReload runs pre-flight checks required before
+// triggering a config reload via container restart. Validation-only —
+// no state mutation (D-10 / feedback_no_auto_state_mutation:
+// validation-before-mutation is OK, automation-after-failure is NOT).
+//
+// Checks (all must pass for nil return):
+//   - container exists (not 'no such container')
+//   - container is in running state
+//   - whole-dir bind mount is active (else profile swap is invisible to
+//     xray inside the container)
+//
+// Callers gate their mutations on a nil return; on non-nil they render
+// the error and exit without touching state.
+func VerifyProxyReadyForReload(cfg config.Config) error {
+	cli, err := newClientFunc()
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
 	}
-	// No xray bind found at all — treat as legacy/missing (caller decides).
-	return false, nil
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
+	defer cancel()
+
+	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return fmt.Errorf("proxy container %q not found — run 'ws proxy up' first", cfg.ProxyContainer)
+		}
+		return fmt.Errorf("inspect proxy container: %w", err)
+	}
+	if !info.State.Running {
+		return fmt.Errorf("proxy container %q is not running (state=%s) — run 'ws proxy up' first", cfg.ProxyContainer, info.State.Status)
+	}
+
+	isWhole, err := bindMountIsWholeDir(info, cfg)
+	if err != nil {
+		return fmt.Errorf("inspect proxy bind mount: %w", err)
+	}
+	if !isWhole {
+		return fmt.Errorf("proxy container %q uses legacy single-file bind mount — run 'ws proxy rebuild --force' to migrate to whole-dir bind", cfg.ProxyContainer)
+	}
+
+	return nil
 }

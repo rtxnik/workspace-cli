@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -583,5 +584,182 @@ func TestBindMountIsWholeDir_SingleFile(t *testing.T) {
 	}
 	if ok {
 		t.Error("expected single-file bind to be detected as false")
+	}
+}
+
+// --- VerifyProxyReadyForReload tests ---
+
+func TestVerifyProxyReadyForReload_HappyPath(t *testing.T) {
+	cfg := testCfg()
+	wholeDirHost := filepath.Dir(cfg.XrayConfig)
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{
+						Running: true,
+						Status:  "running",
+					},
+					HostConfig: &container.HostConfig{
+						Binds: []string{wholeDirHost + ":/etc/xray/:ro"},
+					},
+				},
+				Config: &container.Config{Image: "ws-proxy:latest"},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	if err := VerifyProxyReadyForReload(cfg); err != nil {
+		t.Fatalf("expected nil error for happy path; got %v", err)
+	}
+}
+
+func TestVerifyProxyReadyForReload_ContainerNotFound(t *testing.T) {
+	mock := &mockClient{} // default returns errdefs.NotFound
+	defer withMock(mock)()
+
+	err := VerifyProxyReadyForReload(testCfg())
+	if err == nil {
+		t.Fatal("expected error for not-found container")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected error to contain 'not found'; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ws proxy up") {
+		t.Errorf("expected recovery hint 'ws proxy up'; got %v", err)
+	}
+}
+
+func TestVerifyProxyReadyForReload_ContainerStopped(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{
+						Running: false,
+						Status:  "exited",
+					},
+					HostConfig: &container.HostConfig{},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	err := VerifyProxyReadyForReload(testCfg())
+	if err == nil {
+		t.Fatal("expected error for stopped container")
+	}
+	if !strings.Contains(err.Error(), "not running") {
+		t.Errorf("expected 'not running'; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "exited") {
+		t.Errorf("expected status 'exited' in error; got %v", err)
+	}
+}
+
+func TestVerifyProxyReadyForReload_LegacyBind(t *testing.T) {
+	cfg := testCfg()
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{
+						Running: true,
+						Status:  "running",
+					},
+					HostConfig: &container.HostConfig{
+						Binds: []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	err := VerifyProxyReadyForReload(cfg)
+	if err == nil {
+		t.Fatal("expected error for legacy single-file bind")
+	}
+	if !strings.Contains(err.Error(), "legacy single-file bind") {
+		t.Errorf("expected 'legacy single-file bind'; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ws proxy rebuild") {
+		t.Errorf("expected recovery hint 'ws proxy rebuild'; got %v", err)
+	}
+}
+
+func TestVerifyProxyReadyForReload_InspectError(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{}, errors.New("daemon unreachable")
+		},
+	}
+	defer withMock(mock)()
+
+	err := VerifyProxyReadyForReload(testCfg())
+	if err == nil {
+		t.Fatal("expected error for inspect failure")
+	}
+	if !strings.Contains(err.Error(), "daemon unreachable") {
+		t.Errorf("expected wrapped daemon error; got %v", err)
+	}
+}
+
+// --- BindMountIsWholeDir regression ---
+
+func TestBindMountIsWholeDir_StillWorks(t *testing.T) {
+	cfg := testCfg()
+	wholeDirHost := filepath.Dir(cfg.XrayConfig)
+
+	// Whole-dir case -> true.
+	mockWhole := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{wholeDirHost + ":/etc/xray/:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	restore := withMock(mockWhole)
+	ok, err := BindMountIsWholeDir(cfg)
+	restore()
+	if err != nil {
+		t.Fatalf("whole-dir case: unexpected error %v", err)
+	}
+	if !ok {
+		t.Error("whole-dir case: expected ok=true")
+	}
+
+	// Single-file case -> false.
+	mockLegacy := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	restore = withMock(mockLegacy)
+	ok, err = BindMountIsWholeDir(cfg)
+	restore()
+	if err != nil {
+		t.Fatalf("legacy case: unexpected error %v", err)
+	}
+	if ok {
+		t.Error("legacy case: expected ok=false")
 	}
 }
