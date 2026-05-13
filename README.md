@@ -1,6 +1,6 @@
-# ws
+# workspace-cli
 
-Workspace manager CLI for [DevPod](https://devpod.sh/) environments with transparent proxy support.
+Workspace manager CLI (`ws` binary) for [DevPod](https://devpod.sh/) environments with transparent proxy support.
 
 ## Install
 
