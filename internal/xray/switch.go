@@ -136,3 +136,37 @@ func SwitchTo(cfg config.Config, name string) error {
 	output.Success(fmt.Sprintf("Switched to %q", name))
 	return nil
 }
+
+// SwitchToSymlinkOnly performs Validate -> AtomicSwap and stops. NO
+// restart. NO wait-for-health. Used by `ws proxy profile use --no-reload`
+// and by tests that want to exercise the swap without docker side-effects.
+//
+// D-10: same pre-flight rigor as SwitchTo (ValidateProfileName,
+// bind-mount check, target-file existence, xray -test) — failures
+// return early without committing the symlink swap. Post-swap there is
+// nothing left to fail; the function returns nil after a successful
+// AtomicSymlink.
+//
+// The ~10-line pre-flight duplication with SwitchTo is intentional —
+// see plan decision D-symlink-only-path: a shared helper would force
+// changing SwitchTo's call shape and risk perturbing the
+// TestManualRecoveryOnFailedSwitch tripwire.
+func SwitchToSymlinkOnly(cfg config.Config, name string) error {
+	if err := ValidateProfileName(name); err != nil {
+		return err
+	}
+	if ok, err := bindMountIsWholeDirFn(cfg); err == nil && !ok {
+		return fmt.Errorf(
+			"dev-proxy is using the legacy single-file bind mount; run `ws proxy down && ws proxy up` once to switch to the whole-directory bind (the CLI will not auto-recreate the container — your decision)",
+		)
+	}
+	target := filepath.Join(cfg.XrayProfilesDir, name+".json")
+	if _, err := os.Stat(target); err != nil {
+		return fmt.Errorf("profile %q not found at %s: %w", name, target, err)
+	}
+	if err := ValidateProfile(cfg, name); err != nil {
+		return err
+	}
+	relativeTarget := filepath.Join("profiles", name+".json")
+	return AtomicSymlink(relativeTarget, cfg.XrayConfig)
+}

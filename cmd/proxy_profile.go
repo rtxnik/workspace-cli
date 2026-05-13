@@ -3,11 +3,27 @@ package cmd
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/xray"
 	"github.com/spf13/cobra"
+)
+
+// Test seams for cmd-layer orchestration (D-10 partial-failure contract
+// owner). Production wires to real implementations; tests override.
+// These are INDEPENDENT of internal/xray's seams — both layers need their
+// own seams because the TestManualRecoveryOnFailedSwitch tripwire (xray)
+// and TestProfileUseRendersPartialFailureWithoutRollback tripwire (cmd)
+// exercise different boundary conditions of the same D-10 contract.
+var (
+	verifyProxyReadyFn    = docker.VerifyProxyReadyForReload
+	switchToFn            = xray.SwitchTo
+	switchToSymlinkOnlyFn = xray.SwitchToSymlinkOnly
+	proxyRestartFn        = docker.ProxyRestart
+	loadConfigFn          = config.Load
 )
 
 // profileCmd is the depth-3 parent for `ws proxy profile *` per CONTEXT.md D-01.
@@ -111,32 +127,60 @@ var profileListCmd = &cobra.Command{
 }
 
 var profileUseCmd = &cobra.Command{
-	Use:         "use <name>",
-	Short:       "Validate, swap, and restart to <name>",
+	Use:   "use <name>",
+	Short: "Switch active xray profile and reload proxy",
+	Long: `Validate, atomically swap, and reload the proxy so the new profile takes effect immediately.
+
+Use --no-reload to perform only the symlink swap (advanced — operator must run 'ws proxy restart' manually to apply).`,
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := config.Load()
-		if err := xray.SwitchTo(cfg, args[0]); err != nil {
-			// Pre-swap errors (ValidateProfileName failure, legacy
-			// single-file bind detected, target profile file missing)
-			// return a bare fmt.Errorf — Cobra renders it as
-			// "Error: <msg>" via the default error printer, restoring
-			// the visibility lost when this used Run + os.Exit(1).
-			//
-			// Post-swap errors already print a structured RenderError
-			// on stderr from inside SwitchTo (switch.go ~127); Cobra
-			// will additionally render the wrapped sentinel, which is
-			// harmless and keeps the exit-code contract intact.
-			//
-			// SilenceUsage so a runtime failure does not dump the help
-			// block — the operator already knows the command surface;
-			// they need the error, not usage. D-10 +
-			// feedback_no_auto_state_mutation: NO rollback, NO retry —
-			// SwitchTo leaves state as-is and the operator decides next.
+		cfg := loadConfigFn()
+		noReload, _ := cmd.Flags().GetBool("no-reload")
+
+		// --no-reload path: swap only, no docker side-effects, no pre-flight.
+		// Operator takes explicit ownership of the restart side-effect;
+		// xray's own internal bind-mount check inside SwitchToSymlinkOnly
+		// still defends against legacy single-file bind.
+		if noReload {
+			if err := switchToSymlinkOnlyFn(cfg, args[0]); err != nil {
+				cmd.SilenceUsage = true
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(),
+				"Switched to profile %q (proxy NOT reloaded — run 'ws proxy restart' to apply)\n",
+				args[0])
+			return nil
+		}
+
+		// Pre-flight (D-10 validation-before-mutation). If proxy is not
+		// in a state where the post-swap restart will succeed, refuse to
+		// swap the symlink so the operator never sees disk/runtime
+		// divergence from a preventable cause.
+		if err := verifyProxyReadyFn(cfg); err != nil {
+			cmd.SilenceUsage = true
+			return fmt.Errorf("proxy not ready for reload: %w", err)
+		}
+
+		// Atomic swap + restart via xray.SwitchTo (which itself drives
+		// Validate -> AtomicSwap -> Restart -> WaitForHealth and owns the
+		// TestManualRecoveryOnFailedSwitch tripwire contract).
+		//
+		// D-10 partial-failure boundary: on error, xray.SwitchTo already
+		// rendered output.RenderError on stderr (switch.go ~127) and
+		// wrapped the previous-profile name into the returned error. The
+		// cmd layer does NOT render a duplicate error box and does NOT
+		// auto-rollback the symlink. TestProfileUseRendersPartialFailureWithoutRollback
+		// pins this contract.
+		start := time.Now()
+		if err := switchToFn(cfg, args[0]); err != nil {
 			cmd.SilenceUsage = true
 			return err
 		}
+
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"Switched to profile %q (proxy reloaded in %v)\n",
+			args[0], time.Since(start).Truncate(time.Millisecond))
 		return nil
 	},
 }
@@ -250,6 +294,8 @@ func init() {
 	profileListCmd.Flags().Bool("reveal", false, "Include cleartext UUID (default: masked)")
 	profileShowCmd.Flags().Bool("json", false, "Emit JSON instead of key:value lines")
 	profileShowCmd.Flags().Bool("reveal", false, "Include cleartext UUID/REALITY fields (default: masked)")
+	profileUseCmd.Flags().Bool("no-reload", false,
+		"Skip proxy restart after switching profile (advanced — operator must run 'ws proxy restart' manually to apply)")
 
 	profileCmd.AddCommand(profileAddCmd)
 	profileCmd.AddCommand(profileListCmd)
