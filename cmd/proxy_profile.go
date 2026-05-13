@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
@@ -116,15 +115,29 @@ var profileUseCmd = &cobra.Command{
 	Short:       "Validate, swap, and restart to <name>",
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := config.Load()
 		if err := xray.SwitchTo(cfg, args[0]); err != nil {
-			// SwitchTo already prints a structured RenderError via stderr
-			// on post-swap failures; just exit non-zero so callers detect
-			// the failure. The symlink state is left as-is per D-10 +
-			// feedback_no_auto_state_mutation.
-			os.Exit(1)
+			// Pre-swap errors (ValidateProfileName failure, legacy
+			// single-file bind detected, target profile file missing)
+			// return a bare fmt.Errorf — Cobra renders it as
+			// "Error: <msg>" via the default error printer, restoring
+			// the visibility lost when this used Run + os.Exit(1).
+			//
+			// Post-swap errors already print a structured RenderError
+			// on stderr from inside SwitchTo (switch.go ~127); Cobra
+			// will additionally render the wrapped sentinel, which is
+			// harmless and keeps the exit-code contract intact.
+			//
+			// SilenceUsage so a runtime failure does not dump the help
+			// block — the operator already knows the command surface;
+			// they need the error, not usage. D-10 +
+			// feedback_no_auto_state_mutation: NO rollback, NO retry —
+			// SwitchTo leaves state as-is and the operator decides next.
+			cmd.SilenceUsage = true
+			return err
 		}
+		return nil
 	},
 }
 

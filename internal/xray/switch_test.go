@@ -163,3 +163,29 @@ func TestManualRecoveryOnFailedSwitch(t *testing.T) {
 		t.Fatalf("AUTO-ROLLBACK DETECTED: symlink points at %q, want %q (D-10 + feedback_no_auto_state_mutation tripwire). If you intentionally added auto-rollback, you must revisit the discuss-phase decision (CONTEXT.md D-10) first.", got, wantSuffix)
 	}
 }
+
+// TestSwitchToReturnsPreSwapErrorOnLegacyBind guards the 2026-05-13 hotfix:
+// when BindMountIsWholeDir reports false (legacy single-file bind), SwitchTo
+// must return a non-nil error whose message mentions "legacy single-file bind
+// mount" so the cmd layer can surface it to the operator. Previously the
+// error was correctly returned by SwitchTo, but profileUseCmd swallowed it via
+// os.Exit(1) with no output. This test pins the SwitchTo-layer contract; the
+// cmd-layer Cobra rendering is covered separately in cmd/proxy_profile_test.go.
+func TestSwitchToReturnsPreSwapErrorOnLegacyBind(t *testing.T) {
+	origBindCheck := bindMountIsWholeDirFn
+	defer func() { bindMountIsWholeDirFn = origBindCheck }()
+	bindMountIsWholeDirFn = func(_ config.Config) (bool, error) { return false, nil }
+
+	cfg := config.Config{
+		ProxyContainer:  "dev-proxy-test-xx22-cibind",
+		XrayConfig:      filepath.Join(t.TempDir(), "config.json"),
+		XrayProfilesDir: t.TempDir(),
+	}
+	err := SwitchTo(cfg, "foo")
+	if err == nil {
+		t.Fatal("expected SwitchTo to return non-nil when bind is legacy single-file")
+	}
+	if !strings.Contains(err.Error(), "legacy single-file bind mount") {
+		t.Fatalf("expected error to mention `legacy single-file bind mount`; got: %v", err)
+	}
+}
