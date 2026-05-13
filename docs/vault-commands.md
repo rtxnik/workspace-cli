@@ -1,6 +1,6 @@
 ---
 title: ws vault sub-command reference
-mcp_contract_version: "1.1.0"
+mcp_contract_version: "1.2.0"
 status: proposed
 design_only: true
 ships: v2.1+
@@ -21,7 +21,7 @@ The design-only split is intentional — v2.0 milestone ships architectural arte
 
 ## Contract version
 
-Every vault-ai surface with a contract dependency on the MCP 23-tool lockfile stamps `contract_version: "1.1.0"`. Three surfaces participate:
+Every vault-ai surface with a contract dependency on the MCP 23-tool lockfile stamps `contract_version: "1.2.0"`. Three surfaces participate:
 
 | Surface | File | Field |
 |---------|------|-------|
@@ -33,9 +33,11 @@ vault-ai's [`_tooling/lint/check-xrepo-contract.sh`](../../vault-ai/_tooling/lin
 
 **Bump 1.0.0 → 1.1.0** (vault-ai Phase 10, 2026-05-02): additive minor. Two error codes added (`MISSING_DEPENDENCY`, `NOT_IMPLEMENTED`); `tools[].cost_service` optional field added; no removals; backward compatible. See [`vault-ai/_tooling/mcp/contract/CHANGELOG.md`](../../vault-ai/_tooling/mcp/contract/CHANGELOG.md) and [ADR-ai-01 §Amendment History](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md) for the full record.
 
+**Bump 1.1.0 → 1.2.0** (vault-ai Phase 17, 2026-05-08): additive minor. One error code added (`DEDUP_BLOCKED`, the 11th envelope code) plus three additive optional input flags on `create_note` (`dedup_strategy`, `dedup_threshold`, `dedup_force`) wiring the runtime dedup gate; no removals; backward compatible per semver MINOR semantics. Rationale: Phase 17 ships a content-hash + cosine-similarity dedup engine that fires at `create_note` time and emits `DEDUP_BLOCKED` when a near-duplicate already exists, plus a 6th audit stream (`dedup`) registered in `verify_audit_chain.py` STREAMS for forensic replay. See ADR-flow-05 §v2.2 amendment ("Dedup gate at note ingress") and vault-ai Phase 17 SUMMARY for the full record (forward-pointer once `17-02-SUMMARY.md` lands).
+
 ## Exit codes
 
-CLI exit codes map the MCP error envelope to Unix-native semantics (locked in ADR-int-03 §Exit codes). The mapping is fixed and cannot be reshaped without a supersession ADR. The 1.0.0 contract shipped 8 envelope codes mapped onto exit codes 1-4; the 1.1.0 contract (vault-ai Phase 10) extends the envelope to 10 codes by adding `MISSING_DEPENDENCY` (already mapped at exit 4 in 1.0.0; the codeset extension now formalises what this CLI already cited) and `NOT_IMPLEMENTED` (new exit 5):
+CLI exit codes map the MCP error envelope to Unix-native semantics (locked in ADR-int-03 §Exit codes). The mapping is fixed and cannot be reshaped without a supersession ADR. The 1.0.0 contract shipped 8 envelope codes mapped onto exit codes 1-4; the 1.1.0 contract (vault-ai Phase 10) extends the envelope to 10 codes by adding `MISSING_DEPENDENCY` (already mapped at exit 4 in 1.0.0; the codeset extension now formalises what this CLI already cited) and `NOT_IMPLEMENTED` (new exit 5); the 1.2.0 contract (vault-ai Phase 17) extends the envelope to 11 codes by adding `DEDUP_BLOCKED` (new exit 6, see Common flags / runtime dedup gate; safety rail — does NOT auto-retry):
 
 | Exit | Meaning | MCP envelope error code | Caller action |
 |------|---------|-------------------------|---------------|
@@ -45,8 +47,9 @@ CLI exit codes map the MCP error envelope to Unix-native semantics (locked in AD
 | 3 | Visibility leak attempted (egress blocked per ADR-ai-02) | `VISIBILITY_LEAK` | Do NOT retry; investigate + file incident (primary security rail) |
 | 4 | Missing dependency (Qdrant container offline, `VAULT_AI_TOKEN` unset, age identity at `~/.config/age/keys.txt` absent, `~/.config/vault-ai/mcp-token.age` 0600 permissions wrong, sibling repo at stale `mcp_contract_version` per XREPO-01) | `MISSING_DEPENDENCY` | Fix environment, re-run |
 | 5 | Tool deferred to v2.2 backend (`triage_process`, `generate_image`, `summarize_pdf`, `render_card`); handler returns a structured deferral envelope with `error.details = {ships: "v2.2", reference_adr: …}` rather than raising | `NOT_IMPLEMENTED` | Wait for v2.2 release; do NOT retry; consult `error.details.reference_adr` for the v2.2 ADR tracking the backend |
+| 6 | Near-duplicate note already exists in vault (content-hash exact match or cosine-similarity ≥ threshold per Phase 17 dedup gate at `create_note` time); response envelope carries `error.details = {existing_id, similarity, strategy}` for caller introspection | `DEDUP_BLOCKED` | Inspect existing note, decide whether to merge / amend / explicitly bypass via `--dedup-force` (operator-confirmed); do NOT auto-retry — duplication is a content decision, not a transient failure |
 
-Codes 6-127 are reserved for future sub-command-specific semantics. Codes ≥128 indicate a wrapper or signal-handling issue (bash convention) and are not part of the vault-ai contract.
+Codes 7-127 are reserved for future sub-command-specific semantics. Codes ≥128 indicate a wrapper or signal-handling issue (bash convention) and are not part of the vault-ai contract.
 
 ## Auth
 

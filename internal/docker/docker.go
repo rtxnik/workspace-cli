@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -124,7 +126,14 @@ func ProxyUp(cfg config.Config) error {
 			Image: cfg.ProxyImage,
 		},
 		&container.HostConfig{
-			Binds:         []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
+			// PROXY-PROFILE-15 / RESEARCH §5: whole-directory bind so
+			// `xray run -test -config /etc/xray/profiles/<name>.json` (D-09)
+			// sees the target profile inside the container. The relative
+			// symlink config.json -> profiles/<name>.json resolves correctly
+			// because both files live under the bound directory. :ro because
+			// a vulnerability in xray must never write back into the
+			// operator's home tree.
+			Binds:         []string{filepath.Dir(cfg.XrayConfig) + ":/etc/xray/:ro"},
 			CapAdd:        []string{"NET_ADMIN"},
 			Sysctls:       map[string]string{"net.ipv4.ip_forward": "1"},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
@@ -438,4 +447,119 @@ func WaitForHealth(cfg config.Config, timeout time.Duration) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// ProxyExec runs `docker exec <cfg.ProxyContainer> <args...>` and returns
+// combined stdout+stderr. Mirrors the established shell-out pattern used by
+// BuildProxyImage and ProxyFixRoutes — the SDK ContainerExecCreate +
+// ContainerExecAttach path requires ~25 LOC of stdcopy demux for an identical
+// effect.
+//
+// Used by internal/xray for `xray run -test -config /etc/xray/profiles/<name>.json`
+// validation before symlink swap (CONTEXT.md D-09).
+func ProxyExec(cfg config.Config, args ...string) ([]byte, error) {
+	cmdArgs := append([]string{"exec", cfg.ProxyContainer}, args...)
+	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("docker exec %s %v: %w (output: %s)", cfg.ProxyContainer, args, err, string(out))
+	}
+	return out, nil
+}
+
+// bindMountIsWholeDir is the comparator shared by BindMountIsWholeDir and
+// VerifyProxyReadyForReload. Takes an already-inspected ContainerJSON to
+// avoid a duplicate ContainerInspect round-trip when both checks run.
+//
+// Returns true if HostConfig.Binds contains an entry whose host side is
+// filepath.Dir(cfg.XrayConfig) (whole-dir mount), false if it contains an
+// entry whose host side is cfg.XrayConfig itself (legacy single-file
+// mount). Returns (false, nil) if no xray-related bind is found at all
+// — the caller decides whether that's legacy or missing.
+func bindMountIsWholeDir(info types.ContainerJSON, cfg config.Config) (bool, error) {
+	wholeDirHost := filepath.Dir(cfg.XrayConfig)
+	for _, b := range info.HostConfig.Binds {
+		parts := strings.SplitN(b, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		switch parts[0] {
+		case wholeDirHost:
+			return true, nil
+		case cfg.XrayConfig:
+			return false, nil
+		}
+	}
+	return false, nil
+}
+
+// BindMountIsWholeDir inspects the running dev-proxy container and returns
+// true if its bind mount uses the whole-directory form (cfg.XrayConfig's
+// parent directory mounted to /etc/xray/), false if it uses the legacy
+// single-file form (cfg.XrayConfig mounted to /etc/xray/config.json).
+// Returns (false, err) if the container is missing or inspect fails.
+//
+// PROXY-PROFILE-15: switching to whole-dir is required for the xray -test
+// validation gate (D-09) to see target profile files inside the container.
+// Existing operators are NOT auto-recreated (feedback_no_auto_state_mutation);
+// the CLI surfaces a one-time recreate prompt via internal/xray.SwitchTo.
+func BindMountIsWholeDir(cfg config.Config) (bool, error) {
+	cli, err := newClientFunc()
+	if err != nil {
+		return false, fmt.Errorf("docker client: %w", err)
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
+	defer cancel()
+
+	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
+	if err != nil {
+		return false, fmt.Errorf("inspect %s: %w", cfg.ProxyContainer, err)
+	}
+	return bindMountIsWholeDir(info, cfg)
+}
+
+// VerifyProxyReadyForReload runs pre-flight checks required before
+// triggering a config reload via container restart. Validation-only —
+// no state mutation (D-10 / feedback_no_auto_state_mutation:
+// validation-before-mutation is OK, automation-after-failure is NOT).
+//
+// Checks (all must pass for nil return):
+//   - container exists (not 'no such container')
+//   - container is in running state
+//   - whole-dir bind mount is active (else profile swap is invisible to
+//     xray inside the container)
+//
+// Callers gate their mutations on a nil return; on non-nil they render
+// the error and exit without touching state.
+func VerifyProxyReadyForReload(cfg config.Config) error {
+	cli, err := newClientFunc()
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
+	defer cancel()
+
+	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return fmt.Errorf("proxy container %q not found — run 'ws proxy up' first", cfg.ProxyContainer)
+		}
+		return fmt.Errorf("inspect proxy container: %w", err)
+	}
+	if !info.State.Running {
+		return fmt.Errorf("proxy container %q is not running (state=%s) — run 'ws proxy up' first", cfg.ProxyContainer, info.State.Status)
+	}
+
+	isWhole, err := bindMountIsWholeDir(info, cfg)
+	if err != nil {
+		return fmt.Errorf("inspect proxy bind mount: %w", err)
+	}
+	if !isWhole {
+		return fmt.Errorf("proxy container %q uses legacy single-file bind mount — run 'ws proxy rebuild --force' to migrate to whole-dir bind", cfg.ProxyContainer)
+	}
+
+	return nil
 }

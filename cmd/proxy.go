@@ -348,6 +348,18 @@ var proxyInitCmd = &cobra.Command{
 	Use:   "init <vless-uri>",
 	Short: "Generate xray config from VLESS URI",
 	Args:  cobra.ExactArgs(1),
+	PreRun: func(cmd *cobra.Command, args []string) {
+		// D-02 / PROXY-PROFILE-08 / RESEARCH §11: Cobra's built-in Deprecated
+		// field routes to stdout (Cobra v1.10.1 source), which breaks any
+		// stdout-parsing automation around `ws proxy init`. Manual stderr
+		// banner instead. Fires ONLY when --add is set; legacy default path
+		// (init without --add) is NOT deprecated.
+		addFlag, _ := cmd.Flags().GetBool("add")
+		if !addFlag {
+			return
+		}
+		fmt.Fprintln(os.Stderr, "WARNING: 'ws proxy init --add' is deprecated; use 'ws proxy profile add <name> <vless-uri>' instead. Removal scheduled for the next workspace-cli minor release.")
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		uri := args[0]
@@ -407,5 +419,8 @@ func init() {
 	proxyCmd.AddCommand(proxyUpdateCmd)
 	proxyCmd.AddCommand(proxyInitCmd)
 	proxyCmd.AddCommand(proxyFixRoutesCmd)
+	proxyCmd.AddCommand(proxyRestartCmd)
+	proxyCmd.AddCommand(proxyRecreateCmd)
+	proxyCmd.AddCommand(profileCmd)
 	rootCmd.AddCommand(proxyCmd)
 }

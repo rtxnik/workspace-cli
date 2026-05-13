@@ -45,9 +45,9 @@ type Outbound struct {
 }
 
 type RoutingConfig struct {
-	DomainStrategy string     `json:"domainStrategy"`
-	Balancers      []Balancer `json:"balancers,omitempty"`
-	Rules          []Rule     `json:"rules"`
+	DomainStrategy string            `json:"domainStrategy"`
+	Balancers      []Balancer        `json:"balancers,omitempty"`
+	Rules          []json.RawMessage `json:"rules"`
 }
 
 type Balancer struct {
@@ -58,14 +58,6 @@ type Balancer struct {
 
 type BalancerStrategy struct {
 	Type string `json:"type"`
-}
-
-type Rule struct {
-	Type        string   `json:"type"`
-	IP          []string `json:"ip,omitempty"`
-	Network     string   `json:"network,omitempty"`
-	OutboundTag string   `json:"outboundTag,omitempty"`
-	BalancerTag string   `json:"balancerTag,omitempty"`
 }
 
 // GenerateConfig creates a new xray config from a parsed VLESS URI.
@@ -109,17 +101,9 @@ func GenerateConfig(cfg VLESSConfig, tag string) (*XrayConfig, error) {
 					Strategy: BalancerStrategy{Type: "roundRobin"},
 				},
 			},
-			Rules: []Rule{
-				{
-					Type:        "field",
-					IP:          []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"},
-					OutboundTag: "direct",
-				},
-				{
-					Type:        "field",
-					Network:     "tcp,udp",
-					BalancerTag: "proxy-balancer",
-				},
+			Rules: []json.RawMessage{
+				json.RawMessage(`{"type":"field","ip":["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8"],"outboundTag":"direct"}`),
+				json.RawMessage(`{"type":"field","network":"tcp,udp","balancerTag":"proxy-balancer"}`),
 			},
 		},
 	}, nil

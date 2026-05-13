@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -380,5 +381,385 @@ func TestWaitForHealth_Unhealthy(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unhealthy") {
 		t.Errorf("expected unhealthy error, got: %v", err)
+	}
+}
+
+// --- ProxyExec tests ---
+
+func TestProxyExecSignature(t *testing.T) {
+	cfg := config.Config{ProxyContainer: "this-container-does-not-exist-xx22-test"}
+	_, err := ProxyExec(cfg, "echo", "hello")
+	if err == nil {
+		return // happy coincidence; not a helper failure
+	}
+	if !strings.Contains(err.Error(), "docker exec this-container-does-not-exist-xx22-test") {
+		t.Fatalf("error %q missing `docker exec <container>` prefix", err.Error())
+	}
+	if !strings.Contains(err.Error(), "[echo hello]") {
+		t.Fatalf("error %q missing composed args", err.Error())
+	}
+}
+
+// --- BindMountIsWholeDir tests ---
+
+func TestBindMountIsWholeDir_DetectsLegacySingleFile(t *testing.T) {
+	// Composition-only: signature exists and accepts the expected Config.
+	// Live HostConfig inspection is for integration tests (Plan 22-06).
+	cfg := config.Config{
+		ProxyContainer: "this-container-does-not-exist-xx22-bind-test",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	_, err := BindMountIsWholeDir(cfg)
+	if err == nil {
+		t.Skip("docker may be available and a container of that name exists; not a test failure")
+	}
+	if !strings.Contains(err.Error(), "inspect this-container-does-not-exist-xx22-bind-test") {
+		t.Errorf("error does not wrap inspect target: %v", err)
+	}
+}
+
+// TestBindMountIsWholeDir_WholeDirBind verifies the helper returns true when
+// the running container's HostConfig.Binds carries the new whole-directory
+// shape `<host-dir>:/etc/xray:ro`.
+func TestBindMountIsWholeDir_WholeDirBind(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{"/home/test/.config/xray:/etc/xray:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	cfg := config.Config{
+		ProxyContainer: "dev-proxy",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	ok, err := BindMountIsWholeDir(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected whole-dir bind to be detected as true")
+	}
+}
+
+// TestBindMountIsWholeDir_LegacySingleFile verifies the helper returns false
+// when the running container's HostConfig.Binds carries the legacy
+// single-file shape `<host-file>:/etc/xray/config.json:ro`.
+func TestBindMountIsWholeDir_LegacySingleFile(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{"/home/test/.config/xray/config.json:/etc/xray/config.json:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	cfg := config.Config{
+		ProxyContainer: "dev-proxy",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	ok, err := BindMountIsWholeDir(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected legacy single-file bind to be detected as false")
+	}
+}
+
+// TestBindMountIsWholeDir_TrailingSlash verifies the helper returns true when
+// the running container's HostConfig.Binds carries the docker-normalized form
+// with a trailing slash on the container path, i.e. `<host-dir>:/etc/xray/:ro`.
+// This is the form ProxyUp actually writes (docker.go line ~135). The 2026-05-13
+// prod incident surfaced a regression where the prefix-based comparator failed
+// to recognize this form and falsely reported a legacy single-file bind.
+func TestBindMountIsWholeDir_TrailingSlash(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						// docker-normalized form: ProxyUp writes "/etc/xray/"
+						// with a trailing slash on the container path.
+						Binds: []string{"/home/test/.config/xray:/etc/xray/:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	cfg := config.Config{
+		ProxyContainer: "dev-proxy",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	ok, err := BindMountIsWholeDir(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected trailing-slash whole-dir bind to be detected as true (prod hotfix regression guard)")
+	}
+}
+
+// TestBindMountIsWholeDir_NoSlash verifies the helper returns true when the
+// running container's HostConfig.Binds carries the whole-dir form WITHOUT a
+// trailing slash on the container path, i.e. `<host-dir>:/etc/xray:ro`. Both
+// forms must be tolerated because docker may normalize either way depending on
+// API version. Symmetrical companion of TestBindMountIsWholeDir_TrailingSlash.
+func TestBindMountIsWholeDir_NoSlash(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{"/home/test/.config/xray:/etc/xray:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	cfg := config.Config{
+		ProxyContainer: "dev-proxy",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	ok, err := BindMountIsWholeDir(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected no-slash whole-dir bind to be detected as true")
+	}
+}
+
+// TestBindMountIsWholeDir_SingleFile is the named-for-symmetry companion of
+// TestBindMountIsWholeDir_LegacySingleFile. Kept as a separate test so the
+// 2026-05-13 hotfix spec's three-test list ({TrailingSlash, NoSlash, SingleFile})
+// is satisfied verbatim and regressions of either shape land on a clearly
+// named failure.
+func TestBindMountIsWholeDir_SingleFile(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{"/home/test/.config/xray/config.json:/etc/xray/config.json:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	cfg := config.Config{
+		ProxyContainer: "dev-proxy",
+		XrayConfig:     "/home/test/.config/xray/config.json",
+	}
+	ok, err := BindMountIsWholeDir(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected single-file bind to be detected as false")
+	}
+}
+
+// --- VerifyProxyReadyForReload tests ---
+
+func TestVerifyProxyReadyForReload_HappyPath(t *testing.T) {
+	cfg := testCfg()
+	wholeDirHost := filepath.Dir(cfg.XrayConfig)
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{
+						Running: true,
+						Status:  "running",
+					},
+					HostConfig: &container.HostConfig{
+						Binds: []string{wholeDirHost + ":/etc/xray/:ro"},
+					},
+				},
+				Config: &container.Config{Image: "ws-proxy:latest"},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	if err := VerifyProxyReadyForReload(cfg); err != nil {
+		t.Fatalf("expected nil error for happy path; got %v", err)
+	}
+}
+
+func TestVerifyProxyReadyForReload_ContainerNotFound(t *testing.T) {
+	mock := &mockClient{} // default returns errdefs.NotFound
+	defer withMock(mock)()
+
+	err := VerifyProxyReadyForReload(testCfg())
+	if err == nil {
+		t.Fatal("expected error for not-found container")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected error to contain 'not found'; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ws proxy up") {
+		t.Errorf("expected recovery hint 'ws proxy up'; got %v", err)
+	}
+}
+
+func TestVerifyProxyReadyForReload_ContainerStopped(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{
+						Running: false,
+						Status:  "exited",
+					},
+					HostConfig: &container.HostConfig{},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	err := VerifyProxyReadyForReload(testCfg())
+	if err == nil {
+		t.Fatal("expected error for stopped container")
+	}
+	if !strings.Contains(err.Error(), "not running") {
+		t.Errorf("expected 'not running'; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "exited") {
+		t.Errorf("expected status 'exited' in error; got %v", err)
+	}
+}
+
+func TestVerifyProxyReadyForReload_LegacyBind(t *testing.T) {
+	cfg := testCfg()
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{
+						Running: true,
+						Status:  "running",
+					},
+					HostConfig: &container.HostConfig{
+						Binds: []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	err := VerifyProxyReadyForReload(cfg)
+	if err == nil {
+		t.Fatal("expected error for legacy single-file bind")
+	}
+	if !strings.Contains(err.Error(), "legacy single-file bind") {
+		t.Errorf("expected 'legacy single-file bind'; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ws proxy rebuild") {
+		t.Errorf("expected recovery hint 'ws proxy rebuild'; got %v", err)
+	}
+}
+
+func TestVerifyProxyReadyForReload_InspectError(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{}, errors.New("daemon unreachable")
+		},
+	}
+	defer withMock(mock)()
+
+	err := VerifyProxyReadyForReload(testCfg())
+	if err == nil {
+		t.Fatal("expected error for inspect failure")
+	}
+	if !strings.Contains(err.Error(), "daemon unreachable") {
+		t.Errorf("expected wrapped daemon error; got %v", err)
+	}
+}
+
+// --- BindMountIsWholeDir regression ---
+
+func TestBindMountIsWholeDir_StillWorks(t *testing.T) {
+	cfg := testCfg()
+	wholeDirHost := filepath.Dir(cfg.XrayConfig)
+
+	// Whole-dir case -> true.
+	mockWhole := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{wholeDirHost + ":/etc/xray/:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	restore := withMock(mockWhole)
+	ok, err := BindMountIsWholeDir(cfg)
+	restore()
+	if err != nil {
+		t.Fatalf("whole-dir case: unexpected error %v", err)
+	}
+	if !ok {
+		t.Error("whole-dir case: expected ok=true")
+	}
+
+	// Single-file case -> false.
+	mockLegacy := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: true},
+					HostConfig: &container.HostConfig{
+						Binds: []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
+					},
+				},
+				Config: &container.Config{},
+			}, nil
+		},
+	}
+	restore = withMock(mockLegacy)
+	ok, err = BindMountIsWholeDir(cfg)
+	restore()
+	if err != nil {
+		t.Fatalf("legacy case: unexpected error %v", err)
+	}
+	if ok {
+		t.Error("legacy case: expected ok=false")
 	}
 }

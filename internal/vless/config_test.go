@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -279,4 +280,81 @@ func keys(m map[string]any) []string {
 		result = append(result, k)
 	}
 	return result
+}
+
+// TestRoutingCopyPreservesAllFields is the regression for the D-05 routing
+// copy bug: AddProfile's unmarshal -> marshal round-trip through
+// vless.XrayConfig must preserve every field xray honours on a routing rule.
+// The pre-refactor `Rule` struct silently dropped fields it did not declare
+// (port, domain, source, user, inboundTag, protocol, attrs, sourcePort) —
+// this test fails on the typed-struct version and passes once Rules is
+// []json.RawMessage (byte-passthrough, matching the Outbound.Settings
+// pattern already established in this file).
+func TestRoutingCopyPreservesAllFields(t *testing.T) {
+	input := []byte(`{
+  "log": {"loglevel": "warning"},
+  "inbounds": [],
+  "outbounds": [],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {"type":"field","port":"22","outboundTag":"direct"},
+      {"type":"field","domain":["example.com","geosite:google"],"outboundTag":"proxy"},
+      {"type":"field","source":["10.0.0.0/8"],"outboundTag":"direct"},
+      {"type":"field","user":["alice@example.com"],"outboundTag":"proxy"},
+      {"type":"field","inboundTag":["transparent"],"network":"tcp,udp","balancerTag":"proxy-balancer"},
+      {"type":"field","protocol":["bittorrent"],"outboundTag":"block"},
+      {"type":"field","attrs":{"user-agent":"curl"},"outboundTag":"direct"},
+      {"type":"field","sourcePort":"1024-65535","outboundTag":"direct"},
+      {"type":"field","ip":["10.0.0.0/8","172.16.0.0/12"],"outboundTag":"direct"}
+    ]
+  }
+}`)
+
+	var xc XrayConfig
+	if err := json.Unmarshal(input, &xc); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+
+	out, err := json.MarshalIndent(&xc, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal round-trip: %v", err)
+	}
+
+	// Re-parse both byte streams into generic maps so the comparison is
+	// tolerant of whitespace / key order but strict on field presence + value.
+	var inMap, outMap map[string]any
+	if err := json.Unmarshal(input, &inMap); err != nil {
+		t.Fatalf("reparse input: %v", err)
+	}
+	if err := json.Unmarshal(out, &outMap); err != nil {
+		t.Fatalf("reparse output: %v", err)
+	}
+
+	inRules, ok := nestedSlice(inMap, "routing", "rules")
+	if !ok {
+		t.Fatalf("input routing.rules not extractable: %#v", inMap)
+	}
+	outRules, ok := nestedSlice(outMap, "routing", "rules")
+	if !ok {
+		t.Fatalf("output routing.rules not extractable: %#v", outMap)
+	}
+
+	if !reflect.DeepEqual(inRules, outRules) {
+		t.Errorf("routing.rules byte-fidelity broken: fields dropped or mutated by Unmarshal->Marshal round-trip.\n  input:  %#v\n  output: %#v", inRules, outRules)
+	}
+}
+
+// nestedSlice walks m via the given keys and returns the value as []any.
+func nestedSlice(m map[string]any, keys ...string) ([]any, bool) {
+	var cur any = m
+	for _, k := range keys {
+		asMap, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur = asMap[k]
+	}
+	s, ok := cur.([]any)
+	return s, ok
 }
