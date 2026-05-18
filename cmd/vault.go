@@ -1,0 +1,46 @@
+package cmd
+
+// vault.go is the Cobra root for the `ws vault` subcommand family per
+// CONTEXT D-02 (filename convention `vault_<command>.go` snake-case) +
+// D-03 (depth-2 Cobra surface — no nested `ws vault profile <subcmd>`).
+//
+// Plan 18-03 (Wave 2) registers 5 read-only leaves here:
+//   status, search, validate, get-coverage-report, vault-health-score
+//
+// Plan 18-04 will extend this init() with 4 mutating leaves:
+//   triage-run, ingest, reindex, backup-verify
+//
+// Plan 18-05 will add the diagnostic leaf:
+//   doctor
+//
+// Total 10 leaves at v2.2 ship per ADR-int-03 10-command cap.
+
+import (
+	"github.com/spf13/cobra"
+)
+
+// vaultAnnotation is the per-leaf group tag consumed by the groupedUsageTemplate
+// in cmd/root.go to render the "Vault Commands:" section.
+var vaultAnnotation = map[string]string{"group": "vault"}
+
+var vaultCmd = &cobra.Command{
+	Use:         "vault",
+	Short:       "Vault-AI MCP operations",
+	Long:        "Vault-AI MCP operations — read/mutate the personal knowledge vault via the stdio MCP transport (single chokepoint at internal/mcp.Client per CONTEXT D-05).",
+	Annotations: vaultAnnotation,
+}
+
+func init() {
+	// Plan 18-03 Task 1 (3 simpler MCP-wrapper read leaves):
+	vaultCmd.AddCommand(newVaultSearchCmd())
+	vaultCmd.AddCommand(newVaultValidateCmd())
+	vaultCmd.AddCommand(newVaultGetCoverageReportCmd())
+	// Plan 18-03 Task 2 (added in a follow-up commit):
+	// vaultCmd.AddCommand(newVaultVaultHealthScoreCmd())
+	// Plan 18-03 Task 3 (added in a follow-up commit):
+	// vaultCmd.AddCommand(newVaultStatusCmd())
+	// Plan 18-04 mutating leaves (Wave 3): triage-run, ingest, reindex, backup-verify
+	// Plan 18-05 diagnostic leaf (Wave 4): doctor
+
+	rootCmd.AddCommand(vaultCmd)
+}
