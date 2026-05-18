@@ -45,7 +45,8 @@ func init() {
 	vaultCmd.AddCommand(newVaultReindexCmd())
 	// Plan 18-04 Task 2a (CLI-06 backup-verify — graceful fallback for Phase 21c HARD-07):
 	vaultCmd.AddCommand(newVaultBackupVerifyCmd())
-	// Plan 18-04 Task 2b (CLI-07 ingest) will land in the next commit
+	// Plan 18-04 Task 2b (CLI-07 ingest — dedup-gated create_note + --dedup-force/--yes pair):
+	vaultCmd.AddCommand(newVaultIngestCmd())
 	// Plan 18-05 diagnostic leaf (Wave 4): doctor
 
 	rootCmd.AddCommand(vaultCmd)
