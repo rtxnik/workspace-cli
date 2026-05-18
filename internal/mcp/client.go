@@ -139,6 +139,13 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 		return c, nil
 	}
 
+	// Note: the adapter_stdio CLI is stdio-by-default and does NOT accept a
+	// --stdio flag (verified at vault-ai HEAD 2026-05-18 via
+	// `python -m vault_ai.adapter_stdio.server --help` — only -h and --config
+	// are recognized). CONTEXT D-08 + RESEARCH §Pattern 1 cite a --stdio
+	// argument that the live source rejects; we omit it per `feedback_verify_
+	// before_claim`. Auto-fix Rule 1: discovered during integration smoke
+	// when the handshake closed transport because argparse exited non-zero.
 	transport := mcptransport.NewStdioWithOptions(
 		uvPath,
 		os.Environ(),
@@ -147,7 +154,6 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 			"--project", repoRoot + "/_tooling/mcp",
 			"--",
 			"python", "-m", "vault_ai.adapter_stdio.server",
-			"--stdio",
 		},
 		mcptransport.WithCommandFunc(cmdFunc),
 	)
