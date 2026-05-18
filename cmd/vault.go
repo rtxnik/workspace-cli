@@ -41,7 +41,9 @@ func init() {
 	vaultCmd.AddCommand(newVaultStatusCmd())
 	// Plan 18-04 Task 1a (CLI-03 triage-run MCP wrapper):
 	vaultCmd.AddCommand(newVaultTriageRunCmd())
-	// Plan 18-04 Task 1b/2 will append: reindex, ingest, backup-verify
+	// Plan 18-04 Task 1b (CLI-05 reindex shell-out — CONTEXT D-27 §OQ-3 Amendment):
+	vaultCmd.AddCommand(newVaultReindexCmd())
+	// Plan 18-04 Task 2 will append: ingest, backup-verify
 	// Plan 18-05 diagnostic leaf (Wave 4): doctor
 
 	rootCmd.AddCommand(vaultCmd)
