@@ -1,23 +1,23 @@
 ---
 title: ws vault sub-command reference
 mcp_contract_version: "1.3.0"
-status: proposed
-design_only: true
-ships: v2.1+
+status: accepted
+design_only: false
+ships: v2.2
 source_adr: vault-ai/docs/adr/adr-int-03-ws-vault-cli.md
 ---
 
 # ws vault — Vault-AI CLI Reference
 
-CLI facade over the vault-ai MCP server per [ADR-int-03](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md). Provides shell-native access to the 23-tool MCP contract via 10 sub-commands with GNU-style flag parsing, Unix exit codes, and env-var authentication. Invokes the stdio MCP transport per [ADR-ai-01](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md).
+CLI facade over the vault-ai MCP server per [ADR-int-03](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md). Provides shell-native access to the 25-tool MCP contract via 10 sub-commands with GNU-style flag parsing, Unix exit codes, and fd-3 token authentication. Invokes the stdio MCP transport per [ADR-ai-01](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md).
 
 ## Status
 
-- **Spec status:** `proposed` — this document is design-only per Phase 6 CONTEXT D-21. The `workspace-cli` Go binary does not yet implement `ws vault <cmd>`; every invocation currently returns `"not yet implemented; see workspace-cli/docs/vault-commands.md"` as a stub.
-- **ADR status:** [ADR-int-03](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md) is `accepted` (design is locked).
-- **Ships:** v2.1+ build phase (Go implementation under `workspace-cli/cmd/vault/`).
+- **Spec status:** `accepted` — Phase 18 (CLI-01..14) shipped 2026-05-18; all 10 sub-commands implemented under `workspace-cli/cmd/vault*.go`; the Go binary delivers the surface end-to-end via `internal/mcp/` Go MCP stdio client.
+- **ADR status:** [ADR-int-03](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md) `accepted`; §v2.2 Amendment body (D-int03-v2.2-A) records the 6 deltas landed Phase 18 (command-surface realignment + mark3labs/mcp-go pin + fd-3 token transport + gen-go-types.py codegen + XREPO-01 walker 4-surface + doctor read-only discipline).
+- **Ships:** v2.2 (Phase 18 closure 2026-05-18). Go implementation under `workspace-cli/cmd/vault*.go` + `workspace-cli/internal/mcp/`.
 
-The design-only split is intentional — v2.0 milestone ships architectural artefacts + contracts only (PROJECT.md). The pinned 10-command surface + exit-code mapping + auth contract gives v2.1 build phase a contract to implement against, not a blank page.
+The command list below realigns to the v2.2 implemented surface per `.planning/REQUIREMENTS.md` CLI-01..10. The v2.0 design-only list (`triage / export / push-drive / health / reindex / validate / coverage / restore / init / stats`) is superseded per ADR-int-03 §v2.2 Amendment §1.
 
 ## Contract version
 
@@ -79,175 +79,76 @@ Sub-command-specific flags are documented in each sub-command section below.
 
 ## Sub-commands
 
-Ten sub-commands lock the CLI surface per ADR-int-03 §10 sub-commands verbatim. Each section below documents flags, purpose, output, sample usage, and the MCP tool it wraps.
+Ten sub-commands lock the CLI surface per ADR-int-03 §10 sub-commands verbatim. Each section below documents flags, purpose, output, sample usage, and the MCP tool it wraps. The v2.2 surface is implemented per `.planning/REQUIREMENTS.md` CLI-01..10 (Phase 18, 2026-05-18).
 
-### ws vault triage
+### ws vault status
 
-**Purpose.** Trigger the inbox-triage agent over the `10_Inbox/` zone. Wraps MCP `triage_inbox` tool (tools.json row 6).
+**Purpose.** Print a single-screen green/yellow/red summary of 6 composite signals: MCP liveness, Qdrant collection size, audit-chain integrity, cost-tracker headroom, dedup gate readiness, last-DR-drill-age. (CLI-01 v2.2 ship-gate; Phase 18 Plan 18-03.)
 
-**Flags.**
-- `--limit N` — process at most N inbox notes per invocation (default `10`).
-- `--confidence-min X` — skip classifications with `confidence < X` where X is `[0.0..1.0]` (default `0.8`; Phase 5 D-34 triage_tool_allowlist default).
-- `--dry-run` — compute classifications + proposed moves without writing frontmatter or moving files.
-- `--since YYYY-MM-DD` — only consider inbox notes created on or after date.
-- `--repo <sibling>` — triage pulls context from a sibling repo when the inbox note references cross-repo material (e.g. `--repo workspace-cli`).
+**Flags.** `--json` emits structured envelope for cron / dashboard consumers.
 
-**Output.** Per-note classification summary on stdout (one line per processed note with type + zone + visibility + confidence). NDJSON via `--json`.
+**Output.** Composite line per signal + overall verdict; exit 0 (green), 1 (yellow), 2 (red).
 
-**Sample.**
-```
-ws vault triage --limit 5 --confidence-min 0.85 --dry-run
-# → 5 classifications printed, no frontmatter writes
-```
+### ws vault search
 
-### ws vault export
+**Purpose.** Hybrid-search top-K results from shell. Wraps MCP `search_notes` tool (v1.3.0). (CLI-02; Phase 18 Plan 18-03.)
 
-**Purpose.** Emit a tar.gz of notes filtered by visibility for external consumption (publishing public subset, collaborator sharing). Wraps MCP `export_notes` tool.
+**Flags.** `--k N` (default 10); `--type X`; `--zone Y`; `--json`.
 
-**Flags.**
-- `--public` — include only `visibility: public` notes. Required flag for any export to occur (safety rail — default behaviour never exports any notes).
-- `--out PATH` — target tar.gz path. Required when `--public` is set.
+### ws vault triage-run
 
-**Safety rail.** Without `--public` the command emits a stderr warning and exits 1 (prevents accidental mass-export of internal/private content). ADR-sec-01 tier semantics enforced structurally — public = default-deny until opt-in.
+**Purpose.** Trigger a triage pass over the inbox (or specified path). Wraps MCP `triage_run` tool (24th tool; Phase 16). (CLI-03; Phase 18 Plan 18-04.)
 
-**Sample.**
-```
-ws vault export --public --out ~/exports/public-$(date +%F).tar.gz
-# → tar.gz with N public notes + attachments; exit 0
-```
-
-### ws vault push-drive
-
-**Purpose.** Push qualifying attachments to Google Drive per Phase 6 D-28 3-2-1 backup. Wraps MCP `backup_attachments` tool.
-
-**Flags.**
-- `--attachments-only` — push only `90_Attachments/` files >5 MB (Git LFS threshold; FLOW-05 lockfile).
-- `--dry-run` — list upload candidates without transferring.
-
-**Auth.** Google Drive OAuth token separately managed via chezmoi+age at `~/.config/gdrive/token.age` (not `VAULT_AI_TOKEN`). Pre-requisite: `chezmoi apply` has provisioned the Drive token.
-
-**Sample.**
-```
-ws vault push-drive --attachments-only --dry-run
-# → lists 3 candidates over 5 MB; no upload
-```
-
-### ws vault health
-
-**Purpose.** Print the composite `vault_health_score` (Phase 6 D-24: 40% coverage + 30% content-sufficiency + 20% orphan-compliance + 10% link-integrity). Wraps MCP `vault_health` tool.
-
-**Flags.** None (scalar output; future flags reserved for v2.2+).
-
-**Output.** Single integer `0-100` on stdout (machine-parseable for cron + dashboard consumers).
-
-**Sample.**
-```
-ws vault health
-# → 78
-```
-
-### ws vault reindex
-
-**Purpose.** Rebuild the Qdrant vector index per `_tooling/index-recipe.yaml` ([ADR-ai-03](../../vault-ai/docs/adr/adr-ai-03-vector-store.md)). Wraps MCP `reindex` tool.
-
-**Flags.**
-- `--full` — drop + reinitialise the collection (destructive; required for embedder-version bumps per ADR-ai-03 alias-swap procedure).
-- `--model <name>` — override the recipe's embedder pin for a single invocation (testing/debugging; default reads from recipe).
-
-**Output.** Progress counters on stderr (notes processed / chunks indexed / elapsed); final summary on stdout.
-
-**Sample.**
-```
-ws vault reindex --full
-# → re-indexes all notes under recipe's current embedder pin
-```
+**Flags.** `--inbox <path>`; `--dry-run` (proposed routing without writing); `--limit N`.
 
 ### ws vault validate
 
-**Purpose.** Run the Ajv + content-sufficiency validator suite over part of the vault. Wraps MCP `validate_note` tool per [ADR-ai-07](../../vault-ai/docs/adr/adr-ai-07-tooling-isolation.md).
+**Purpose.** Run schema validators on a single note or the whole vault. Wraps MCP `validate_note` tool. (CLI-04; Phase 18 Plan 18-03.)
 
-**Flags.**
-- `--type X` — restrict to a single note type (e.g. `--type tool`).
-- `--zone Y` — restrict to a PARA zone (e.g. `--zone 30_Resources`).
+**Flags.** `--path <file>`; `--type X`; `--zone Y`. Exits 0 green / non-zero on findings.
 
-**Output.** Per-note report on stdout: frontmatter issues + content-sufficiency label (sufficient/partial/stub) + any LINK-05 / FM-XX violations.
+### ws vault reindex
 
-**Sample.**
-```
-ws vault validate --type adr
-# → validates all adr-*.md files; exit 1 if any fail
-```
+**Purpose.** Rebuild the Qdrant index for the given collection (or all). Shells out to `vault-ai/_tooling/mcp/scripts/embed_index.py` subcommand `index` per CONTEXT D-27 §OQ-3 Amendment. (CLI-05; Phase 18 Plan 18-04.)
 
-### ws vault coverage
+**Flags.** `--collection <name>` (default: recipe-pinned); `--full` (drop + reinit).
 
-**Purpose.** Emit the coverage-linter report per ADR-obs-02 (Wave 3 ADR forward-ref; lands in Plan 06 of Phase 6). Wraps MCP `coverage_report` tool.
+### ws vault backup-verify
 
-**Flags.**
-- `--out PATH` — write markdown report to file (default stdout).
+**Purpose.** Run the diff-aware DR backup-verify routine; reads latest `_tooling/logs/backup-verify-{ISO-week}.jsonl` log per Phase 21c HARD-09. Graceful Phase 21c-not-shipped fallback (informative skip rather than error). (CLI-06; Phase 18 Plan 18-04.)
 
-**Output.** Markdown table — sibling-repo entities extracted × vault IDs/aliases matched; MEDIUM/HIGH priority bands.
+**Flags.** `--strict` (exit non-zero on stale logs).
 
-**Sample.**
-```
-ws vault coverage --out coverage-$(date +%Y-%m).md
-# → monthly coverage report, markdown format
-```
+### ws vault ingest
 
-### ws vault restore
+**Purpose.** Ingest a single markdown file via `create_note` MCP tool with dedup gate check (Phase 17). (CLI-07; Phase 18 Plan 18-04.)
 
-**Purpose.** Restore the vault from a snapshot (disaster-recovery drill + real restore). Wraps MCP `restore` tool.
+**Flags.** `<file>` (positional); `--dedup-force` (paired with `--yes` per CONTEXT D-24); `--zone <target>`; `--type X`.
 
-**Flags.**
-- `--from <snapshot>` — path or identifier of the snapshot (e.g. `backup-2026-Q2.tar.gz`).
-- `--drill` — dry-run mode: validate snapshot integrity without overwriting working tree (quarterly DR drill per Phase 5 DR-04).
+**Safety rail.** `--dedup-force` requires `--yes` (operator-confirmed bypass per Phase 17 dedup override audit pattern); single-flag use rejected at exit 4.
 
-**Use-case.** Quarterly DR drill + real disaster-recovery after laptop loss / disk failure. CLI-first by design — DR drill cannot rely on MCP transport being operational at drill time.
+### ws vault get-coverage-report
 
-**Sample.**
-```
-ws vault restore --from backup-2026-Q2.tar.gz --drill
-# → validates snapshot; dry-run only; exit 0 if snapshot healthy
-```
+**Purpose.** Print the coverage-linter report per ADR-obs-02. Wraps MCP `get_coverage_report` tool. (CLI-08; Phase 18 Plan 18-03.)
 
-### ws vault init
+**Flags.** `--json` (structured); `--out PATH` (write to file).
 
-**Purpose.** Bootstrap a fresh vault-ai workstation on a given host. No MCP required (chicken-and-egg: MCP needs the vault; init creates the vault).
+### ws vault vault-health-score
 
-**Flags.**
-- `--host <devpod|macos|ios>` — one of three hosts; drives chezmoi template selection per Phase 6 D-20.
+**Purpose.** Print the live composite health score (0-100) per ADR-obs-05 weights. Composed Go-side via `internal/mcp/health.go ComputeVaultHealthScore` (OQ-1 path-B per CONTEXT D-21 Amendment). (CLI-09; Phase 18 Plan 18-03.)
 
-**Actions.**
-1. `chezmoi apply` (host-appropriate template — `obsidian.{host}.tmpl`).
-2. Install Obsidian plugins per host template (git, templater, etc.).
-3. Prime `_tooling/index-recipe.yaml` with host-specific embedder pin.
-4. Print next-step operator checklist (e.g., "now run `ws vault validate --type adr` to verify ADR integrity").
+**Flags.** `--json` (structured envelope with per-signal breakdown).
+
+### ws vault doctor
+
+**Purpose.** Self-diagnose common failures: orphan MCP subprocess, stale lock files, missing token, broken token-fd-pass, qdrant container liveness. **Read-only by default** per memory `feedback_no_auto_state_mutation`. (CLI-10; Phase 18 Plan 18-05.)
+
+**Flags.** `--kill-orphans` (opt-in mutation; requires `--yes`); `--clear-stale-locks` (opt-in mutation; requires `--yes`). Without flags, doctor diagnoses + prints remediation; doctor does not heal silently. Enforced by `TestVaultDoctorReadOnlyByDefault` tripwire.
 
 **Sample.**
 ```
-ws vault init --host devpod
-# → DevPod-specific bootstrap: git plugin + schema-tooling + obsidian theme
-```
-
-### ws vault stats
-
-**Purpose.** Emit a summary readout: note counts by type, histogram, visibility distribution, vault_health_score composite. Wraps MCP `stats` tool.
-
-**Flags.** None (monolithic summary; future flags reserved for v2.2+).
-
-**Output.** Markdown-formatted readout on stdout:
-
-```
-vault-ai stats (vault: /home/vscode/projects/vault-ai, generated 2026-04-18T12:00:00Z)
-  Total notes: 142
-  By type: tool=23 person=12 concept=31 ...
-  Visibility: private=89 internal=41 public=12
-  vault_health_score: 78 (target v2.1=70)
-```
-
-**Sample.**
-```
-ws vault stats
-# → full summary readout
+ws vault doctor               # read-only diagnosis
+ws vault doctor --kill-orphans --yes  # opt-in cleanup of orphan vault-mcp-server processes
 ```
 
 ## See also
@@ -256,5 +157,5 @@ ws vault stats
 - [ADR-ai-01 — MCP Dual-Mode](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md) — the MCP contract this CLI wraps
 - [ADR-ai-06 — MCP Auth](../../vault-ai/docs/adr/adr-ai-06-mcp-auth.md) — VAULT_AI_TOKEN provisioning
 - [ADR-sec-02 — Secrets Stack](../../vault-ai/docs/adr/adr-sec-02-secrets-stack.md) — chezmoi+age multi-recipient auth provisioning
-- [`vault-ai/_tooling/mcp/contract/tools.json`](../../vault-ai/_tooling/mcp/contract/tools.json) — 23-tool MCP contract
+- [`vault-ai/_tooling/mcp/contract/tools.json`](../../vault-ai/_tooling/mcp/contract/tools.json) — 25-tool MCP contract (v1.3.0; +`triage_run` + `triage_override` per Phase 16)
 - [`workflow-kit/.claude/settings.local.json`](../../workflow-kit/.claude/settings.local.json) — MCP registration surface
