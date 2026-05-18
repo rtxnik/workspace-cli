@@ -35,8 +35,8 @@ func init() {
 	vaultCmd.AddCommand(newVaultSearchCmd())
 	vaultCmd.AddCommand(newVaultValidateCmd())
 	vaultCmd.AddCommand(newVaultGetCoverageReportCmd())
-	// Plan 18-03 Task 2 (added in a follow-up commit):
-	// vaultCmd.AddCommand(newVaultVaultHealthScoreCmd())
+	// Plan 18-03 Task 2 (CLI-09 vault-health-score):
+	vaultCmd.AddCommand(newVaultVaultHealthScoreCmd())
 	// Plan 18-03 Task 3 (added in a follow-up commit):
 	// vaultCmd.AddCommand(newVaultStatusCmd())
 	// Plan 18-04 mutating leaves (Wave 3): triage-run, ingest, reindex, backup-verify
