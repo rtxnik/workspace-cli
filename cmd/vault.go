@@ -47,7 +47,8 @@ func init() {
 	vaultCmd.AddCommand(newVaultBackupVerifyCmd())
 	// Plan 18-04 Task 2b (CLI-07 ingest — dedup-gated create_note + --dedup-force/--yes pair):
 	vaultCmd.AddCommand(newVaultIngestCmd())
-	// Plan 18-05 diagnostic leaf (Wave 4): doctor
+	// Plan 18-05 (CLI-10 doctor — 5 read-only diagnostic checks + opt-in mutation flags):
+	vaultCmd.AddCommand(newVaultDoctorCmd())
 
 	rootCmd.AddCommand(vaultCmd)
 }

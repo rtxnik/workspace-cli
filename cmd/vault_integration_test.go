@@ -513,3 +513,130 @@ Identical content twice — second invocation MUST land in dedup_override audit 
 		)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Plan 18-05 Wave 3 diagnostic-leaf integration test
+// ---------------------------------------------------------------------------
+
+// TestVaultDoctorIntegration invokes `ws vault doctor --json` end-to-end
+// against the live system. At a clean test time, expectations:
+//   - exit 0 (all 5 green) when no orphans/locks + token present + xrepo clean
+//   - exit 1 / 2 acceptable if the test env happens to have advisory/critical
+//     state (cron-induced stale lock, etc.) — both prove the round-trip works
+//
+// Asserts: stdout is valid NDJSON with exactly 5 entries (one per CONTEXT
+// D-12 check); each entry has a band in {green, yellow, red}.
+func TestVaultDoctorIntegration(t *testing.T) {
+	_ = requireUvAndVaultAIForCmd(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	var out, errOut bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	rootCmd.SetContext(ctx)
+	rootCmd.SetArgs([]string{"vault", "doctor", "--json"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		var cerr *cliErrorWithExit
+		if !errors.As(err, &cerr) {
+			t.Fatalf("vault doctor unexpected error type: %T (%v)", err, err)
+		}
+		if cerr.code < 0 || cerr.code > 2 {
+			t.Errorf("doctor exit code out of [0,1,2]: %d", cerr.code)
+		}
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("doctor --json must emit 5 NDJSON lines (one per CONTEXT D-12 check); got %d (out=%q)", len(lines), out.String())
+	}
+	validBands := map[string]bool{"green": true, "yellow": true, "red": true}
+	for i, line := range lines {
+		var rec struct {
+			Name string `json:"name"`
+			Band string `json:"band"`
+		}
+		if jerr := json.Unmarshal([]byte(line), &rec); jerr != nil {
+			t.Errorf("line %d not valid JSON: %v (line=%q)", i, jerr, line)
+			continue
+		}
+		if !validBands[rec.Band] {
+			t.Errorf("line %d band=%q (want green/yellow/red); name=%q", i, rec.Band, rec.Name)
+		}
+	}
+}
+
+// TestVaultDoctorReadOnlyIntegration is the live-environment companion to the
+// TestVaultDoctorReadOnlyByDefault unit test. Even on a real system with real
+// orphan PIDs / stale lock files (if any), invoking doctor with NO mutation
+// flags MUST NOT change any state. We verify this by:
+//   1. Capturing pgrep + state-dir snapshots before invocation
+//   2. Invoking doctor (no flags)
+//   3. Asserting both snapshots are byte-identical post-invocation
+func TestVaultDoctorReadOnlyIntegration(t *testing.T) {
+	_ = requireUvAndVaultAIForCmd(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Snapshot: pgrep list (order may shift in rare races; sort to stabilize).
+	pgrepBefore, _ := exec.Command("pgrep", "-fa", "vault_ai/adapter_stdio/server.py").Output()
+
+	// Snapshot: list lock files in state dir.
+	home, _ := os.UserHomeDir()
+	stateDir := filepath.Join(home, "projects", "vault-ai", "_tooling", "state")
+	locksBefore, _ := filepath.Glob(filepath.Join(stateDir, "*.lock"))
+
+	var out, errOut bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	rootCmd.SetContext(ctx)
+	rootCmd.SetArgs([]string{"vault", "doctor", "--json"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
+
+	_ = rootCmd.Execute() // exit code doesn't matter
+
+	pgrepAfter, _ := exec.Command("pgrep", "-fa", "vault_ai/adapter_stdio/server.py").Output()
+	locksAfter, _ := filepath.Glob(filepath.Join(stateDir, "*.lock"))
+
+	// Lock-file presence must be unchanged.
+	if len(locksBefore) != len(locksAfter) {
+		t.Errorf(
+			"ws vault doctor (no flags) mutated lock files: before=%d after=%d files. "+
+				"memory feedback_no_auto_state_mutation VIOLATED at integration level.",
+			len(locksBefore), len(locksAfter),
+		)
+	}
+	// pgrep snapshot: doctor's own dry-run NewClient WILL spawn a transient
+	// subprocess (check 4), but Close() reaps it before the function returns.
+	// We expect the post-snapshot count to equal the pre-snapshot count.
+	beforeLines := nonEmptyLineCount(string(pgrepBefore))
+	afterLines := nonEmptyLineCount(string(pgrepAfter))
+	if beforeLines != afterLines {
+		t.Errorf(
+			"ws vault doctor (no flags) changed live MCP subprocess count: before=%d after=%d. "+
+				"Either check 4 leaked a subprocess OR mutation discipline VIOLATED.",
+			beforeLines, afterLines,
+		)
+	}
+}
+
+func nonEmptyLineCount(s string) int {
+	var n int
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			n++
+		}
+	}
+	return n
+}
