@@ -37,8 +37,8 @@ func init() {
 	vaultCmd.AddCommand(newVaultGetCoverageReportCmd())
 	// Plan 18-03 Task 2 (CLI-09 vault-health-score):
 	vaultCmd.AddCommand(newVaultVaultHealthScoreCmd())
-	// Plan 18-03 Task 3 (added in a follow-up commit):
-	// vaultCmd.AddCommand(newVaultStatusCmd())
+	// Plan 18-03 Task 3 (CLI-01 ship-gate — 6-signal composite):
+	vaultCmd.AddCommand(newVaultStatusCmd())
 	// Plan 18-04 mutating leaves (Wave 3): triage-run, ingest, reindex, backup-verify
 	// Plan 18-05 diagnostic leaf (Wave 4): doctor
 
