@@ -242,6 +242,45 @@ func (cl *Client) Close(ctx context.Context) error {
 	}
 }
 
+// ListedTool is the workspace-cli-side projection of mcp.Tool from the
+// mark3labs/mcp-go library. We expose only the fields the `ws vault` leaves
+// actually consume (Name + Properties of the input schema) so consumer code
+// does not depend on the upstream library's struct layout.
+type ListedTool struct {
+	// Name is the tool name (e.g. "create_note").
+	Name string
+	// InputProperties is the JSON Schema "properties" map of the tool's
+	// input schema. Values are arbitrary because JSON Schema is heterogeneous;
+	// callers typically only check key presence (e.g. ws vault status uses
+	// this to probe whether create_note advertises check_dedup_before_create).
+	InputProperties map[string]any
+}
+
+// ListTools issues the MCP `tools/list` JSON-RPC method and returns the
+// advertised tool catalogue. This is the cheapest MCP roundtrip — no
+// embedder/qdrant load — and is the canonical liveness signal for
+// `ws vault status` (signal 1) and the dedup-gate readiness probe (signal 5)
+// per CONTEXT D-21.
+//
+// Returns nil + error on transport failure or when the client is closed.
+func (cl *Client) ListTools(ctx context.Context) ([]ListedTool, error) {
+	if cl == nil || cl.c == nil {
+		return nil, fmt.Errorf("Client.ListTools on nil/closed client")
+	}
+	res, err := cl.c.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("MCP ListTools: %w", err)
+	}
+	out := make([]ListedTool, 0, len(res.Tools))
+	for _, t := range res.Tools {
+		out = append(out, ListedTool{
+			Name:            t.Name,
+			InputProperties: t.InputSchema.Properties,
+		})
+	}
+	return out, nil
+}
+
 // Call invokes an MCP tool by name with the given arguments and decodes the
 // response into a workspace-cli Envelope (the wire shape from
 // workspace-cli/docs/vault-commands.md v1.3.0).

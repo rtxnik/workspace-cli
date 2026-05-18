@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"text/template"
 
 	"github.com/charmbracelet/lipgloss"
@@ -34,8 +36,34 @@ var rootCmd = &cobra.Command{
 	Long:  "ws — workspace manager CLI for DevPod environments with proxy support.",
 }
 
+// cliErrorWithExit is the leaf-level error type used by `ws vault` Cobra
+// leaves to surface a non-default exit code without losing Cobra's "Error:"
+// rendering. Per CONTEXT D-18 + envelope.go MapErrorCodeToExitCode, exit
+// codes 0-7 map to the documented MCP error codes; leaves wrap the failing
+// envelope into a cliErrorWithExit{code, msg} so Execute() can route the
+// code to os.Exit while Cobra still prints the Error: msg line.
+//
+// An empty Msg suppresses the "Error:" line — used by vault-health-score
+// (CLI-09) which exits 1/2 on yellow/red bands but emits NO error text
+// (machine-parseable score on stdout is the whole interface). When Msg is
+// empty, Execute() exits with code without rendering anything.
+type cliErrorWithExit struct {
+	code int
+	msg  string
+}
+
+func (e *cliErrorWithExit) Error() string { return e.msg }
+
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		// Honour leaf-level explicit exit codes (cliErrorWithExit) so the
+		// `ws vault` family can map MCP envelope error codes to Unix exit
+		// codes per CONTEXT D-18 + ADR-int-03. Other commands keep the
+		// historical Die() behaviour (red ✗ + exit 1).
+		var cerr *cliErrorWithExit
+		if errors.As(err, &cerr) {
+			os.Exit(cerr.code)
+		}
 		output.Die(err.Error())
 	}
 }
@@ -78,6 +106,9 @@ var groupedUsageTemplate = `Usage:{{if .Runnable}}
   {{rpad .Name .NamePadding}} {{.Short}}{{end}}{{end}}
 
 ` + output.SectionStyle.Render("Proxy Commands:") + `{{range .Commands}}{{if (eq (index (groupTag .) 0) "proxy")}}
+  {{rpad .Name .NamePadding}} {{.Short}}{{end}}{{end}}
+
+` + output.SectionStyle.Render("Vault Commands:") + `{{range .Commands}}{{if (eq (index (groupTag .) 0) "vault")}}
   {{rpad .Name .NamePadding}} {{.Short}}{{end}}{{end}}
 {{- end}}
 
