@@ -30,7 +30,7 @@ comes up.`,
 			cmd.SilenceUsage = true
 			return fmt.Errorf("proxy recreate failed: %w", err)
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Proxy recreated")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Proxy recreated")
 		return nil
 	},
 }

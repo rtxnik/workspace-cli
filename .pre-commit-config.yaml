@@ -1,0 +1,55 @@
+# workspace-cli .pre-commit-config.yaml -- FIRST pre-commit chain in this repo.
+#
+# Phase 18 Plan 18-02 deliverable for CLI-13 + CLI-14 + CONTEXT D-34.
+#
+# Three BLOCKING hooks (all `stages: [pre-commit]`, `language: system`):
+#   1. xrepo-contract-go-types -- gen-go-types.py --check drift gate (CLI-13)
+#   2. xrepo-contract-parity   -- 3-surface contract_version walker (CLI-14)
+#   3. xrepo-contract-copy-sync -- sha256 sync of local check-xrepo-contract.sh
+#                                  copy against vault-ai source (Warning 11 fix)
+#
+# Bash-only invariant per workspace-meta CLAUDE.md §Non-Negotiables: every
+# `entry:` line below starts with `bash _tooling/hooks/...`. No `entry: python`
+# / `entry: node` -- Python is invoked exclusively from inside the bash shims
+# via `uv run --project ~/projects/vault-ai/_tooling/mcp`.
+#
+# 4-invocation walker coverage per CLI-14:
+#   1. vault-ai pre-commit (vault-ai/.pre-commit-config.yaml hook 10)
+#   2. workflow-kit pre-commit (sibling repo)
+#   3. CI fast-lane (vault-ai/.github/workflows/vault-validate.yml)
+#   4. workspace-cli pre-commit (this file) -- NEW per Phase 18 CLI-14
+#
+# Soft-skip discipline: all three hooks soft-skip with exit 0 + stderr warning
+# when the vault-ai sibling repo is unavailable, so operator-environment
+# subsets that lack vault-ai can still commit. CI lanes (with full sibling
+# checkout) are the strict enforcement surface.
+
+minimum_pre_commit_version: "4.0.0"
+
+repos:
+  - repo: local
+    hooks:
+      - id: xrepo-contract-go-types
+        name: Phase 18 CLI-13 + CLI-14 -- xrepo contract gen-go-types check (BLOCKING)
+        entry: bash _tooling/hooks/xrepo-contract-go-types.sh
+        language: system
+        files: ^internal/mcp/types\.go$|^_tooling/hooks/xrepo-contract-go-types\.sh$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: xrepo-contract-parity
+        name: Phase 18 CLI-14 -- xrepo 3-surface contract_version parity (BLOCKING)
+        entry: bash _tooling/hooks/xrepo-contract-parity.sh
+        language: system
+        files: ^docs/vault-commands\.md$|^_tooling/hooks/(xrepo-contract-parity|check-xrepo-contract)\.sh$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: xrepo-contract-copy-sync
+        name: Phase 18 CLI-14 -- xrepo contract copy sha256 sync (BLOCKING, Warning 11 fix)
+        entry: bash _tooling/hooks/sync-xrepo-contract-copy.sh
+        language: system
+        files: ^_tooling/hooks/(check-xrepo-contract|sync-xrepo-contract-copy)\.sh$
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

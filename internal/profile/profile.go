@@ -106,7 +106,7 @@ func parseDockerfileBase(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -127,7 +127,7 @@ func parseMiseTools(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var tools []string
 	inTools := false
@@ -163,7 +163,7 @@ func writeFromTemplate(path, tmplStr string, data any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return tmpl.Execute(f, data)
 }
 

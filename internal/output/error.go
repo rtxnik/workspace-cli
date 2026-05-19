@@ -24,18 +24,18 @@ func RenderError(e ErrorDetail) string {
 
 	if len(e.Context) > 0 {
 		for k, v := range e.Context {
-			b.WriteString(fmt.Sprintf("  %s %s\n",
+			fmt.Fprintf(&b, "  %s %s\n",
 				StyleDim.Render(k+":"),
-				lipgloss.NewStyle().Foreground(FG1).Render(v)))
+				lipgloss.NewStyle().Foreground(FG1).Render(v))
 		}
 	}
 
 	if len(e.Suggestions) > 0 {
 		b.WriteString("\n")
 		for i, s := range e.Suggestions {
-			b.WriteString(fmt.Sprintf("  %s %s\n",
+			fmt.Fprintf(&b, "  %s %s\n",
 				StyleAqua.Render(fmt.Sprintf("%d.", i+1)),
-				s))
+				s)
 		}
 	}
 

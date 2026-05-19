@@ -147,7 +147,7 @@ Use --no-reload to perform only the symlink swap (advanced — operator must run
 				cmd.SilenceUsage = true
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(),
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 				"Switched to profile %q (proxy NOT reloaded — run 'ws proxy restart' to apply)\n",
 				args[0])
 			return nil
@@ -178,7 +178,7 @@ Use --no-reload to perform only the symlink swap (advanced — operator must run
 			return err
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(),
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 			"Switched to profile %q (proxy reloaded in %v)\n",
 			args[0], time.Since(start).Truncate(time.Millisecond))
 		return nil
