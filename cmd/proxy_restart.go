@@ -29,7 +29,7 @@ swapped the symlink but the auto-reload failed. For container-level changes
 			cmd.SilenceUsage = true
 			return fmt.Errorf("proxy restart failed: %w", err)
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Proxy restarted")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Proxy restarted")
 		return nil
 	},
 }

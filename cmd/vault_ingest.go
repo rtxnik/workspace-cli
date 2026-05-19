@@ -51,7 +51,7 @@ func runVaultIngest(ctx context.Context, root *cobra.Command, cargs mcp.CreateNo
 	}
 	stop := mcp.InstallSignalForward(cl)
 	defer stop()
-	defer cl.Close(ctx)
+	defer func() { _ = cl.Close(ctx) }()
 
 	env, err := cl.Call(ctx, "create_note", &cargs)
 	if err != nil {
@@ -201,9 +201,9 @@ func newVaultIngestCmd() *cobra.Command {
 				if len(env.Error.Details) > 0 {
 					var pretty bytes.Buffer
 					if err := json.Indent(&pretty, env.Error.Details, "  ", "  "); err == nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "%s details:\n  %s\n", env.Error.Code, pretty.String())
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s details:\n  %s\n", env.Error.Code, pretty.String())
 					} else {
-						fmt.Fprintf(cmd.ErrOrStderr(), "%s details: %s\n", env.Error.Code, string(env.Error.Details))
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s details: %s\n", env.Error.Code, string(env.Error.Details))
 					}
 				}
 				return &cliErrorWithExit{

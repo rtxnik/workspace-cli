@@ -404,9 +404,9 @@ func renderChecks(w io.Writer, checks []*doctorCheck, jsonMode bool) error {
 		default:
 			prefix = "?"
 		}
-		fmt.Fprintf(w, "%s %-26s %s\n", prefix, c.Name, c.Detail)
+		_, _ = fmt.Fprintf(w, "%s %-26s %s\n", prefix, c.Name, c.Detail)
 		if c.Remediation != "" {
-			fmt.Fprintf(w, "  → %s\n", c.Remediation)
+			_, _ = fmt.Fprintf(w, "  → %s\n", c.Remediation)
 		}
 	}
 	return nil

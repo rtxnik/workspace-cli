@@ -163,10 +163,10 @@ func newVaultBackupVerifyCmd() *cobra.Command {
 			outcome := strings.ToLower(strings.TrimSpace(entry.Outcome))
 			switch outcome {
 			case "green", "ok", "success":
-				fmt.Fprintf(cmd.OutOrStdout(), "backup-verify: %s @ %s — %s\n", outcome, entry.Timestamp, entry.Details)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "backup-verify: %s @ %s — %s\n", outcome, entry.Timestamp, entry.Details)
 				return nil
 			default:
-				fmt.Fprintf(cmd.ErrOrStderr(), "backup-verify ROT detected: outcome=%q ts=%q details=%q (source=%s)\n",
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "backup-verify ROT detected: outcome=%q ts=%q details=%q (source=%s)\n",
 					entry.Outcome, entry.Timestamp, entry.Details, latest)
 				return &cliErrorWithExit{
 					code: 1,

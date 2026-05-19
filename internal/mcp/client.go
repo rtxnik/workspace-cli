@@ -209,7 +209,7 @@ func (cl *Client) Close(ctx context.Context) error {
 		return nil
 	}
 	if cl.tokenPipe != nil {
-		defer cl.tokenPipe.Close()
+		defer func() { _ = cl.tokenPipe.Close() }()
 	}
 
 	// Signal the process group first so descendants get the term before the

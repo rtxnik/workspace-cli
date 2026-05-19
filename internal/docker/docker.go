@@ -43,7 +43,7 @@ func ProxyStatus(cfg config.Config) (Status, error) {
 	if err != nil {
 		return Status{}, fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
 	defer cancel()
@@ -84,7 +84,7 @@ func ProxyUp(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutWrite)
 	defer cancel()
@@ -164,7 +164,7 @@ func ProxyDown(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutStop)
 	defer cancel()
@@ -197,7 +197,7 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 	if err != nil {
 		return results
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
 	defer cancel()
@@ -229,7 +229,7 @@ func ProxyLogs(cfg config.Config, n int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
 	defer cancel()
@@ -242,7 +242,7 @@ func ProxyLogs(cfg config.Config, n int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get logs: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	out, err := io.ReadAll(reader)
 	if err != nil {
@@ -297,7 +297,7 @@ func proxyRecreate(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutWrite)
 	defer cancel()
@@ -338,7 +338,7 @@ func ProxyFixRoutes(cfg config.Config) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
 	defer cancel()
@@ -370,7 +370,7 @@ func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
 	defer cancel()
@@ -419,7 +419,7 @@ func WaitForHealth(cfg config.Config, timeout time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -507,7 +507,7 @@ func BindMountIsWholeDir(cfg config.Config) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
 	defer cancel()
@@ -537,7 +537,7 @@ func VerifyProxyReadyForReload(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
 	defer cancel()

@@ -34,7 +34,7 @@ func runVaultValidate(ctx context.Context, root *cobra.Command, vargs mcp.Valida
 	}
 	stop := mcp.InstallSignalForward(cl)
 	defer stop()
-	defer cl.Close(ctx)
+	defer func() { _ = cl.Close(ctx) }()
 
 	env, err := cl.Call(ctx, "validate_note", &vargs)
 	if err != nil {

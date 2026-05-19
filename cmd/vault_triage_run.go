@@ -39,7 +39,7 @@ func runVaultTriageRun(ctx context.Context, root *cobra.Command, targs mcp.Triag
 	}
 	stop := mcp.InstallSignalForward(cl)
 	defer stop()
-	defer cl.Close(ctx)
+	defer func() { _ = cl.Close(ctx) }()
 
 	env, err := cl.Call(ctx, "triage_run", &targs)
 	if err != nil {

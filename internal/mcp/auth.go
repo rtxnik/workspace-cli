@@ -54,7 +54,7 @@ func NewTokenPipe(token string) (*os.File, error) {
 		return nil, fmt.Errorf("os.Pipe for VAULT_AI_TOKEN fd-3 transport: %w", err)
 	}
 	go func() {
-		defer tokenW.Close()
+		defer func() { _ = tokenW.Close() }()
 		_, _ = tokenW.Write([]byte(token))
 	}()
 	return tokenR, nil

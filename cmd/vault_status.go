@@ -85,7 +85,7 @@ func runVaultStatus(ctx context.Context, root *cobra.Command) (*statusReport, er
 	}
 	stop := mcp.InstallSignalForward(cl)
 	defer stop()
-	defer cl.Close(ctx)
+	defer func() { _ = cl.Close(ctx) }()
 
 	repoRoot := resolveVaultAIRepoRoot()
 
@@ -498,11 +498,11 @@ func renderStatusReport(out io.Writer, rep *statusReport, jsonMode bool) error {
 	b.WriteString(output.SectionStyle.Render("Vault Status"))
 	b.WriteString("\n\n")
 	for _, s := range rep.Signals {
-		b.WriteString(fmt.Sprintf("  %s %s — %s\n", bandIcon(s.Band), output.StyleDim.Render(s.Label), s.Detail))
+		fmt.Fprintf(&b, "  %s %s — %s\n", bandIcon(s.Band), output.StyleDim.Render(s.Label), s.Detail)
 	}
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("Overall: %s (exit %d)\n",
-		bandLabel(rep.OverallBand), rep.ExitCode))
+	fmt.Fprintf(&b, "Overall: %s (exit %d)\n",
+		bandLabel(rep.OverallBand), rep.ExitCode)
 	_, err := fmt.Fprint(out, b.String())
 	return err
 }

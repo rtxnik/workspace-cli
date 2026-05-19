@@ -47,7 +47,7 @@ func runVaultHealthScoreCompute(ctx context.Context, root *cobra.Command) (int, 
 	}
 	stop := mcp.InstallSignalForward(cl)
 	defer stop()
-	defer cl.Close(ctx)
+	defer func() { _ = cl.Close(ctx) }()
 
 	return mcp.ComputeVaultHealthScore(ctx, cl)
 }
@@ -73,7 +73,7 @@ func newVaultVaultHealthScoreCmd() *cobra.Command {
 			}
 
 			// Machine-parseable: just the integer on stdout, no prefix.
-			fmt.Fprintln(cmd.OutOrStdout(), score)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), score)
 
 			// Map to band-driven exit code; empty msg suppresses Cobra's
 			// "Error:" line so cron consumers see only the score on stdout

@@ -36,7 +36,7 @@ func runVaultSearch(ctx context.Context, root *cobra.Command, sargs mcp.SearchNo
 	}
 	stop := mcp.InstallSignalForward(cl)
 	defer stop()
-	defer cl.Close(ctx)
+	defer func() { _ = cl.Close(ctx) }()
 
 	env, err := cl.Call(ctx, "search_notes", &sargs)
 	if err != nil {

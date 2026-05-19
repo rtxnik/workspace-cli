@@ -48,8 +48,8 @@ func MigrateLegacy(cfg config.Config) (bool, error) {
 	// real conflict, never silently followed.
 	if _, err := os.Lstat(primaryPath); err == nil {
 		return false, fmt.Errorf(
-			"cannot migrate: %s is a regular file but %s already exists. "+
-				"Manual remediation: inspect both, decide canonical, remove the other, then re-run `ws proxy profile use primary`.",
+			"cannot migrate: %s is a regular file but %s already exists; "+
+				"manual remediation: inspect both, decide canonical, remove the other, then re-run `ws proxy profile use primary`",
 			cfg.XrayConfig, primaryPath,
 		)
 	} else if !os.IsNotExist(err) {

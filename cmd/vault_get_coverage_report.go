@@ -40,7 +40,7 @@ func runVaultGetCoverageReport(ctx context.Context, root *cobra.Command) (*mcp.E
 	}
 	stop := mcp.InstallSignalForward(cl)
 	defer stop()
-	defer cl.Close(ctx)
+	defer func() { _ = cl.Close(ctx) }()
 
 	env, err := cl.Call(ctx, "get_coverage_report", &mcp.GetCoverageReportArgs{})
 	if err != nil {
