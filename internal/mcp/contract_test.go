@@ -122,8 +122,20 @@ func readWorkflowKitSettings(root string) (string, error) {
 // Reads the 3 surfaces, collects non-empty versions, asserts all collected
 // versions are byte-identical strings. Catches consumer-side drift even
 // when the bash walker is bypassed.
+//
+// Soft-skip semantics: in solo-repo CI environments where the vault-ai
+// sibling is not checked out, this test t.Skip-s rather than fails. The
+// XREPO-01 walker still enforces parity at three other invocation points
+// (vault-ai pre-commit + vault-ai CI walker check-xrepo-contract.sh +
+// workspace-cli pre-commit chained-shim) and this test re-asserts the
+// invariant locally where ~/projects/vault-ai exists.
 func TestContractVersionParity(t *testing.T) {
 	root := workspaceRootForTest(t)
+
+	vaultAIToolsPath := filepath.Join(root, "vault-ai", "_tooling", "mcp", "contract", "tools.json")
+	if _, err := os.Stat(vaultAIToolsPath); errors.Is(err, fs.ErrNotExist) {
+		t.Skipf("vault-ai sibling repo not present at %s — XREPO-01 parity enforced upstream (vault-ai CI walker + workspace-cli pre-commit). Set WORKSPACE_ROOT to a directory containing vault-ai/ to run this gate.", root)
+	}
 
 	vaultAI, err := readVaultAITools(root)
 	if err != nil {
