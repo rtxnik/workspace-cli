@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -29,6 +31,33 @@ func (s *stubHealthCaller) Call(_ context.Context, tool string, _ any) (*Envelop
 		return env, nil
 	}
 	return &Envelope{OK: true, Data: json.RawMessage(`{}`)}, nil
+}
+
+// stubHealthCallerWithRoot extends stubHealthCaller with the optional
+// repoRootProvider seam introduced in Phase 21 Plan 21-c so the sentinel-
+// presence path (dr-drill-stale.warn -> -5 orphan_compliance_pct deduction)
+// is exercised in tests without a real vault-ai checkout.
+type stubHealthCallerWithRoot struct {
+	stubHealthCaller
+	root string
+}
+
+func (s *stubHealthCallerWithRoot) RepoRoot() string { return s.root }
+
+// seedDrillStaleSentinel creates `<root>/_tooling/state/dr-drill-stale.warn`
+// inside a fresh t.TempDir() and returns the directory path. Used by the
+// HARD-14 sub-signal 1/3 test trio.
+func seedDrillStaleSentinel(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "_tooling", "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "dr-drill-stale.warn"), []byte("synthetic\n"), 0o644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	return root
 }
 
 // makeCoverageEnvelope builds a get_coverage_report envelope using the
@@ -206,3 +235,87 @@ func TestComputeVaultHealthScoreClampUpper(t *testing.T) {
 		t.Errorf("clamp upper expected 100; got %d", score)
 	}
 }
+
+// Phase 21 Plan 21-c HARD-14 sub-signal 1/3 tests --------------------------
+
+// TestComputeVaultHealthScoreWithDrillStaleSentinel — sentinel PRESENT in
+// the mocked vault root; ComputeVaultHealthScore MUST deduct 5 percentage
+// points from orphan_compliance_pct per ADR-obs-05 v2.2 Amendment Delta 2.
+// Fixture: orphan_compliance_pct starts at 100 (0 orphans -> orphan_score 1.0
+// -> orphan_pct 100); sentinel deducts to 95 (orphan_pct 95 -> orphan_score 0.95).
+//
+//	without sentinel: 40*1.0 + 30*0.0 + 20*1.00 + 10*0.0 = 60
+//	with    sentinel: 40*1.0 + 30*0.0 + 20*0.95 + 10*0.0 = 59
+func TestComputeVaultHealthScoreWithDrillStaleSentinel(t *testing.T) {
+	root := seedDrillStaleSentinel(t)
+	stub := &stubHealthCallerWithRoot{
+		stubHealthCaller: stubHealthCaller{
+			responses: map[string]*Envelope{
+				"get_coverage_report": makeCoverageEnvelope(100, 0, 0),
+				"get_orphans":         makeOrphansEnvelope(0),
+			},
+		},
+		root: root,
+	}
+	score, err := ComputeVaultHealthScore(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("ComputeVaultHealthScore: %v", err)
+	}
+	if score != 59 {
+		t.Errorf("sentinel-present expected 59 (60 - 5pt orphan deduction at weight 0.20); got %d", score)
+	}
+}
+
+// TestComputeVaultHealthScoreWithoutDrillStaleSentinel — sentinel ABSENT.
+// Same fixture as above WITHOUT the sentinel file. Score MUST be the
+// pre-deduction 60 (matches the existing TestComputeVaultHealthScoreWeights).
+func TestComputeVaultHealthScoreWithoutDrillStaleSentinel(t *testing.T) {
+	root := t.TempDir() // sentinel file deliberately NOT created
+	stub := &stubHealthCallerWithRoot{
+		stubHealthCaller: stubHealthCaller{
+			responses: map[string]*Envelope{
+				"get_coverage_report": makeCoverageEnvelope(100, 0, 0),
+				"get_orphans":         makeOrphansEnvelope(0),
+			},
+		},
+		root: root,
+	}
+	score, err := ComputeVaultHealthScore(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("ComputeVaultHealthScore: %v", err)
+	}
+	if score != 60 {
+		t.Errorf("no-sentinel expected 60 (pre-deduction baseline); got %d", score)
+	}
+}
+
+// TestVaultHealthScoreNeverNegativeUnderDrillStaleSentinel — tripwire test.
+// Even when orphan_compliance_pct is already 0 (1000 orphans -> orphan_score 0),
+// the -5 deduction must NOT push the orphan contribution below 0 (math.Max
+// guard) and the composite score must NOT go negative. Per HARD-14 invariant.
+func TestVaultHealthScoreNeverNegativeUnderDrillStaleSentinel(t *testing.T) {
+	root := seedDrillStaleSentinel(t)
+	stub := &stubHealthCallerWithRoot{
+		stubHealthCaller: stubHealthCaller{
+			responses: map[string]*Envelope{
+				// Drive every sub-metric to 0 + 1000 orphans (orphan_score = 0).
+				"get_coverage_report": makeCoverageEnvelope(0, 0, 0),
+				"get_orphans":         makeOrphansEnvelope(1000),
+			},
+		},
+		root: root,
+	}
+	score, err := ComputeVaultHealthScore(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("ComputeVaultHealthScore: %v", err)
+	}
+	if score < 0 {
+		t.Fatalf("score MUST never be negative under sentinel deduction; got %d", score)
+	}
+	if score != 0 {
+		// The composite formula clamps at 0 for the lower bound; we expect
+		// 0 here because every sub-metric pre-deduction is 0.
+		t.Errorf("expected 0 (lower clamp); got %d", score)
+	}
+}
+
