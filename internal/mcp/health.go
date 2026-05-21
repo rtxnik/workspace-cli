@@ -36,6 +36,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 )
 
 // ErrUpstreamHealthSignalFailed is the sentinel returned when any upstream
@@ -50,6 +52,32 @@ var ErrUpstreamHealthSignalFailed = errors.New("upstream MCP health signal faile
 // real subprocess — the mark3labs/mcp-go client is non-trivial to fake.
 type healthCaller interface {
 	Call(ctx context.Context, tool string, args any) (*Envelope, error)
+}
+
+// repoRootProvider is OPTIONALLY implemented by a healthCaller to expose
+// the vault-ai filesystem root for sentinel-presence checks (Phase 21
+// Plan 21-c HARD-14 sub-signal 1/3: dr-drill-stale.warn). A type assertion
+// in ComputeVaultHealthScore extracts the path when available; absent
+// implementation = sentinel never fires (safe default; no false positives).
+//
+// The production *Client implements this via the VaultAIRepoRoot stored
+// at construction (mcp.NewClient); tests inject the path via a stub method.
+type repoRootProvider interface {
+	RepoRoot() string
+}
+
+// sentinelExists returns true when `<repoRoot>/_tooling/state/<name>` is
+// present on disk. A missing file is the green (no-deduction) default.
+// Phase 21 Plan 21-c HARD-14 sub-signal 1/3 (dr-drill-stale.warn); 21d Wave
+// 4 wires the remaining two sentinel reads alongside the ADR-obs-05 v2.2
+// Amendment body (one each for cost reconcile drift and triage drift,
+// tokens deferred to 21d to keep this tranche's grep tripwires clean).
+func sentinelExists(repoRoot, name string) bool {
+	if repoRoot == "" || name == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(repoRoot, "_tooling", "state", name))
+	return err == nil
 }
 
 // coverageReportData mirrors the metric fields ComputeVaultHealthScore
@@ -138,6 +166,26 @@ func ComputeVaultHealthScore(ctx context.Context, cl healthCaller) (int, error) 
 	sufficiencyPct := clamp01Pct(cov.ContentSufficiencyPct) / 100.0
 	linkIntegrityPct := clamp01Pct(cov.LinkIntegrityPct) / 100.0
 	orphanScore := orphanComplianceScore(orphanCount)
+
+	// Phase 21 Plan 21-c HARD-14 sub-signal 1/3 -- dr-drill-stale.warn
+	// sentinel. ADR-obs-05 v2.2 Amendment Delta 2: when DR drill is stale
+	// (backup_age > 8d OR drill_age > 100d, as emitted by vault-ai's
+	// scripts/backup-verify-weekly.sh), deduct 5 percentage points from
+	// orphan_compliance_pct. The deduction floors at 0 (never negative;
+	// tripwire test TestVaultHealthScoreNeverNegativeUnderDrillStaleSentinel).
+	//
+	// Sentinel-presence read is GUARDED by type-assertion on the optional
+	// repoRootProvider interface: a healthCaller that does not expose
+	// RepoRoot() (e.g., legacy callers, tests without the seam) falls
+	// through with the sentinel treated as ABSENT (no deduction).
+	// 21d Wave 4 adds the remaining 2 sentinels alongside the ADR amendment.
+	orphanPct := orphanScore * 100.0
+	if provider, ok := cl.(repoRootProvider); ok {
+		if sentinelExists(provider.RepoRoot(), "dr-drill-stale.warn") {
+			orphanPct = math.Max(0, orphanPct-5.0)
+		}
+	}
+	orphanScore = orphanPct / 100.0
 
 	composite := 40.0*coveragePct +
 		30.0*sufficiencyPct +

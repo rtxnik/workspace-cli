@@ -76,6 +76,19 @@ type Client struct {
 	c         *mcpclient.Client
 	cmd       *exec.Cmd
 	tokenPipe *os.File // path-A: closed on Close; never nil after successful NewClient
+	repoRoot  string  // Phase 21 21c HARD-14: surfaced via RepoRoot() for sentinel reads in health.go
+}
+
+// RepoRoot returns the vault-ai filesystem root resolved at NewClient time
+// (Options.VaultAIRepoRoot OR $VAULT_AI_REPO_ROOT OR ~/projects/vault-ai
+// per CONTEXT D-08). Used by internal/mcp/health.go for sentinel-presence
+// checks under `<root>/_tooling/state/*.warn` per Phase 21 Plan 21-c
+// HARD-14 sub-signal wiring (1/3 in 21c; 21d Wave 4 adds 2/3 + 3/3).
+func (cl *Client) RepoRoot() string {
+	if cl == nil {
+		return ""
+	}
+	return cl.repoRoot
 }
 
 // NewClient spawns the vault-ai stdio MCP subprocess and performs the MCP
@@ -189,7 +202,7 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 		return nil, fmt.Errorf("MCP Initialize handshake: %w", err)
 	}
 
-	return &Client{c: c, cmd: capturedCmd, tokenPipe: tokenR}, nil
+	return &Client{c: c, cmd: capturedCmd, tokenPipe: tokenR, repoRoot: repoRoot}, nil
 }
 
 // Close tears down the subprocess + token pipe per RESEARCH §Pattern 1
