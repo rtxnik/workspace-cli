@@ -68,10 +68,9 @@ type repoRootProvider interface {
 
 // sentinelExists returns true when `<repoRoot>/_tooling/state/<name>` is
 // present on disk. A missing file is the green (no-deduction) default.
-// Phase 21 Plan 21-c HARD-14 sub-signal 1/3 (dr-drill-stale.warn); 21d Wave
-// 4 wires the remaining two sentinel reads alongside the ADR-obs-05 v2.2
-// Amendment body (one each for cost reconcile drift and triage drift,
-// tokens deferred to 21d to keep this tranche's grep tripwires clean).
+// Phase 21 Plan 21-c HARD-14 sub-signal 1/3 (dr-drill-stale.warn);
+// Phase 21 Plan 21-d HARD-14 sub-signals 2/3 (cost-reconcile-drift.warn)
+// and 3/3 (triage-drift.warn) wired via the same helper.
 func sentinelExists(repoRoot, name string) bool {
 	if repoRoot == "" || name == "" {
 		return false
@@ -79,6 +78,30 @@ func sentinelExists(repoRoot, name string) bool {
 	_, err := os.Stat(filepath.Join(repoRoot, "_tooling", "state", name))
 	return err == nil
 }
+
+// Phase 21 Plan 21-d HARD-14 fold-as-anti-signal NAMED constants per
+// ADR-obs-05 §v2.2 Amendment Delta 2 (penalty table). Each sentinel
+// presence deducts a fixed number of percentage points from a specific
+// pillar BEFORE the 40/30/20/10 weighted composition runs. The
+// max(0, raw - deduction) floor guarantees no pillar goes negative
+// (tripwire TestVaultHealthScoreNeverNegativeUnderAllSentinels).
+//
+// Bound via `const` (compile-time literal; pyright-analogue Go-vet pass)
+// so the deduction magnitudes are grep-addressable AND testable. The
+// associated sentinel file lives at `_tooling/state/<filename>` per the
+// Phase 16/20/21c sentinel-file convention.
+const (
+	// dr-drill-stale.warn -> -5 orphan_compliance_pct (Phase 21c HARD-08
+	// emitter; Phase 21c Task 4 reader wired 1/3 of HARD-14).
+	drillStaleDeduction = 5
+	// triage-drift.warn -> -5 content_sufficiency_pct (Phase 16 TRIAGE-07
+	// emitter, pre-existing; codified into ADR-obs-05 §v2.2 Amendment
+	// Delta 2 + wired here in Phase 21d Wave 4 as 3/3 of HARD-14).
+	triageDriftDeduction = 5
+	// cost-reconcile-drift.warn -> -3 coverage_pct (Phase 21d HARD-13
+	// reconciler emitter; this is sub-signal 2/3 of HARD-14).
+	costReconcileDeduction = 3
+)
 
 // coverageReportData mirrors the metric fields ComputeVaultHealthScore
 // reads from the get_coverage_report envelope. Missing fields decode to
@@ -167,25 +190,36 @@ func ComputeVaultHealthScore(ctx context.Context, cl healthCaller) (int, error) 
 	linkIntegrityPct := clamp01Pct(cov.LinkIntegrityPct) / 100.0
 	orphanScore := orphanComplianceScore(orphanCount)
 
-	// Phase 21 Plan 21-c HARD-14 sub-signal 1/3 -- dr-drill-stale.warn
-	// sentinel. ADR-obs-05 v2.2 Amendment Delta 2: when DR drill is stale
-	// (backup_age > 8d OR drill_age > 100d, as emitted by vault-ai's
-	// scripts/backup-verify-weekly.sh), deduct 5 percentage points from
-	// orphan_compliance_pct. The deduction floors at 0 (never negative;
-	// tripwire test TestVaultHealthScoreNeverNegativeUnderDrillStaleSentinel).
+	// Phase 21 Plan 21-d HARD-14 -- 3 fold-as-anti-signal sentinels per
+	// ADR-obs-05 §v2.2 Amendment Delta 2 (penalty table).
+	// dr-drill-stale.warn      -> -5 orphan_compliance_pct      (Phase 21c HARD-08; sub-signal 1/3)
+	// cost-reconcile-drift.warn -> -3 coverage_pct              (Phase 21d HARD-13; sub-signal 2/3)
+	// triage-drift.warn        -> -5 content_sufficiency_pct    (Phase 16 TRIAGE-07; sub-signal 3/3)
 	//
-	// Sentinel-presence read is GUARDED by type-assertion on the optional
-	// repoRootProvider interface: a healthCaller that does not expose
-	// RepoRoot() (e.g., legacy callers, tests without the seam) falls
-	// through with the sentinel treated as ABSENT (no deduction).
-	// 21d Wave 4 adds the remaining 2 sentinels alongside the ADR amendment.
+	// Each deduction floors at 0 (math.Max guarantees no pillar goes
+	// negative; tripwire test TestVaultHealthScoreNeverNegativeUnderAllSentinels).
+	// Sentinel-presence reads are GUARDED by type-assertion on the
+	// optional repoRootProvider interface: a healthCaller that does
+	// not expose RepoRoot() falls through with the sentinel treated
+	// as ABSENT (no deduction; safe default).
 	orphanPct := orphanScore * 100.0
+	coveragePctScaled := coveragePct * 100.0
+	sufficiencyPctScaled := sufficiencyPct * 100.0
 	if provider, ok := cl.(repoRootProvider); ok {
-		if sentinelExists(provider.RepoRoot(), "dr-drill-stale.warn") {
-			orphanPct = math.Max(0, orphanPct-5.0)
+		root := provider.RepoRoot()
+		if sentinelExists(root, "dr-drill-stale.warn") {
+			orphanPct = math.Max(0, orphanPct-float64(drillStaleDeduction))
+		}
+		if sentinelExists(root, "cost-reconcile-drift.warn") {
+			coveragePctScaled = math.Max(0, coveragePctScaled-float64(costReconcileDeduction))
+		}
+		if sentinelExists(root, "triage-drift.warn") {
+			sufficiencyPctScaled = math.Max(0, sufficiencyPctScaled-float64(triageDriftDeduction))
 		}
 	}
 	orphanScore = orphanPct / 100.0
+	coveragePct = coveragePctScaled / 100.0
+	sufficiencyPct = sufficiencyPctScaled / 100.0
 
 	composite := 40.0*coveragePct +
 		30.0*sufficiencyPct +
