@@ -319,3 +319,122 @@ func TestVaultHealthScoreNeverNegativeUnderDrillStaleSentinel(t *testing.T) {
 	}
 }
 
+// Phase 21 Plan 21-d HARD-14 sub-signals 2/3 + 3/3 tests --------------------
+
+// seedSentinels creates an empty vault root and touches each named
+// sentinel under <root>/_tooling/state/. Helper for the 8-permutation
+// TestComputeVaultHealthScoreWithSentinels matrix.
+func seedSentinels(t *testing.T, names ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "_tooling", "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(stateDir, name), []byte("synthetic\n"), 0o644); err != nil {
+			t.Fatalf("write sentinel %s: %v", name, err)
+		}
+	}
+	return root
+}
+
+// TestComputeVaultHealthScoreWithSentinels — 2^3 = 8 permutation matrix
+// covering every combination of the 3 fold-as-anti-signal sentinels
+// per ADR-obs-05 §v2.2 Amendment Delta 2. Each permutation seeds the
+// vault root with the listed sentinels and asserts the composite
+// score matches the formula:
+//
+//	coverage_pct      = 100 - (3 if cost-reconcile-drift else 0)
+//	sufficiency_pct   = 100 - (5 if triage-drift           else 0)
+//	orphan_compliance = 100 - (5 if dr-drill-stale         else 0)
+//	link_integrity    = 100  (unaffected)
+//	composite         = 40*cov/100 + 30*suf/100 + 20*orph/100 + 10*1.0
+//
+// Fixture: all sub-metrics 100, 0 orphans. Worst case (all 3
+// sentinels present): 40*0.97 + 30*0.95 + 20*0.95 + 10*1.0 = 96.3 -> 96.
+func TestComputeVaultHealthScoreWithSentinels(t *testing.T) {
+	type tc struct {
+		name      string
+		sentinels []string
+		expected  int
+	}
+	// 2^3 = 8 cases enumerated explicitly so each row's expected score
+	// is grep-addressable and self-documenting. Note Go's `math.Round`
+	// rounds half-AWAY-from-zero (not banker's rounding), so 98.5 -> 99
+	// (e.g., triage-only and cost-only land at 99 not 98).
+	// Per-pillar deduction maths:
+	//   drill-only:    40*1.00 + 30*1.00 + 20*0.95 + 10*1.00 = 99.0  -> 99
+	//   cost-only:     40*0.97 + 30*1.00 + 20*1.00 + 10*1.00 = 98.8  -> 99
+	//   triage-only:   40*1.00 + 30*0.95 + 20*1.00 + 10*1.00 = 98.5  -> 99
+	//   drill+cost:    40*0.97 + 30*1.00 + 20*0.95 + 10*1.00 = 97.8  -> 98
+	//   drill+triage:  40*1.00 + 30*0.95 + 20*0.95 + 10*1.00 = 97.5  -> 98
+	//   cost+triage:   40*0.97 + 30*0.95 + 20*1.00 + 10*1.00 = 97.3  -> 97
+	//   all-three:     40*0.97 + 30*0.95 + 20*0.95 + 10*1.00 = 96.3  -> 96
+	cases := []tc{
+		{"none", []string{}, 100},
+		{"drill-only", []string{"dr-drill-stale.warn"}, 99},
+		{"cost-only", []string{"cost-reconcile-drift.warn"}, 99},
+		{"triage-only", []string{"triage-drift.warn"}, 99},
+		{"drill+cost", []string{"dr-drill-stale.warn", "cost-reconcile-drift.warn"}, 98},
+		{"drill+triage", []string{"dr-drill-stale.warn", "triage-drift.warn"}, 98},
+		{"cost+triage", []string{"cost-reconcile-drift.warn", "triage-drift.warn"}, 97},
+		{"all-three", []string{"dr-drill-stale.warn", "cost-reconcile-drift.warn", "triage-drift.warn"}, 96},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			root := seedSentinels(t, c.sentinels...)
+			stub := &stubHealthCallerWithRoot{
+				stubHealthCaller: stubHealthCaller{
+					responses: map[string]*Envelope{
+						"get_coverage_report": makeCoverageEnvelope(100, 100, 100),
+						"get_orphans":         makeOrphansEnvelope(0),
+					},
+				},
+				root: root,
+			}
+			score, err := ComputeVaultHealthScore(context.Background(), stub)
+			if err != nil {
+				t.Fatalf("ComputeVaultHealthScore: %v", err)
+			}
+			if score != c.expected {
+				t.Errorf("permutation %q expected %d; got %d", c.name, c.expected, score)
+			}
+		})
+	}
+}
+
+// TestVaultHealthScoreNeverNegativeUnderAllSentinels — HARD-14 tripwire.
+// Drives every sub-metric to 0 + 1000 orphans + ALL 3 sentinels present.
+// Each pillar's max(0, raw - deduction) floor guarantees no pillar goes
+// negative; the composite is then clamped at 0 by the outer score-clamp.
+// If this tripwire ever fires, the fold-as-anti-signal floor logic has
+// regressed.
+func TestVaultHealthScoreNeverNegativeUnderAllSentinels(t *testing.T) {
+	root := seedSentinels(t,
+		"dr-drill-stale.warn",
+		"cost-reconcile-drift.warn",
+		"triage-drift.warn",
+	)
+	stub := &stubHealthCallerWithRoot{
+		stubHealthCaller: stubHealthCaller{
+			responses: map[string]*Envelope{
+				"get_coverage_report": makeCoverageEnvelope(0, 0, 0),
+				"get_orphans":         makeOrphansEnvelope(1000),
+			},
+		},
+		root: root,
+	}
+	score, err := ComputeVaultHealthScore(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("ComputeVaultHealthScore: %v", err)
+	}
+	if score < 0 {
+		t.Fatalf("score MUST never be negative under all 3 sentinels; got %d", score)
+	}
+	if score != 0 {
+		t.Errorf("expected 0 (lower clamp; every pre-deduction sub-metric is 0); got %d", score)
+	}
+}
+
