@@ -1,6 +1,6 @@
 ---
 title: ws vault sub-command reference
-mcp_contract_version: "1.4.0"
+mcp_contract_version: "1.5.0"
 status: accepted
 design_only: false
 ships: v2.2
@@ -9,7 +9,7 @@ source_adr: vault-ai/docs/adr/adr-int-03-ws-vault-cli.md
 
 # ws vault — Vault-AI CLI Reference
 
-CLI facade over the vault-ai MCP server per [ADR-int-03](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md). Provides shell-native access to the 26-tool MCP contract via 10 sub-commands with GNU-style flag parsing, Unix exit codes, and fd-3 token authentication. Invokes the stdio MCP transport per [ADR-ai-01](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md).
+CLI facade over the vault-ai MCP server per [ADR-int-03](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md). Provides shell-native access to the 27-tool MCP contract via 11 sub-commands with GNU-style flag parsing, Unix exit codes, and fd-3 token authentication. Invokes the stdio MCP transport per [ADR-ai-01](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md).
 
 ## Status
 
@@ -21,7 +21,7 @@ The command list below realigns to the v2.2 implemented surface per `.planning/R
 
 ## Contract version
 
-Every vault-ai surface with a contract dependency on the MCP 26-tool lockfile stamps `contract_version: "1.4.0"`. Three surfaces participate:
+Every vault-ai surface with a contract dependency on the MCP 27-tool lockfile stamps `contract_version: "1.5.0"`. Three surfaces participate:
 
 | Surface | File | Field |
 |---------|------|-------|
@@ -38,6 +38,12 @@ vault-ai's [`_tooling/lint/check-xrepo-contract.sh`](../../vault-ai/_tooling/lin
 **Bump 1.2.0 → 1.3.0** (vault-ai Phase 16, 2026-05-09): additive minor. Two new tools added (`triage_run` 24th, `triage_override` 25th) wiring the Phase 16 triage agent runtime per ADR-flow-02 §Tool Surface; tool count moves 23 → 25. One error code (`AGENT_TOOL_NOT_BOUND`, raised by the agent's L2 11-tool dispatcher) was added in Plan 16-01 and stayed within v1.2.0 (additive within the same contract_version since only an error code landed); the 1.3.0 bump tracks the new tool surface. `triage_process.possible_errors` augmented with `DEDUP_BLOCKED` (the agent's pass-2 dedup-check route can fire it via update_note's transitive create_note path); the existing `triage_process` wire shape (`inbox_id, type, tags, target_zone, related`) is preserved BYTE-FOR-BYTE — Plan 16-03 Task 3 replaced its NOT_IMPLEMENTED stub with the real apply-decision orchestration (move_note + update_note(frontmatter+related)) per CONTEXT D-02. No removals; backward compatible per semver MINOR semantics. The 7th audit stream (`triage`) was registered in `verify_audit_chain.py` STREAMS in Plan 16-02. See ADR-flow-02 §v2.2 amendment (forward-pointer once Plan 16-06 lands) and vault-ai Phase 16 plan 16-03 SUMMARY for the full record.
 
 **Bump 1.3.0 -> 1.4.0** (vault-ai Phase 20, 2026-05-20): additive minor. One new tool added (`get_daily_summary` 26th, MCP-only read-only operator daily-review entry point per ADR-flow-04 §v2.2 Amendment §Daily-ritual tool-loop); tool count moves 25 -> 26. One additive optional field (`read_only: bool`) added uniformly to every tool entry — non-breaking shape change per semver MINOR semantics. No new error codes. No new audit stream. No removals; backward compatible. The `ws vault` subcommand surface is UNCHANGED — `get_daily_summary` is MCP-only (CORPUS-06 + CORPUS-CLI-01 lock ADR-int-03 10-command cap).
+
+**Bump 1.4.0 -> 1.5.0** (vault-ai Phase 23, 2026-05-24): additive minor. One new tool added (`predict_bulk_load` 27th, read-only audit chain growth projection for bulk note creation per Phase 23 FDN-11); tool count moves 26 -> 27. No new error codes. No new audit stream. No removals; backward compatible. The `ws vault` subcommand surface gains `predict-bulk-load` (11th command; ADR-int-03 10-command cap acknowledged — this is a diagnostic subcommand in the `doctor` family, not a primary workflow command).
+
+## Added in v1.5.0
+
+`predict_bulk_load` (MCP tool + CLI subcommand `ws vault predict-bulk-load N`) — returns a 4-field JSON envelope (current rows per audit stream, projected new rows for N notes, estimated dedup processing seconds, projected Qdrant segment count) for operator pre-flight estimation before bulk note creation. Read-only, no mutations. Companion bulk creation helper at `vault-ai/_tooling/scripts/bulk_create_via_mcp.py`.
 
 ## Added in v1.4.0
 
@@ -85,7 +91,7 @@ Sub-command-specific flags are documented in each sub-command section below.
 
 ## Sub-commands
 
-Ten sub-commands lock the CLI surface per ADR-int-03 §10 sub-commands verbatim. Each section below documents flags, purpose, output, sample usage, and the MCP tool it wraps. The v2.2 surface is implemented per `.planning/REQUIREMENTS.md` CLI-01..10 (Phase 18, 2026-05-18).
+Eleven sub-commands form the CLI surface (10 per ADR-int-03 + 1 diagnostic predict-bulk-load added in v1.5.0). Each section below documents flags, purpose, output, sample usage, and the MCP tool it wraps. The v2.2 surface is implemented per `.planning/REQUIREMENTS.md` CLI-01..10 (Phase 18, 2026-05-18).
 
 ### ws vault status
 
@@ -157,11 +163,25 @@ ws vault doctor               # read-only diagnosis
 ws vault doctor --kill-orphans --yes  # opt-in cleanup of orphan vault-mcp-server processes
 ```
 
+### ws vault predict-bulk-load
+
+**Purpose.** Project audit chain growth for a planned bulk note creation batch. Queries the `predict_bulk_load` MCP tool (27th tool; Phase 23) and displays current row counts, projected new rows, estimated dedup processing time, and projected Qdrant segment count. **Read-only** — no state mutations. (Phase 23 FDN-11; Plan 23-07.)
+
+**Args.** `<count>` (positional, required) — number of notes to project.
+
+**Flags.** `--json` (structured envelope with all prediction fields).
+
+**Sample.**
+```
+ws vault predict-bulk-load 40           # table output
+ws vault predict-bulk-load 40 --json    # JSON output
+```
+
 ## See also
 
 - [ADR-int-03 — ws vault CLI Contract](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md) — ADR-level lockfile for this spec
 - [ADR-ai-01 — MCP Dual-Mode](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md) — the MCP contract this CLI wraps
 - [ADR-ai-06 — MCP Auth](../../vault-ai/docs/adr/adr-ai-06-mcp-auth.md) — VAULT_AI_TOKEN provisioning
 - [ADR-sec-02 — Secrets Stack](../../vault-ai/docs/adr/adr-sec-02-secrets-stack.md) — chezmoi+age multi-recipient auth provisioning
-- [`vault-ai/_tooling/mcp/contract/tools.json`](../../vault-ai/_tooling/mcp/contract/tools.json) — 26-tool MCP contract (v1.4.0; +`get_daily_summary` per Phase 20)
+- [`vault-ai/_tooling/mcp/contract/tools.json`](../../vault-ai/_tooling/mcp/contract/tools.json) — 27-tool MCP contract (v1.5.0; +`predict_bulk_load` per Phase 23)
 - [`workflow-kit/.claude/settings.local.json`](../../workflow-kit/.claude/settings.local.json) — MCP registration surface

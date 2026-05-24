@@ -49,6 +49,8 @@ func init() {
 	vaultCmd.AddCommand(newVaultIngestCmd())
 	// Plan 18-05 (CLI-10 doctor — 5 read-only diagnostic checks + opt-in mutation flags):
 	vaultCmd.AddCommand(newVaultDoctorCmd())
+	// Plan 23-07 (predict-bulk-load — read-only audit chain growth projection):
+	vaultCmd.AddCommand(newVaultDoctorPredictCmd())
 
 	rootCmd.AddCommand(vaultCmd)
 }
