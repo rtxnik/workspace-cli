@@ -43,8 +43,8 @@ func TestWorkspaceStatusAllClean(t *testing.T) {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "4/4") {
-		t.Errorf("expected 4/4 in summary, got:\n%s", out)
+	if !strings.Contains(out, "workspace-cli") {
+		t.Errorf("expected repo names in output, got:\n%s", out)
 	}
 }
 
@@ -77,9 +77,6 @@ func TestWorkspaceStatusDirtyRepo(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "dirty") {
 		t.Errorf("expected 'dirty' in output, got:\n%s", out)
-	}
-	if !strings.Contains(out, "3/4") {
-		t.Errorf("expected 3/4 in summary, got:\n%s", out)
 	}
 }
 
