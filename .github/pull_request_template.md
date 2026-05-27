@@ -4,9 +4,12 @@
 
 -
 
+<!-- Closes #... · Relates to #... -->
+
 ## Change Log
 
 <!-- Commits on this branch. One bullet per commit. -->
+<!-- For 10+ commits, wrap in <details><summary>N commits</summary>...</details> -->
 
 -
 
