@@ -1,11 +1,8 @@
 ## Summary
 <!-- What changed and why. 2-5 bullets. -->
+<!-- Type is set as a GitHub label (type:feature, type:bugfix, etc.) — not in body. -->
 
 -
-
-## Type
-
-<!-- Auto-detected from branch prefix: feat/ fix/ docs/ refactor/ chore/ -->
 
 ## Change Log
 
