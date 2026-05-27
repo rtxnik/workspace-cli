@@ -32,7 +32,6 @@ func newWorkspaceStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().Bool("json", false, "Output as JSON")
 	return cmd
 }
 
