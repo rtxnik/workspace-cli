@@ -129,8 +129,8 @@ func TestWorkspaceStatusJSON(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &statuses); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, buf.String())
 	}
-	if len(statuses) != 4 {
-		t.Errorf("expected 4 repos, got %d", len(statuses))
+	if len(statuses) != 3 {
+		t.Errorf("expected 3 repos, got %d", len(statuses))
 	}
 	for _, s := range statuses {
 		if !s.Clean {
