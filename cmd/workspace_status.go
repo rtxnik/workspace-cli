@@ -99,7 +99,9 @@ func renderWorkspaceStatus(out io.Writer, statuses []workspace.RepoStatus, jsonM
 	}
 
 	t := output.NewTable([]string{"REPO", "BRANCH", "STATUS", "SYNC"}).Rows(rows...)
-	fmt.Fprintln(out, t)
+	if _, err := fmt.Fprintln(out, t); err != nil {
+		return err
+	}
 	fmt.Fprintf(os.Stderr, "\n%s\n",
 		output.StyleDim.Render(fmt.Sprintf("  %d/%d repos healthy", healthy, len(statuses))))
 	return nil
