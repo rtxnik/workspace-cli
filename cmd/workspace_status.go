@@ -21,7 +21,6 @@ func repoList() []string {
 		filepath.Join(base, "workspace-cli"),
 		filepath.Join(base, "vault-ai"),
 		filepath.Join(base, "dotfiles"),
-		filepath.Join(base, "loop-workflow-runbook"),
 	}
 }
 
