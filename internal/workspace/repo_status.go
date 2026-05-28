@@ -50,7 +50,8 @@ func ProbeRepo(path string) RepoStatus {
 		rs.NoRemote = true
 		return rs
 	}
-	fmt.Sscanf(strings.TrimSpace(string(revList)), "%d\t%d", &rs.Ahead, &rs.Behind)
+	// Deterministic git output ("N\tM"); on parse failure Ahead/Behind stay 0.
+	_, _ = fmt.Sscanf(strings.TrimSpace(string(revList)), "%d\t%d", &rs.Ahead, &rs.Behind)
 
 	return rs
 }
