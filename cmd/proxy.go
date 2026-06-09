@@ -392,6 +392,9 @@ var proxyInitCmd = &cobra.Command{
 			if err != nil {
 				output.Die(err.Error())
 			}
+			if parsed.PortHopping {
+				output.Warn(fmt.Sprintf("hysteria2 port-hopping ranges dropped; using base port %d (udphop not supported)", parsed.Port))
+			}
 			if err := hysteria2.WriteNewConfig(cfg.XrayConfig, parsed); err != nil {
 				output.Die(err.Error())
 			}
