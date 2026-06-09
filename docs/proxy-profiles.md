@@ -1,6 +1,6 @@
 # Proxy profiles
 
-Manage multiple xray VLESS configurations as named profiles and switch between them with one command. Each profile lives in `~/.config/xray/profiles/<name>.json`; the active one is selected via a symlink at `~/.config/xray/config.json`.
+Manage multiple xray VLESS and Hysteria2 configurations as named profiles and switch between them with one command. Each profile lives in `~/.config/xray/profiles/<name>.json`; the active one is selected via a symlink at `~/.config/xray/config.json`.
 
 ## TL;DR
 
@@ -30,12 +30,13 @@ The xray container (`dev-proxy`) mounts the whole `~/.config/xray/` directory re
 
 ```bash
 ws proxy check                              # verify Docker + image + config
-ws proxy init 'vless://<your-first-uri>'    # generates the first profile
+ws proxy init 'vless://<your-first-uri>'    # generates the first profile (VLESS)
+ws proxy init 'hysteria2://<auth>@host:443' # or a Hysteria2 URI
 ws proxy up                                 # start the container
 ws proxy profile current                    # should print: primary
 ```
 
-`ws proxy init` creates `~/.config/xray/profiles/primary.json` and points the symlink at it. From there everything goes through `ws proxy profile`.
+`ws proxy init` accepts a `vless://`, `hysteria2://`, or `hy2://` URI, creates `~/.config/xray/profiles/primary.json`, and points the symlink at it. From there everything goes through `ws proxy profile`.
 
 If you already had the legacy single-file layout (`~/.config/xray/config.json` as a regular file), the first `ws proxy profile` invocation migrates it transparently — your old file becomes `profiles/primary.json` and a symlink replaces the original. Use `--no-migrate` on any subcommand to opt out for one invocation.
 
@@ -43,14 +44,19 @@ If you already had the legacy single-file layout (`~/.config/xray/config.json` a
 
 ```bash
 ws proxy profile add secondary 'vless://uuid@host:443?type=tcp&security=reality&...'
+ws proxy profile add hy2-exit  'hysteria2://<auth>@host:443?obfs=salamander&obfs-password=<pw>&sni=host&alpn=h3'
 ```
 
+The `hy2://` scheme is accepted as an alias for `hysteria2://`.
+
+Hysteria2 profiles carry an `auth` password and optional Salamander obfuscation (`obfs`/`obfs-password`). The proxy engine (xray-core ≥ v26.1.13; the image ships v26.2.6) runs Hysteria2 natively — no rebuild needed.
+
 What happens:
-- VLESS URI is parsed into a full xray config (inbounds + outbound + routing rules copied from the currently-active profile, so kill-switch rules etc. stay consistent).
-- File written to `~/.config/xray/profiles/secondary.json`.
+- URI is parsed into a full xray config (inbounds + outbound + routing rules).
+- File written to `~/.config/xray/profiles/<name>.json`.
 - Active profile is **not** changed — only added.
 
-Profile name must match `^[a-z0-9_-]{1,32}$`. A handful of reserved names (`config`, `default`, etc.) are rejected.
+Profile name must match `^[a-z0-9_-]{1,32}$`. The names `config` and `tmp` are reserved and rejected.
 
 ## Switching profiles
 
@@ -83,8 +89,12 @@ ws proxy profile list                # table view (active marked with *)
 ws proxy profile list --json         # machine-readable
 ws proxy profile show secondary      # masked (UUID, REALITY private key hidden)
 ws proxy profile show secondary --reveal   # unmasked
+ws proxy profile show hy2-exit       # masked (Auth, ObfsPass hidden)
+ws proxy profile show hy2-exit --reveal    # unmasked
 ws proxy profile current             # just the name of the active one
 ```
+
+For VLESS profiles, `show` prints `UUID` (and `PublicKey`/`ShortID`/`SpiderX` for REALITY). For Hysteria2 profiles, `show` prints `Protocol`, `Auth`, `Obfs`, `ObfsPass`, and `Insecure` instead; secrets are masked to `****` unless `--reveal` is set. The `list` command's `TRANSPORT` column shows `hysteria` for hy2 profiles (and omits the `UUID` column for those rows in `--json` output).
 
 ## Editing routing rules
 
