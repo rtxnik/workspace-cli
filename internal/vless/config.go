@@ -66,7 +66,15 @@ func GenerateConfig(cfg VLESSConfig, tag string) (*XrayConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	return AssembleConfig(outbound), nil
+}
 
+// AssembleConfig wraps a single proxy outbound in the standard transparent-proxy
+// scaffold: a dokodemo-door inbound on :12345, a freedom "direct" outbound, and
+// the proxy-balancer routing block. The proxy outbound's Tag must start with
+// "proxy-" to match the balancer selector. Shared by every protocol's config
+// builder (vless, hysteria2, ...).
+func AssembleConfig(proxy Outbound) *XrayConfig {
 	return &XrayConfig{
 		Log: LogConfig{Level: "warning"},
 		Inbounds: []Inbound{
@@ -85,7 +93,7 @@ func GenerateConfig(cfg VLESSConfig, tag string) (*XrayConfig, error) {
 			},
 		},
 		Outbounds: []Outbound{
-			outbound,
+			proxy,
 			{
 				Tag:      "direct",
 				Protocol: "freedom",
@@ -106,7 +114,13 @@ func GenerateConfig(cfg VLESSConfig, tag string) (*XrayConfig, error) {
 				json.RawMessage(`{"type":"field","network":"tcp,udp","balancerTag":"proxy-balancer"}`),
 			},
 		},
-	}, nil
+	}
+}
+
+// WriteConfig marshals xc (indented) and writes it to path, creating parent
+// dirs. Exported so sibling protocol packages can reuse the writer.
+func WriteConfig(path string, xc *XrayConfig) error {
+	return writeConfig(path, xc)
 }
 
 // WriteNewConfig creates a new xray config file from a VLESS URI.
