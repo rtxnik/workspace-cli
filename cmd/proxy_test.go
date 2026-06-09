@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,4 +79,21 @@ func TestInitDeprecationBannerStderr(t *testing.T) {
 			t.Errorf("banner emitted without --add flag; stdout=%q stderr=%q", stdout, stderr)
 		}
 	})
+}
+
+func TestProxyInitHysteria2(t *testing.T) {
+	dir := t.TempDir()
+	xrayConfig := filepath.Join(dir, "config.json")
+	t.Setenv("XRAY_CONFIG", xrayConfig) // proxyInitCmd.Run calls config.Load(), which honors XRAY_CONFIG
+	out, _, err := execCapture(t, "proxy", "init", "hysteria2://pw@h.example:443?sni=h.example")
+	if err != nil {
+		t.Fatalf("init: %v (%s)", err, out)
+	}
+	data, rerr := os.ReadFile(xrayConfig)
+	if rerr != nil {
+		t.Fatalf("read config: %v", rerr)
+	}
+	if !strings.Contains(string(data), `"protocol": "hysteria"`) {
+		t.Errorf("init did not write a hysteria config:\n%s", data)
+	}
 }
