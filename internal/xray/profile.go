@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/hysteria2"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/vless"
 )
@@ -19,27 +20,29 @@ import (
 type ProfileSummary struct {
 	Name       string `json:"name"`
 	Active     bool   `json:"active"`
+	Protocol   string `json:"protocol,omitempty"` // "" for vless (default), "hysteria2" for hy2
 	Transport  string `json:"transport"`
 	Address    string `json:"address"`
 	Port       int    `json:"port"`
 	Security   string `json:"security"`
 	SNI        string `json:"sni,omitempty"`
-	UUIDMasked string `json:"uuid"`
+	UUIDMasked string `json:"uuid,omitempty"`
 }
 
-// AddProfile parses uri, copies routing rules from the currently-active
-// profile (D-05), and writes cfg.XrayProfilesDir/<name>.json. Returns an
-// error if name is reserved/invalid (ValidateProfileName), URI is invalid
-// (vless.Parse), or target file exists and !force.
+// AddProfile parses uri via the protocol parser, copies routing rules from the
+// currently-active profile (D-05), and writes cfg.XrayProfilesDir/<name>.json.
+// Returns an error if name is reserved/invalid (ValidateProfileName), URI is
+// invalid (generateProfileConfig), or target file exists and !force.
 //
-// Per RESEARCH §3: uses vless.GenerateConfig + manual json.MarshalIndent
+// Per RESEARCH §3: uses generateProfileConfig + manual json.MarshalIndent
 // because the routing block needs to be overridden with the active profile's
 // rules before write. Legacy node-append helpers are NEVER invoked here.
 func AddProfile(cfg config.Config, name, uri string, force bool) error {
 	if err := ValidateProfileName(name); err != nil {
 		return err
 	}
-	parsed, err := vless.Parse(uri)
+
+	targetCfg, err := generateProfileConfig(uri)
 	if err != nil {
 		return err
 	}
@@ -53,11 +56,6 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 		return fmt.Errorf("profile %q already exists at %s (use --force to overwrite)", name, target)
 	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("stat target %s: %w", target, statErr)
-	}
-
-	targetCfg, err := vless.GenerateConfig(parsed, "proxy-1")
-	if err != nil {
-		return fmt.Errorf("generate config: %w", err)
 	}
 
 	// D-05: copy routing rules from the currently-active profile so per-host
@@ -170,8 +168,8 @@ func RemoveProfile(cfg config.Config, name string) error {
 	return nil
 }
 
-// summarizeProfile reads a profile JSON and extracts the first VLESS outbound
-// into a ProfileSummary (UUID masked per D-13).
+// summarizeProfile reads a profile JSON and extracts the first proxy outbound
+// (vless or hysteria) into a ProfileSummary (secrets masked/omitted per D-13).
 func summarizeProfile(path, name string) (ProfileSummary, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -183,56 +181,121 @@ func summarizeProfile(path, name string) (ProfileSummary, error) {
 	}
 	s := ProfileSummary{Name: name}
 	for _, ob := range xc.Outbounds {
-		if ob.Protocol != "vless" {
-			continue
-		}
-		var settings struct {
-			Vnext []struct {
-				Address string `json:"address"`
-				Port    int    `json:"port"`
-				Users   []struct {
-					ID string `json:"id"`
-				} `json:"users"`
-			} `json:"vnext"`
-		}
-		if err := json.Unmarshal(ob.Settings, &settings); err != nil {
-			return ProfileSummary{}, fmt.Errorf("parse settings: %w", err)
-		}
-		if len(settings.Vnext) == 0 {
-			return ProfileSummary{}, fmt.Errorf("no vnext in VLESS outbound")
-		}
-		s.Address = settings.Vnext[0].Address
-		s.Port = settings.Vnext[0].Port
-		if len(settings.Vnext[0].Users) > 0 {
-			s.UUIDMasked = MaskUUID(settings.Vnext[0].Users[0].ID)
-		} else {
-			s.UUIDMasked = MaskUUID("")
-		}
-
-		var ss struct {
-			Network         string `json:"network"`
-			Security        string `json:"security"`
-			RealitySettings struct {
-				ServerName string `json:"serverName"`
-			} `json:"realitySettings"`
-			TLSSettings struct {
-				ServerName string `json:"serverName"`
-			} `json:"tlsSettings"`
-		}
-		if len(ob.StreamSettings) > 0 {
-			if err := json.Unmarshal(ob.StreamSettings, &ss); err != nil {
-				return ProfileSummary{}, fmt.Errorf("parse stream: %w", err)
+		switch ob.Protocol {
+		case "vless":
+			var settings struct {
+				Vnext []struct {
+					Address string `json:"address"`
+					Port    int    `json:"port"`
+					Users   []struct {
+						ID string `json:"id"`
+					} `json:"users"`
+				} `json:"vnext"`
 			}
+			if err := json.Unmarshal(ob.Settings, &settings); err != nil {
+				return ProfileSummary{}, fmt.Errorf("parse settings: %w", err)
+			}
+			if len(settings.Vnext) == 0 {
+				return ProfileSummary{}, fmt.Errorf("no vnext in VLESS outbound")
+			}
+			s.Address = settings.Vnext[0].Address
+			s.Port = settings.Vnext[0].Port
+			if len(settings.Vnext[0].Users) > 0 {
+				s.UUIDMasked = MaskUUID(settings.Vnext[0].Users[0].ID)
+			} else {
+				s.UUIDMasked = MaskUUID("")
+			}
+			var ss struct {
+				Network         string `json:"network"`
+				Security        string `json:"security"`
+				RealitySettings struct {
+					ServerName string `json:"serverName"`
+				} `json:"realitySettings"`
+				TLSSettings struct {
+					ServerName string `json:"serverName"`
+				} `json:"tlsSettings"`
+			}
+			if len(ob.StreamSettings) > 0 {
+				if err := json.Unmarshal(ob.StreamSettings, &ss); err != nil {
+					return ProfileSummary{}, fmt.Errorf("parse stream: %w", err)
+				}
+			}
+			s.Transport = ss.Network
+			s.Security = ss.Security
+			switch ss.Security {
+			case "reality":
+				s.SNI = ss.RealitySettings.ServerName
+			case "tls":
+				s.SNI = ss.TLSSettings.ServerName
+			}
+			return s, nil
+		case "hysteria":
+			if err := summarizeHysteria(&s, ob); err != nil {
+				return ProfileSummary{}, err
+			}
+			return s, nil
 		}
-		s.Transport = ss.Network
-		s.Security = ss.Security
-		switch ss.Security {
-		case "reality":
-			s.SNI = ss.RealitySettings.ServerName
-		case "tls":
-			s.SNI = ss.TLSSettings.ServerName
-		}
-		return s, nil
 	}
-	return ProfileSummary{}, fmt.Errorf("no VLESS outbound")
+	return ProfileSummary{}, fmt.Errorf("no proxy outbound")
+}
+
+// summarizeHysteria fills s from a hysteria (hy2) outbound. UUIDMasked stays
+// empty (hy2 has no UUID); secrets are never placed on a ProfileSummary (D-13).
+func summarizeHysteria(s *ProfileSummary, ob vless.Outbound) error {
+	var settings struct {
+		Address string `json:"address"`
+		Port    int    `json:"port"`
+	}
+	if err := json.Unmarshal(ob.Settings, &settings); err != nil {
+		return fmt.Errorf("parse hysteria settings: %w", err)
+	}
+	s.Protocol = "hysteria2"
+	s.Transport = "hysteria"
+	s.Address = settings.Address
+	s.Port = settings.Port
+	s.UUIDMasked = ""
+
+	var ss struct {
+		Security    string `json:"security"`
+		TLSSettings struct {
+			ServerName string `json:"serverName"`
+		} `json:"tlsSettings"`
+	}
+	if len(ob.StreamSettings) > 0 {
+		if err := json.Unmarshal(ob.StreamSettings, &ss); err != nil {
+			return fmt.Errorf("parse hysteria stream: %w", err)
+		}
+	}
+	s.Security = ss.Security
+	s.SNI = ss.TLSSettings.ServerName
+	return nil
+}
+
+// generateProfileConfig parses a proxy share URI and builds the full xray
+// config for it, dispatching on URI scheme. New protocols plug in here.
+func generateProfileConfig(uri string) (*vless.XrayConfig, error) {
+	switch {
+	case strings.HasPrefix(uri, "vless://"):
+		parsed, err := vless.Parse(uri)
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := vless.GenerateConfig(parsed, "proxy-1")
+		if err != nil {
+			return nil, fmt.Errorf("generate config: %w", err)
+		}
+		return cfg, nil
+	case strings.HasPrefix(uri, "hysteria2://"), strings.HasPrefix(uri, "hy2://"):
+		parsed, err := hysteria2.Parse(uri)
+		if err != nil {
+			return nil, err
+		}
+		cfg, err := hysteria2.GenerateConfig(parsed, "proxy-1")
+		if err != nil {
+			return nil, fmt.Errorf("generate config: %w", err)
+		}
+		return cfg, nil
+	default:
+		return nil, fmt.Errorf("unsupported proxy URI scheme (want vless://, hysteria2://, or hy2://)")
+	}
 }
