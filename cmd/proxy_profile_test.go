@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -431,5 +432,41 @@ func TestProfileShowHysteria2Masking(t *testing.T) {
 	}
 	if revealed := out.String(); !strings.Contains(revealed, "AUTHREDACTED") {
 		t.Errorf("show --reveal did not reveal auth:\n%s", revealed)
+	}
+}
+
+func TestProfileShowHysteria2JSONNoUUID(t *testing.T) {
+	dir := t.TempDir()
+	profilesDir := filepath.Join(dir, "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := `{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[
+		{"tag":"proxy-1","protocol":"hysteria","settings":{"version":2,"address":"h.example","port":443},
+		 "streamSettings":{"network":"hysteria","security":"tls",
+		   "tlsSettings":{"serverName":"h.example"},
+		   "hysteriaSettings":{"version":2,"auth":"AUTHREDACTED"},
+		   "finalmask":{"udp":[{"type":"salamander","settings":{"password":"OBFSREDACTED"}}]}}},
+		{"tag":"direct","protocol":"freedom","settings":{}}],"routing":{"rules":[]}}`
+	if err := os.WriteFile(filepath.Join(profilesDir, "hy2.json"), []byte(profile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONFIG", filepath.Join(dir, "config.json"))
+	t.Setenv("XRAY_PROFILES_DIR", profilesDir)
+
+	out, _, err := execCapture(t, "proxy", "profile", "show", "hy2", "--json", "--no-migrate")
+	if err != nil {
+		t.Fatalf("show --json: %v", err)
+	}
+
+	var dp map[string]any
+	if err := json.Unmarshal(out.Bytes(), &dp); err != nil {
+		t.Fatalf("unmarshal JSON: %v\nraw: %s", err, out.String())
+	}
+	if proto, _ := dp["protocol"].(string); proto != "hysteria2" {
+		t.Errorf("expected protocol=hysteria2, got %q", proto)
+	}
+	if uuid, ok := dp["uuid"]; ok && uuid != "" {
+		t.Errorf("expected no uuid key (or empty) in hysteria2 JSON output, got %q", uuid)
 	}
 }
