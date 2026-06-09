@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -90,7 +91,7 @@ var profileListCmd = &cobra.Command{
 			if reveal {
 				type fullRow struct {
 					xray.ProfileSummary
-					UUIDFull string `json:"uuid_full"`
+					UUIDFull string `json:"uuid_full,omitempty"`
 				}
 				rows := make([]fullRow, 0, len(profiles))
 				for _, p := range profiles {
@@ -232,7 +233,9 @@ var profileShowCmd = &cobra.Command{
 		}
 
 		if jsonFlag {
-			output.JSON(dp)
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(dp)
 			return
 		}
 		w := cmd.OutOrStdout()

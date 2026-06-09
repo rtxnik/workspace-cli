@@ -12,7 +12,7 @@ func TestMaskUUID(t *testing.T) {
 	cases := []struct {
 		name, in, want string
 	}{
-		{"empty", "", "****"},
+		{"empty", "", ""},
 		{"too short", "abc", "****"},
 		{"not a uuid", "not-a-uuid", "****"},
 		{"35 chars", "12345678-1234-1234-1234-12345678901", "****"},

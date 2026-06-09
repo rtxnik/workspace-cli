@@ -33,8 +33,11 @@ type DetailedProfile struct {
 }
 
 // MaskUUID preserves first 8 hex chars of a UUID then masks the rest.
-// Returns "****" if UUID length != 36 (per RESEARCH §8).
+// Returns "" for empty input; "****" if UUID length != 36 (per RESEARCH §8).
 func MaskUUID(uuid string) string {
+	if uuid == "" {
+		return ""
+	}
 	if len(uuid) != 36 {
 		return "****"
 	}
