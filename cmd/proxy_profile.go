@@ -227,30 +227,46 @@ var profileShowCmd = &cobra.Command{
 			dp.PublicKey = xray.MaskShort(dp.PublicKey)
 			dp.ShortID = xray.MaskShort(dp.ShortID)
 			dp.SpiderX = xray.MaskShort(dp.SpiderX)
+			dp.Auth = xray.MaskShort(dp.Auth)
+			dp.ObfsPassword = xray.MaskShort(dp.ObfsPassword)
 		}
 
 		if jsonFlag {
 			output.JSON(dp)
 			return
 		}
-		fmt.Printf("Name:       %s\n", dp.Name)
+		w := cmd.OutOrStdout()
+		_, _ = fmt.Fprintf(w, "Name:       %s\n", dp.Name)
 		if dp.Active {
-			fmt.Println("Active:     yes")
+			_, _ = fmt.Fprintln(w, "Active:     yes")
 		} else {
-			fmt.Println("Active:     no")
+			_, _ = fmt.Fprintln(w, "Active:     no")
 		}
-		fmt.Printf("Transport:  %s\n", dp.Transport)
-		fmt.Printf("Address:    %s\n", dp.Address)
-		fmt.Printf("Port:       %d\n", dp.Port)
-		fmt.Printf("Security:   %s\n", dp.Security)
+		if dp.Protocol != "" {
+			_, _ = fmt.Fprintf(w, "Protocol:   %s\n", dp.Protocol)
+		}
+		_, _ = fmt.Fprintf(w, "Transport:  %s\n", dp.Transport)
+		_, _ = fmt.Fprintf(w, "Address:    %s\n", dp.Address)
+		_, _ = fmt.Fprintf(w, "Port:       %d\n", dp.Port)
+		_, _ = fmt.Fprintf(w, "Security:   %s\n", dp.Security)
 		if dp.SNI != "" {
-			fmt.Printf("SNI:        %s\n", dp.SNI)
+			_, _ = fmt.Fprintf(w, "SNI:        %s\n", dp.SNI)
 		}
-		fmt.Printf("UUID:       %s\n", dp.UUID)
-		if dp.Security == "reality" {
-			fmt.Printf("PublicKey:  %s\n", dp.PublicKey)
-			fmt.Printf("ShortID:    %s\n", dp.ShortID)
-			fmt.Printf("SpiderX:    %s\n", dp.SpiderX)
+		switch dp.Protocol {
+		case "hysteria2":
+			_, _ = fmt.Fprintf(w, "Auth:       %s\n", dp.Auth)
+			if dp.Obfs != "" {
+				_, _ = fmt.Fprintf(w, "Obfs:       %s\n", dp.Obfs)
+				_, _ = fmt.Fprintf(w, "ObfsPass:   %s\n", dp.ObfsPassword)
+			}
+			_, _ = fmt.Fprintf(w, "Insecure:   %v\n", dp.AllowInsecure)
+		default:
+			_, _ = fmt.Fprintf(w, "UUID:       %s\n", dp.UUID)
+			if dp.Security == "reality" {
+				_, _ = fmt.Fprintf(w, "PublicKey:  %s\n", dp.PublicKey)
+				_, _ = fmt.Fprintf(w, "ShortID:    %s\n", dp.ShortID)
+				_, _ = fmt.Fprintf(w, "SpiderX:    %s\n", dp.SpiderX)
+			}
 		}
 	},
 }

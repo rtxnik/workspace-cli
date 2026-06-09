@@ -388,3 +388,48 @@ func TestProfileUseSkipsPreFlightWhenNoReload(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestProfileShowHysteria2Masking(t *testing.T) {
+	dir := t.TempDir()
+	profilesDir := filepath.Join(dir, "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := `{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[
+		{"tag":"proxy-1","protocol":"hysteria","settings":{"version":2,"address":"h.example","port":443},
+		 "streamSettings":{"network":"hysteria","security":"tls",
+		   "tlsSettings":{"serverName":"h.example"},
+		   "hysteriaSettings":{"version":2,"auth":"AUTHREDACTED"},
+		   "finalmask":{"udp":[{"type":"salamander","settings":{"password":"OBFSREDACTED"}}]}}},
+		{"tag":"direct","protocol":"freedom","settings":{}}],"routing":{"rules":[]}}`
+	if err := os.WriteFile(filepath.Join(profilesDir, "hy2.json"), []byte(profile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Hermetic isolation: profileCmd.PersistentPreRunE calls config.Load()
+	// DIRECTLY (not the loadConfigFn seam) and would run EnsureMigrated against
+	// the operator's real ~/.config/xray. Point config.Load at the temp dir via
+	// env, and pass --no-migrate so no migration is attempted.
+	t.Setenv("XRAY_CONFIG", filepath.Join(dir, "config.json"))
+	t.Setenv("XRAY_PROFILES_DIR", profilesDir)
+
+	// masked (default)
+	out, _, err := execCapture(t, "proxy", "profile", "show", "hy2", "--no-migrate")
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	masked := out.String()
+	if strings.Contains(masked, "AUTHREDACTED") || strings.Contains(masked, "OBFSREDACTED") {
+		t.Errorf("show leaked secret in masked mode:\n%s", masked)
+	}
+	if !strings.Contains(masked, "Protocol:") || !strings.Contains(masked, "Auth:") {
+		t.Errorf("show missing hy2 fields:\n%s", masked)
+	}
+	// revealed
+	out, _, err = execCapture(t, "proxy", "profile", "show", "hy2", "--reveal", "--no-migrate")
+	if err != nil {
+		t.Fatalf("show --reveal: %v", err)
+	}
+	if revealed := out.String(); !strings.Contains(revealed, "AUTHREDACTED") {
+		t.Errorf("show --reveal did not reveal auth:\n%s", revealed)
+	}
+}
