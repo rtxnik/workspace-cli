@@ -290,6 +290,9 @@ func generateProfileConfig(uri string) (*vless.XrayConfig, error) {
 		if err != nil {
 			return nil, err
 		}
+		if parsed.PortHopping {
+			output.Warn(fmt.Sprintf("hysteria2 port-hopping ranges dropped; using base port %d (udphop not supported)", parsed.Port))
+		}
 		cfg, err := hysteria2.GenerateConfig(parsed, "proxy-1")
 		if err != nil {
 			return nil, fmt.Errorf("generate config: %w", err)
