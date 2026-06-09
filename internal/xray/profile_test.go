@@ -392,3 +392,42 @@ func TestMaskCredentials(t *testing.T) {
 		t.Errorf("MaskUUID = %q; want abcd1234-****-****-****-************", got)
 	}
 }
+
+func TestAddProfileHysteria2(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{XrayProfilesDir: filepath.Join(dir, "profiles"), XrayConfig: filepath.Join(dir, "config.json")}
+	uri := "hysteria2://AUTHREDACTED@dash.netbridge.app:29347?alpn=h3&fp=chrome&obfs=salamander&obfs-password=OBFSREDACTED&security=tls&sni=dash.netbridge.app#hy2"
+	if err := AddProfile(cfg, "hy2", uri, false); err != nil {
+		t.Fatalf("AddProfile: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.XrayProfilesDir, "hy2.json"))
+	if err != nil {
+		t.Fatalf("read profile: %v", err)
+	}
+	if !strings.Contains(string(data), `"protocol": "hysteria"`) {
+		t.Errorf("profile JSON missing hysteria outbound:\n%s", data)
+	}
+}
+
+func TestSummarizeProfileHysteria2(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{XrayProfilesDir: filepath.Join(dir, "profiles"), XrayConfig: filepath.Join(dir, "config.json")}
+	uri := "hy2://pw@example.com:443?sni=example.com"
+	if err := AddProfile(cfg, "hy2", uri, false); err != nil {
+		t.Fatalf("AddProfile: %v", err)
+	}
+	got, err := ListProfiles(cfg)
+	if err != nil {
+		t.Fatalf("ListProfiles: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("profiles = %d, want 1", len(got))
+	}
+	p := got[0]
+	if p.Transport != "hysteria" || p.Address != "example.com" || p.Port != 443 {
+		t.Errorf("summary = %+v", p)
+	}
+	if p.UUIDMasked != "" {
+		t.Errorf("hy2 UUID column = %q, want empty", p.UUIDMasked)
+	}
+}
