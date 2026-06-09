@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/hysteria2"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/vless"
 	"github.com/spf13/cobra"
@@ -345,8 +346,8 @@ var proxyFixRoutesCmd = &cobra.Command{
 }
 
 var proxyInitCmd = &cobra.Command{
-	Use:   "init <vless-uri>",
-	Short: "Generate xray config from VLESS URI",
+	Use:   "init <proxy-uri>",
+	Short: "Generate xray config from a VLESS or Hysteria2 URI",
 	Args:  cobra.ExactArgs(1),
 	PreRun: func(cmd *cobra.Command, args []string) {
 		// D-02 / PROXY-PROFILE-08 / RESEARCH §11: Cobra's built-in Deprecated
@@ -363,27 +364,42 @@ var proxyInitCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		uri := args[0]
-
-		parsed, err := vless.Parse(uri)
-		if err != nil {
-			output.Die(err.Error())
-		}
-
 		add, _ := cmd.Flags().GetBool("add")
 
-		if add {
-			if err := vless.AddNode(cfg.XrayConfig, parsed); err != nil {
+		switch {
+		case strings.HasPrefix(uri, "vless://"):
+			parsed, err := vless.Parse(uri)
+			if err != nil {
 				output.Die(err.Error())
 			}
-			output.Success(fmt.Sprintf("Added node %q to config", parsed.Remark))
-		} else {
-			if err := vless.WriteNewConfig(cfg.XrayConfig, parsed); err != nil {
+			if add {
+				if err := vless.AddNode(cfg.XrayConfig, parsed); err != nil {
+					output.Die(err.Error())
+				}
+				output.Success(fmt.Sprintf("Added node %q to config", parsed.Remark))
+			} else {
+				if err := vless.WriteNewConfig(cfg.XrayConfig, parsed); err != nil {
+					output.Die(err.Error())
+				}
+				output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))
+			}
+			output.Detail(fmt.Sprintf("Transport: %s, Security: %s", parsed.Network, parsed.Security))
+		case strings.HasPrefix(uri, "hysteria2://"), strings.HasPrefix(uri, "hy2://"):
+			if add {
+				output.Die("hysteria2 multi-node (--add) is not supported; use 'ws proxy profile add <name> <uri>'")
+			}
+			parsed, err := hysteria2.Parse(uri)
+			if err != nil {
+				output.Die(err.Error())
+			}
+			if err := hysteria2.WriteNewConfig(cfg.XrayConfig, parsed); err != nil {
 				output.Die(err.Error())
 			}
 			output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))
+			output.Detail("Transport: hysteria, Security: tls")
+		default:
+			output.Die("unsupported URI scheme (want vless://, hysteria2://, or hy2://)")
 		}
-
-		output.Detail(fmt.Sprintf("Transport: %s, Security: %s", parsed.Network, parsed.Security))
 	},
 }
 
