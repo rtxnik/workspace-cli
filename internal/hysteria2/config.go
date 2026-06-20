@@ -33,14 +33,28 @@ func BuildOutbound(cfg Config, tag string) (xrayconf.Outbound, error) {
 	// allowInsecure is intentionally never emitted: xray-core v26.2.6 TLSConfig.Build()
 	// hard-errors on allowInsecure:true after 2026-06-01. Use pinnedPeerCertSha256 for
 	// self-signed endpoints.
+	hy := map[string]any{"version": 2, "auth": cfg.Auth}
+	if cfg.HopPorts != "" {
+		udphop := map[string]any{"port": cfg.HopPorts}
+		if cfg.HopInterval > 0 {
+			udphop["interval"] = cfg.HopInterval
+		}
+		hy["udphop"] = udphop
+	}
+	if cfg.Up != "" {
+		hy["up"] = cfg.Up
+	}
+	if cfg.Down != "" {
+		hy["down"] = cfg.Down
+	}
+	if cfg.Congestion != "" {
+		hy["congestion"] = cfg.Congestion
+	}
 	stream := map[string]any{
-		"network":         "hysteria",
-		"security":        "tls",
-		"tlsSettings":     tls,
-		"hysteriaSettings": map[string]any{
-			"version": 2,
-			"auth":    cfg.Auth,
-		},
+		"network":          "hysteria",
+		"security":         "tls",
+		"tlsSettings":      tls,
+		"hysteriaSettings": hy,
 	}
 	if cfg.Obfs == "salamander" {
 		stream["finalmask"] = map[string]any{

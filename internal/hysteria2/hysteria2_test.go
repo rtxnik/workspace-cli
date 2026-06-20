@@ -82,8 +82,11 @@ func TestParsePortHopping(t *testing.T) {
 	if cfg.Port != 443 {
 		t.Errorf("base Port = %d, want 443", cfg.Port)
 	}
+	if cfg.HopPorts != "443,5000-6000" {
+		t.Errorf("HopPorts = %q, want \"443,5000-6000\"", cfg.HopPorts)
+	}
 	if !cfg.PortHopping {
-		t.Errorf("PortHopping = false, want true (ranges dropped)")
+		t.Errorf("PortHopping = false, want true")
 	}
 }
 
@@ -193,5 +196,29 @@ func TestGenerateConfigNoInsecureWithoutPin(t *testing.T) {
 	}
 	if _, ok := tls["pinnedPeerCertSha256"]; ok {
 		t.Errorf("pinnedPeerCertSha256 must be absent when no pin provided")
+	}
+}
+
+func TestGenerateConfigPortHopping(t *testing.T) {
+	cfg, err := Parse("hysteria2://pw@h.example:443,5000-6000?hopInterval=30&up=50mbps&down=200mbps&congestion=brutal&sni=h.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != 443 || cfg.HopPorts == "" {
+		t.Fatalf("hop: port=%d hopPorts=%q", cfg.Port, cfg.HopPorts)
+	}
+	xc, _ := GenerateConfig(cfg, "proxy-1")
+	var ss map[string]any
+	_ = json.Unmarshal(xc.Outbounds[0].StreamSettings, &ss)
+	hy := ss["hysteriaSettings"].(map[string]any)
+	udphop := hy["udphop"].(map[string]any)
+	if udphop["port"] != "443,5000-6000" {
+		t.Errorf("udphop.port = %v", udphop["port"])
+	}
+	if udphop["interval"].(float64) != 30 {
+		t.Errorf("interval = %v", udphop["interval"])
+	}
+	if hy["up"] != "50mbps" || hy["down"] != "200mbps" || hy["congestion"] != "brutal" {
+		t.Errorf("up/down/congestion = %v/%v/%v", hy["up"], hy["down"], hy["congestion"])
 	}
 }

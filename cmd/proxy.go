@@ -392,9 +392,6 @@ var proxyInitCmd = &cobra.Command{
 			if err != nil {
 				output.Die(err.Error())
 			}
-			if parsed.PortHopping {
-				output.Warn(fmt.Sprintf("hysteria2 port-hopping ranges dropped; using base port %d (udphop not supported)", parsed.Port))
-			}
 			if parsed.AllowInsecure && parsed.PinSHA256 == "" {
 				output.Warn("hysteria2 'insecure' is unsupported on xray-core v26.2.6; ignoring. For a self-signed endpoint, pin the cert: add ?pinSHA256=<sha256> (run 'ws proxy doctor' to print it).")
 			}

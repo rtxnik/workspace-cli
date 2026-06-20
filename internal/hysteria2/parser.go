@@ -28,8 +28,17 @@ type Config struct {
 	// CLI <name> argument, not this).
 	Remark string
 
-	// PortHopping is true when the URI carried a comma port-range list we dropped.
-	PortHopping bool
+	// Port-hopping (udphop). HopPorts is the full original port spec
+	// (e.g. "443,5000-6000"); empty when no ranges were present.
+	// PortHopping is true when HopPorts != "".
+	HopPorts    string // e.g. "443,5000-6000"; "" = no hopping
+	HopInterval int    // seconds between hops; default 30 when hopping
+	PortHopping bool   // synonym for HopPorts != ""
+
+	// Bandwidth & congestion (optional; emitted only when provided).
+	Up         string // e.g. "50mbps"
+	Down       string // e.g. "200mbps"
+	Congestion string // "" | "reno" | "bbr" | "brutal" | "force-brutal"
 }
 
 // Parse parses a hysteria2:// (alias hy2://) URI into a Config.
@@ -41,8 +50,8 @@ func Parse(uri string) (Config, error) {
 	}
 
 	// net/url rejects the comma port-hopping form (e.g. ":443,5000-6000").
-	// Reduce it to the base port before url.Parse; remember we dropped ranges.
-	normalized, hopped := stripPortHopping(uri)
+	// Reduce it to the base port before url.Parse; capture the full spec.
+	normalized, hopPorts, hopped := stripPortHopping(uri)
 
 	u, err := url.Parse(normalized)
 	if err != nil {
@@ -74,6 +83,7 @@ func Parse(uri string) (Config, error) {
 		ObfsPassword:  q.Get("obfs-password"),
 		AllowInsecure: q.Get("insecure") == "1" || q.Get("allowInsecure") == "1",
 		Remark:        u.Fragment,
+		HopPorts:      hopPorts,
 		PortHopping:   hopped,
 	}
 
@@ -101,6 +111,28 @@ func Parse(uri string) (Config, error) {
 		cfg.ALPN = []string{"h3"}
 	}
 
+	// Port-hopping interval (only meaningful when HopPorts is set).
+	if cfg.HopPorts != "" {
+		cfg.HopInterval = 30
+		if v := q.Get("hopInterval"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 5 {
+				return Config{}, fmt.Errorf("invalid hopInterval %q: integer ≥5", v)
+			}
+			cfg.HopInterval = n
+		}
+	}
+
+	// Bandwidth & congestion (optional).
+	cfg.Up = q.Get("up")
+	cfg.Down = q.Get("down")
+	cfg.Congestion = q.Get("congestion")
+	switch cfg.Congestion {
+	case "", "reno", "bbr", "brutal", "force-brutal":
+	default:
+		return Config{}, fmt.Errorf("invalid congestion %q: reno|bbr|brutal|force-brutal", cfg.Congestion)
+	}
+
 	// Defaults.
 	if cfg.SNI == "" {
 		cfg.SNI = host
@@ -120,14 +152,15 @@ func Parse(uri string) (Config, error) {
 }
 
 // stripPortHopping removes a ",<ranges>" suffix from the port in the URI's
-// authority (the Hysteria2 port-hopping form), returning the normalized URI and
-// whether ranges were dropped. It only touches the authority segment (between
+// authority (the Hysteria2 port-hopping form), returning the normalized URI,
+// the full original port spec (base + ranges, e.g. "443,5000-6000"), and
+// whether ranges were present. It only touches the authority segment (between
 // "://" and the first '/', '?' or '#'), so query-string commas are untouched.
-func stripPortHopping(uri string) (string, bool) {
+func stripPortHopping(uri string) (normalized string, hopPorts string, hopped bool) {
 	const sep = "://"
 	i := strings.Index(uri, sep)
 	if i < 0 {
-		return uri, false
+		return uri, "", false
 	}
 	head := uri[:i+len(sep)]
 	rest := uri[i+len(sep):]
@@ -148,12 +181,14 @@ func stripPortHopping(uri string) (string, bool) {
 
 	colon := strings.LastIndex(hostport, ":")
 	if colon < 0 {
-		return uri, false
+		return uri, "", false
 	}
 	comma := strings.IndexByte(hostport[colon+1:], ',')
 	if comma < 0 {
-		return uri, false
+		return uri, "", false
 	}
 	base := hostport[colon+1 : colon+1+comma]
-	return head + userinfo + hostport[:colon+1] + base + tail, true
+	ranges := hostport[colon+1+comma+1:]
+	fullSpec := base + "," + ranges
+	return head + userinfo + hostport[:colon+1] + base + tail, fullSpec, true
 }
