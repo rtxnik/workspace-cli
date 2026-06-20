@@ -22,15 +22,21 @@ func BuildOutbound(cfg Config, tag string) (xrayconf.Outbound, error) {
 		return xrayconf.Outbound{}, fmt.Errorf("marshal settings: %w", err)
 	}
 
+	tls := map[string]any{
+		"serverName":  cfg.SNI,
+		"alpn":        cfg.ALPN,
+		"fingerprint": cfg.Fingerprint,
+	}
+	if cfg.PinSHA256 != "" {
+		tls["pinnedPeerCertSha256"] = cfg.PinSHA256
+	}
+	// allowInsecure is intentionally never emitted: xray-core v26.2.6 TLSConfig.Build()
+	// hard-errors on allowInsecure:true after 2026-06-01. Use pinnedPeerCertSha256 for
+	// self-signed endpoints.
 	stream := map[string]any{
-		"network":  "hysteria",
-		"security": "tls",
-		"tlsSettings": map[string]any{
-			"serverName":    cfg.SNI,
-			"allowInsecure": cfg.AllowInsecure,
-			"alpn":          cfg.ALPN,
-			"fingerprint":   cfg.Fingerprint,
-		},
+		"network":         "hysteria",
+		"security":        "tls",
+		"tlsSettings":     tls,
 		"hysteriaSettings": map[string]any{
 			"version": 2,
 			"auth":    cfg.Auth,

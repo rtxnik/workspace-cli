@@ -230,6 +230,7 @@ var profileShowCmd = &cobra.Command{
 			dp.SpiderX = xray.MaskShort(dp.SpiderX)
 			dp.Auth = xray.MaskShort(dp.Auth)
 			dp.ObfsPassword = xray.MaskShort(dp.ObfsPassword)
+			dp.PinSHA256 = xray.MaskShort(dp.PinSHA256)
 		}
 
 		if jsonFlag {
@@ -262,7 +263,11 @@ var profileShowCmd = &cobra.Command{
 				_, _ = fmt.Fprintf(w, "Obfs:       %s\n", dp.Obfs)
 				_, _ = fmt.Fprintf(w, "ObfsPass:   %s\n", dp.ObfsPassword)
 			}
-			_, _ = fmt.Fprintf(w, "Insecure:   %v\n", dp.AllowInsecure)
+			if dp.PinSHA256 != "" {
+				_, _ = fmt.Fprintf(w, "Pinned:     yes (%s)\n", dp.PinSHA256)
+			} else {
+				_, _ = fmt.Fprintln(w, "Pinned:     no")
+			}
 		default:
 			_, _ = fmt.Fprintf(w, "UUID:       %s\n", dp.UUID)
 			if dp.Security == "reality" {
