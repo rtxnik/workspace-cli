@@ -8,7 +8,7 @@ import (
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
-	"github.com/rtxnik/workspace-cli/internal/vless"
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
 // RegenerateProfile refreshes the routing rules in <name>.json from the
@@ -36,7 +36,7 @@ func RegenerateProfile(cfg config.Config, name string) error {
 	if err != nil {
 		return fmt.Errorf("read active profile %q: %w", active, err)
 	}
-	var activeCfg vless.XrayConfig
+	var activeCfg xrayconf.XrayConfig
 	if err := json.Unmarshal(activeData, &activeCfg); err != nil {
 		return fmt.Errorf("parse active profile %q: %w", active, err)
 	}
@@ -47,7 +47,7 @@ func RegenerateProfile(cfg config.Config, name string) error {
 	if err != nil {
 		return fmt.Errorf("read target profile %q: %w", name, err)
 	}
-	var targetCfg vless.XrayConfig
+	var targetCfg xrayconf.XrayConfig
 	if err := json.Unmarshal(targetData, &targetCfg); err != nil {
 		return fmt.Errorf("parse target profile %q: %w", name, err)
 	}

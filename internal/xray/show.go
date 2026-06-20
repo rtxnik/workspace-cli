@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
-	"github.com/rtxnik/workspace-cli/internal/vless"
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
 // DetailedProfile is the row shape used by `show` (and full-detail `list`).
@@ -64,7 +64,7 @@ func LoadProfile(cfg config.Config, name string) (DetailedProfile, error) {
 	if err != nil {
 		return DetailedProfile{}, fmt.Errorf("read profile %q: %w", name, err)
 	}
-	var xc vless.XrayConfig
+	var xc xrayconf.XrayConfig
 	if err := json.Unmarshal(data, &xc); err != nil {
 		return DetailedProfile{}, fmt.Errorf("parse profile %q: %w", name, err)
 	}
@@ -149,7 +149,7 @@ func LoadProfile(cfg config.Config, name string) (DetailedProfile, error) {
 // loadHysteria fills dp from a hysteria (hy2) outbound, including the raw
 // secrets (auth, obfs password). Callers MUST mask via MaskShort unless
 // --reveal is set (D-13). UUID/REALITY fields stay empty.
-func loadHysteria(dp *DetailedProfile, ob vless.Outbound) error {
+func loadHysteria(dp *DetailedProfile, ob xrayconf.Outbound) error {
 	var settings struct {
 		Address string `json:"address"`
 		Port    int    `json:"port"`

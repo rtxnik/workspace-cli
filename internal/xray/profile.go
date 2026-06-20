@@ -13,6 +13,7 @@ import (
 	"github.com/rtxnik/workspace-cli/internal/hysteria2"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/vless"
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
 // ProfileSummary is the row shape used by `list` output (table + JSON).
@@ -66,7 +67,7 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 			activePath = filepath.Join(filepath.Dir(cfg.XrayConfig), active)
 		}
 		if data, rerr := os.ReadFile(activePath); rerr == nil {
-			var activeCfg vless.XrayConfig
+			var activeCfg xrayconf.XrayConfig
 			if uerr := json.Unmarshal(data, &activeCfg); uerr == nil {
 				targetCfg.Routing = activeCfg.Routing
 			}
@@ -175,7 +176,7 @@ func summarizeProfile(path, name string) (ProfileSummary, error) {
 	if err != nil {
 		return ProfileSummary{}, fmt.Errorf("read: %w", err)
 	}
-	var xc vless.XrayConfig
+	var xc xrayconf.XrayConfig
 	if err := json.Unmarshal(data, &xc); err != nil {
 		return ProfileSummary{}, fmt.Errorf("parse: %w", err)
 	}
@@ -241,7 +242,7 @@ func summarizeProfile(path, name string) (ProfileSummary, error) {
 
 // summarizeHysteria fills s from a hysteria (hy2) outbound. UUIDMasked stays
 // empty (hy2 has no UUID); secrets are never placed on a ProfileSummary (D-13).
-func summarizeHysteria(s *ProfileSummary, ob vless.Outbound) error {
+func summarizeHysteria(s *ProfileSummary, ob xrayconf.Outbound) error {
 	var settings struct {
 		Address string `json:"address"`
 		Port    int    `json:"port"`
@@ -273,7 +274,7 @@ func summarizeHysteria(s *ProfileSummary, ob vless.Outbound) error {
 
 // generateProfileConfig parses a proxy share URI and builds the full xray
 // config for it, dispatching on URI scheme. New protocols plug in here.
-func generateProfileConfig(uri string) (*vless.XrayConfig, error) {
+func generateProfileConfig(uri string) (*xrayconf.XrayConfig, error) {
 	switch {
 	case strings.HasPrefix(uri, "vless://"):
 		parsed, err := vless.Parse(uri)

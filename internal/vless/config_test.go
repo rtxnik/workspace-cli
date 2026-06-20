@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
 func tcpRealityCfg() VLESSConfig {
@@ -164,7 +166,7 @@ func TestWriteNewConfig(t *testing.T) {
 		t.Fatalf("read config: %v", err)
 	}
 
-	var xray XrayConfig
+	var xray xrayconf.XrayConfig
 	if err := json.Unmarshal(data, &xray); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
 	}
@@ -198,7 +200,7 @@ func TestAddNode(t *testing.T) {
 		t.Fatalf("read config: %v", err)
 	}
 
-	var xray XrayConfig
+	var xray xrayconf.XrayConfig
 	if err := json.Unmarshal(data, &xray); err != nil {
 		t.Fatalf("unmarshal config: %v", err)
 	}
@@ -250,7 +252,7 @@ func TestAddNodeThirdProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var xray XrayConfig
+	var xray xrayconf.XrayConfig
 	if err := json.Unmarshal(data, &xray); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +286,7 @@ func keys(m map[string]any) []string {
 
 // TestRoutingCopyPreservesAllFields is the regression for the D-05 routing
 // copy bug: AddProfile's unmarshal -> marshal round-trip through
-// vless.XrayConfig must preserve every field xray honours on a routing rule.
+// xrayconf.XrayConfig must preserve every field xray honours on a routing rule.
 // The pre-refactor `Rule` struct silently dropped fields it did not declare
 // (port, domain, source, user, inboundTag, protocol, attrs, sourcePort) —
 // this test fails on the typed-struct version and passes once Rules is
@@ -311,7 +313,7 @@ func TestRoutingCopyPreservesAllFields(t *testing.T) {
   }
 }`)
 
-	var xc XrayConfig
+	var xc xrayconf.XrayConfig
 	if err := json.Unmarshal(input, &xc); err != nil {
 		t.Fatalf("unmarshal input: %v", err)
 	}

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/rtxnik/workspace-cli/internal/vless"
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
 // BuildOutbound builds the Xray-core outbound for a Hysteria2 profile. The wire
@@ -12,14 +12,14 @@ import (
 // PR XTLS/Xray-core#5508). The auth password lives in hysteriaSettings, NOT in
 // the protocol-level settings; finalmask (salamander) is a sibling of
 // hysteriaSettings under streamSettings.
-func BuildOutbound(cfg Config, tag string) (vless.Outbound, error) {
+func BuildOutbound(cfg Config, tag string) (xrayconf.Outbound, error) {
 	settings, err := json.Marshal(map[string]any{
 		"version": 2,
 		"address": cfg.Address,
 		"port":    cfg.Port,
 	})
 	if err != nil {
-		return vless.Outbound{}, fmt.Errorf("marshal settings: %w", err)
+		return xrayconf.Outbound{}, fmt.Errorf("marshal settings: %w", err)
 	}
 
 	stream := map[string]any{
@@ -48,10 +48,10 @@ func BuildOutbound(cfg Config, tag string) (vless.Outbound, error) {
 	}
 	streamSettings, err := json.Marshal(stream)
 	if err != nil {
-		return vless.Outbound{}, fmt.Errorf("marshal streamSettings: %w", err)
+		return xrayconf.Outbound{}, fmt.Errorf("marshal streamSettings: %w", err)
 	}
 
-	return vless.Outbound{
+	return xrayconf.Outbound{
 		Tag:            tag,
 		Protocol:       "hysteria",
 		Settings:       json.RawMessage(settings),
@@ -60,13 +60,13 @@ func BuildOutbound(cfg Config, tag string) (vless.Outbound, error) {
 }
 
 // GenerateConfig builds a full xray config for a Hysteria2 profile, reusing the
-// shared transparent-proxy scaffold from internal/vless.
-func GenerateConfig(cfg Config, tag string) (*vless.XrayConfig, error) {
+// shared transparent-proxy scaffold from internal/xrayconf.
+func GenerateConfig(cfg Config, tag string) (*xrayconf.XrayConfig, error) {
 	ob, err := BuildOutbound(cfg, tag)
 	if err != nil {
 		return nil, err
 	}
-	return vless.AssembleConfig(ob), nil
+	return xrayconf.AssembleConfig(ob), nil
 }
 
 // WriteNewConfig writes a fresh xray config for a Hysteria2 profile to path.
@@ -75,5 +75,5 @@ func WriteNewConfig(path string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return vless.WriteConfig(path, xc)
+	return xrayconf.WriteConfig(path, xc)
 }
