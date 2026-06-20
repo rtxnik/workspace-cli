@@ -1,0 +1,2 @@
+timestamp	files	outcome	gate_result	notes
+2026-06-20T00:00:00Z	internal/xrayconf internal/vless internal/hysteria2 internal/xray	kept	go build+vet+test all green	Task 1: extract neutral xray-config types into internal/xrayconf; byte-identical golden passes

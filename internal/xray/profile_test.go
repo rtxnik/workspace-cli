@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
-	"github.com/rtxnik/workspace-cli/internal/vless"
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
 // mkTestCfg returns a config.Config rooted in t.TempDir() with profiles dir
@@ -38,7 +38,7 @@ func TestProfileAdd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read profile: %v", err)
 	}
-	var xc vless.XrayConfig
+	var xc xrayconf.XrayConfig
 	if err := json.Unmarshal(data, &xc); err != nil {
 		t.Fatalf("parse profile: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestProfileAddCopiesRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read primary: %v", err)
 	}
-	var primary vless.XrayConfig
+	var primary xrayconf.XrayConfig
 	if err := json.Unmarshal(pdata, &primary); err != nil {
 		t.Fatalf("parse primary: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestProfileAddCopiesRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read backup: %v", err)
 	}
-	var backup vless.XrayConfig
+	var backup xrayconf.XrayConfig
 	if err := json.Unmarshal(bdata, &backup); err != nil {
 		t.Fatalf("parse backup: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestAddProfilePreservesPortRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read primary: %v", err)
 	}
-	var primary vless.XrayConfig
+	var primary xrayconf.XrayConfig
 	if err := json.Unmarshal(pdata, &primary); err != nil {
 		t.Fatalf("parse primary: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestAddProfilePreservesPortRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read secondary: %v", err)
 	}
-	var secondary vless.XrayConfig
+	var secondary xrayconf.XrayConfig
 	if err := json.Unmarshal(sdata, &secondary); err != nil {
 		t.Fatalf("parse secondary: %v", err)
 	}
