@@ -48,7 +48,7 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 		return err
 	}
 
-	if err := os.MkdirAll(cfg.XrayProfilesDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.XrayProfilesDir, 0o700); err != nil {
 		return fmt.Errorf("create profiles dir: %w", err)
 	}
 
@@ -78,7 +78,7 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := os.WriteFile(target, data, 0o644); err != nil {
+	if err := os.WriteFile(target, data, 0o600); err != nil {
 		return fmt.Errorf("write profile %s: %w", target, err)
 	}
 	return nil

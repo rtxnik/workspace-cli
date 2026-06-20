@@ -36,7 +36,7 @@ func MigrateLegacy(cfg config.Config) (bool, error) {
 	}
 
 	// Regular file → migrate.
-	if err := os.MkdirAll(cfg.XrayProfilesDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.XrayProfilesDir, 0o700); err != nil {
 		return false, fmt.Errorf("mkdir %s: %w", cfg.XrayProfilesDir, err)
 	}
 	primaryPath := filepath.Join(cfg.XrayProfilesDir, "primary.json")

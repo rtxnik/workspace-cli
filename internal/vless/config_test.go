@@ -156,8 +156,8 @@ func TestWriteNewConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat config file: %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("file permissions = %o, want 644", info.Mode().Perm())
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("file permissions = %o, want 600", info.Mode().Perm())
 	}
 
 	// File must be valid JSON with expected structure.
