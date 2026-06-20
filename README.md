@@ -38,11 +38,11 @@ ws profile-delete myprofile              # Delete custom profile
 
 ### Proxy
 
-Transparent VLESS proxy via xray-core in a Docker container. Daily flow is profile-based — see [docs/proxy-profiles.md](docs/proxy-profiles.md) for the full guide.
+VLESS and Hysteria2 proxy via xray-core (pinned to v26.2.6) in a Docker container. Daily flow is profile-based — see [docs/proxy-profiles.md](docs/proxy-profiles.md) for the full guide.
 
 ```bash
 # Setup
-ws proxy init <vless-uri>         # First-time: generate primary profile + symlink layout
+ws proxy init <uri>               # First-time: generate primary profile + symlink layout
 ws proxy check                    # Verify Docker + image + config prerequisites
 
 # Container lifecycle
@@ -53,12 +53,15 @@ ws proxy recreate                 # Remove + create new (after image/env/network
 ws proxy rebuild                  # Rebuild image + recreate
 ws proxy status                   # Show running state, health, uptime
 ws proxy logs                     # Tail container logs
-ws proxy test                     # End-to-end connectivity test
+ws proxy test                     # Prove tunnel is active (compares direct vs proxied exit IP)
+ws proxy test --json              # Machine-readable {DirectIP, ProxiedIP, Tunneled, Latency}
+ws proxy doctor                   # Ordered fail-fast diagnostic of the full proxy stack
+ws proxy doctor --json            # Machine-readable diagnostic report
 ws proxy debug on|off             # Toggle verbose xray logging
 ws proxy update [version]         # Update xray-core version
 
-# Profiles (xray VLESS configurations)
-ws proxy profile add <name> <uri>     # Store a new profile from VLESS URI
+# Profiles (VLESS and Hysteria2 configurations)
+ws proxy profile add <name> <uri>     # Store a new profile from a VLESS or Hysteria2 URI
 ws proxy profile list                 # List all profiles (active marked)
 ws proxy profile use <name>           # Switch active profile + reload proxy (atomic)
 ws proxy profile current              # Print currently active profile name
@@ -68,6 +71,20 @@ ws proxy profile rm <name>            # Remove a profile (refuses active)
 ```
 
 `ws proxy init --add` is deprecated; use `ws proxy profile add` instead.
+
+#### Hysteria2 URI parameters
+
+```
+hysteria2://<auth>@<host>:<port>[,<hop-ranges>]?sni=<host>&pinSHA256=<sha256>&obfs=salamander&obfs-password=<pw>&hopInterval=30&up=50mbps&down=200mbps&congestion=brutal
+```
+
+Key parameters:
+
+| Parameter | Notes |
+|-----------|-------|
+| `pinSHA256` | Leaf cert SHA-256 (hex-colon, bare hex, or base64) for self-signed endpoints. `ws proxy doctor` prints the observed value. `allowInsecure`/`insecure` is not supported on xray-core v26.2.6. |
+| `<port>,<ranges>` | Port-hopping: e.g. `443,5000-6000`. Requires `hopInterval` (default 30 s, min 5). |
+| `congestion` | `reno` \| `bbr` \| `brutal` \| `force-brutal` |
 
 ## Configuration
 
