@@ -158,10 +158,10 @@ ws proxy doctor --json     # full JSON result list
 
 ```bash
 ws proxy test              # human-readable (✓/✗ + latency)
-ws proxy test --json       # JSON: {DirectIP, ProxiedIP, Tunneled, Latency}
+ws proxy test --json       # JSON: {"directIP", "proxiedIP", "tunneled", "latencyMs"}
 ```
 
-Exits 0 when `Tunneled=true` (the two IPs differ), exits 1 otherwise.
+Exits 0 when `tunneled=true` (the two IPs differ), exits 1 otherwise.
 
 ## Editing routing rules
 

@@ -30,8 +30,6 @@ import (
 // It asserts that the tunnel is active (Tunneled == true in `ws proxy test --json`
 // and OK == true in `ws proxy doctor --json`).
 func TestProxyE2E(t *testing.T) {
-	t.Helper()
-
 	// --- prerequisite: docker reachable ---
 	if err := exec.Command("docker", "info").Run(); err != nil {
 		t.Skipf("docker not available (%v) — skipping e2e", err)
@@ -80,6 +78,9 @@ func TestProxyE2E(t *testing.T) {
 	}
 
 	// --- step 1: ws proxy up (start or ensure running) ---
+	// Intentionally leaves the container running after the test — this is an
+	// operator gate that requires a live environment; teardown is the operator's
+	// responsibility.
 	t.Log("step 1: ws proxy up")
 	if out, err := ws("proxy", "up"); err != nil {
 		t.Fatalf("ws proxy up: %v\n%s", err, out)
