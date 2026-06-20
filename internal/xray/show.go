@@ -28,7 +28,7 @@ type DetailedProfile struct {
 	Auth          string `json:"auth,omitempty"`
 	Obfs          string `json:"obfs,omitempty"`
 	ObfsPassword  string `json:"obfsPassword,omitempty"`
-	AllowInsecure bool   `json:"allowInsecure,omitempty"`
+	PinSHA256     string `json:"pinSHA256,omitempty"`
 	Active        bool   `json:"active"`
 }
 
@@ -165,8 +165,8 @@ func loadHysteria(dp *DetailedProfile, ob xrayconf.Outbound) error {
 	var ss struct {
 		Security    string `json:"security"`
 		TLSSettings struct {
-			ServerName    string `json:"serverName"`
-			AllowInsecure bool   `json:"allowInsecure"`
+			ServerName          string `json:"serverName"`
+			PinnedPeerCertSha256 string `json:"pinnedPeerCertSha256"`
 		} `json:"tlsSettings"`
 		HysteriaSettings struct {
 			Auth string `json:"auth"`
@@ -187,7 +187,7 @@ func loadHysteria(dp *DetailedProfile, ob xrayconf.Outbound) error {
 	}
 	dp.Security = ss.Security
 	dp.SNI = ss.TLSSettings.ServerName
-	dp.AllowInsecure = ss.TLSSettings.AllowInsecure
+	dp.PinSHA256 = ss.TLSSettings.PinnedPeerCertSha256
 	dp.Auth = ss.HysteriaSettings.Auth
 	for _, m := range ss.FinalMask.Udp {
 		if m.Type == "salamander" {

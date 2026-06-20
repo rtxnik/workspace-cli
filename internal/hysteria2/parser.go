@@ -18,6 +18,7 @@ type Config struct {
 	ALPN          []string
 	Fingerprint   string
 	AllowInsecure bool
+	PinSHA256     string // normalized base64 of 32-byte SHA-256; empty = no pinning
 
 	// Salamander obfuscation (optional)
 	Obfs         string // "salamander" or ""
@@ -74,6 +75,18 @@ func Parse(uri string) (Config, error) {
 		AllowInsecure: q.Get("insecure") == "1" || q.Get("allowInsecure") == "1",
 		Remark:        u.Fragment,
 		PortHopping:   hopped,
+	}
+
+	// Pin SHA-256: accept hysteria hex-colon, bare hex, or base64.
+	if raw := q.Get("pinSHA256"); raw != "" || q.Get("pin-sha256") != "" {
+		if raw == "" {
+			raw = q.Get("pin-sha256")
+		}
+		pin, err := normalizePinSHA256(raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.PinSHA256 = pin
 	}
 
 	// ALPN: comma-separated; default ["h3"].

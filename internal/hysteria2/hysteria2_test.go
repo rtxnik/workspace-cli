@@ -160,3 +160,38 @@ func TestGenerateConfigNoObfs(t *testing.T) {
 		t.Errorf("finalmask must be absent when obfs is unset")
 	}
 }
+
+func TestGenerateConfigPinNoInsecure(t *testing.T) {
+	pinHex := "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+	cfg, err := Parse("hy2://pw@example.com:443?pinSHA256=" + pinHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	xc, _ := GenerateConfig(cfg, "proxy-1")
+	var ss map[string]any
+	_ = json.Unmarshal(xc.Outbounds[0].StreamSettings, &ss)
+	tls := ss["tlsSettings"].(map[string]any)
+	if _, ok := tls["allowInsecure"]; ok {
+		t.Errorf("allowInsecure must never be emitted")
+	}
+	if tls["pinnedPeerCertSha256"] != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" {
+		t.Errorf("pin = %v", tls["pinnedPeerCertSha256"])
+	}
+}
+
+func TestGenerateConfigNoInsecureWithoutPin(t *testing.T) {
+	cfg, err := Parse("hy2://pw@example.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	xc, _ := GenerateConfig(cfg, "proxy-1")
+	var ss map[string]any
+	_ = json.Unmarshal(xc.Outbounds[0].StreamSettings, &ss)
+	tls := ss["tlsSettings"].(map[string]any)
+	if _, ok := tls["allowInsecure"]; ok {
+		t.Errorf("allowInsecure must never be emitted (even without pin)")
+	}
+	if _, ok := tls["pinnedPeerCertSha256"]; ok {
+		t.Errorf("pinnedPeerCertSha256 must be absent when no pin provided")
+	}
+}
