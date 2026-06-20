@@ -22,9 +22,8 @@ type Profile struct {
 	URI string
 }
 
-// Engine turns a Profile into a backend config and validates a stored profile.
-// Probe (live connectivity) is intentionally absent in this task; it is added
-// in the next one so the seam grows by one method at a time.
+// Engine turns a Profile into a backend config, validates a stored profile,
+// and probes live tunnel connectivity.
 type Engine interface {
 	// BuildConfig scheme-dispatches p.URI and returns the marshalled backend
 	// config (xray JSON today).
@@ -32,6 +31,11 @@ type Engine interface {
 	// Validate checks an already-written profile by name against the backend
 	// (xray run -test today), delegating to the active backend.
 	Validate(cfg config.Config, profileName string) error
+	// Probe performs a live tunnel-connectivity check by comparing the host's
+	// direct egress IP with the proxied egress IP reported by the container.
+	// Returns a ProbeResult with Tunneled=true only when both IPs are non-empty
+	// and different, proving that traffic exits via the tunnel endpoint.
+	Probe(cfg config.Config) (ProbeResult, error)
 }
 
 // Default returns the engine for the only backend wired today (xray-core).

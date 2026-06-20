@@ -69,6 +69,10 @@ func (f *fakeEngine) Validate(_ config.Config, profileName string) error {
 	return f.valErr
 }
 
+func (f *fakeEngine) Probe(_ config.Config) (proxyengine.ProbeResult, error) {
+	return proxyengine.ProbeResult{}, nil
+}
+
 // compile-time assertion: fakeEngine satisfies Engine.
 var _ proxyengine.Engine = (*fakeEngine)(nil)
 
