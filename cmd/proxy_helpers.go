@@ -30,7 +30,7 @@ func setXrayLogLevel(configPath, level string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	return os.WriteFile(configPath, out, 0o644)
+	return os.WriteFile(configPath, out, 0o600)
 }
 
 func fetchLatestXrayVersion() (string, error) {

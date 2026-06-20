@@ -103,8 +103,8 @@ func TestWriteConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("perms = %o, want 644", info.Mode().Perm())
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("perms = %o, want 600", info.Mode().Perm())
 	}
 
 	data, err := os.ReadFile(path)

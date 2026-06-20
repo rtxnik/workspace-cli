@@ -431,3 +431,27 @@ func TestSummarizeProfileHysteria2(t *testing.T) {
 		t.Errorf("hy2 UUID column = %q, want empty", p.UUIDMasked)
 	}
 }
+
+func TestAddProfilePerms(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XRAY_CONFIG", filepath.Join(dir, "config.json"))
+	t.Setenv("XRAY_PROFILES_DIR", filepath.Join(dir, "profiles"))
+	cfg := config.Load()
+	if err := AddProfile(cfg, "p1", "hy2://pw@h.example:443", false); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "p1.json"))
+	if err != nil {
+		t.Fatalf("stat profile file: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("profile perm = %o, want 600", fi.Mode().Perm())
+	}
+	di, err := os.Stat(cfg.XrayProfilesDir)
+	if err != nil {
+		t.Fatalf("stat profiles dir: %v", err)
+	}
+	if di.Mode().Perm() != 0o700 {
+		t.Errorf("dir perm = %o, want 700", di.Mode().Perm())
+	}
+}

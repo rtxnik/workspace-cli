@@ -115,7 +115,7 @@ func WriteConfig(path string, xc *XrayConfig) error {
 }
 
 func writeConfig(path string, xray *XrayConfig) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
@@ -124,5 +124,5 @@ func writeConfig(path string, xray *XrayConfig) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
