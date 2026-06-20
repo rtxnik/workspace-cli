@@ -49,7 +49,7 @@ ws proxy profile add hy2-exit  'hysteria2://<auth>@host:443?obfs=salamander&obfs
 
 The `hy2://` scheme is accepted as an alias for `hysteria2://`.
 
-Hysteria2 profiles carry an `auth` password and optional Salamander obfuscation (`obfs`/`obfs-password`). The proxy engine (xray-core ≥ v26.1.13; the image ships v26.2.6) runs Hysteria2 natively — no rebuild needed.
+Hysteria2 profiles carry an `auth` password and optional Salamander obfuscation (`obfs`/`obfs-password`). The proxy engine (xray-core, pinned to exactly v26.2.6) runs Hysteria2 natively — no rebuild needed. The image is pinned to v26.2.6 rather than a `>= v26.1.13` floor because v26.1.13 used an incompatible obfuscation schema (`udpmasks` flat array) that was renamed to `finalmask` (object) in v26.2.6.
 
 What happens:
 - URI is parsed into a full xray config (inbounds + outbound + routing rules).
@@ -94,7 +94,74 @@ ws proxy profile show hy2-exit --reveal    # unmasked
 ws proxy profile current             # just the name of the active one
 ```
 
-For VLESS profiles, `show` prints `UUID` (and `PublicKey`/`ShortID`/`SpiderX` for REALITY). For Hysteria2 profiles, `show` prints `Protocol`, `Auth`, `Obfs`, `ObfsPass`, and `Insecure` instead; secrets are masked to `****` unless `--reveal` is set. The `list` command's `TRANSPORT` column shows `hysteria` for hy2 profiles (and omits the `UUID` column for those rows in `--json` output).
+For VLESS profiles, `show` prints `UUID` (and `PublicKey`/`ShortID`/`SpiderX` for REALITY). For Hysteria2 profiles, `show` prints `Protocol`, `Auth`, `Obfs`, `ObfsPass`, and `Pinned` (yes/no + masked pin value) instead; secrets are masked to `****` unless `--reveal` is set. There is no `Insecure` field — xray-core v26.2.6 removed `allowInsecure`; use `?pinSHA256=` for self-signed endpoints (see [TLS trust and cert pinning](#tls-trust-and-cert-pinning) below). The `list` command's `TRANSPORT` column shows `hysteria` for hy2 profiles (and omits the `UUID` column for those rows in `--json` output).
+
+## TLS trust and cert pinning
+
+xray-core v26.2.6 does not support `allowInsecure` — using `?insecure=1` in a URI is silently ignored (a warning is printed instead). All Hysteria2 connections use standard TLS verification.
+
+For endpoints with a **self-signed or private CA certificate**, pass the leaf certificate's SHA-256 fingerprint as `?pinSHA256=`:
+
+```bash
+# hex-colon form (openssl / most tools)
+ws proxy profile add hy2-exit 'hysteria2://<auth>@host:443?sni=host&pinSHA256=AA:BB:CC:...'
+# bare hex or base64 are also accepted
+ws proxy profile add hy2-exit 'hysteria2://<auth>@host:443?sni=host&pinSHA256=<base64>'
+```
+
+`ws proxy doctor` prints the observed leaf SHA-256 of the endpoint (via a best-effort TCP-TLS probe). Because Hysteria2 is QUIC/UDP, a TCP refusal is normal — in that case the doctor prints a caveat and marks the check as inconclusive rather than failed. To get the fingerprint from outside the tool, you can use:
+
+```bash
+openssl s_client -connect host:443 2>/dev/null </dev/null \
+  | openssl x509 -fingerprint -sha256 -noout
+```
+
+## Port-hopping
+
+Hysteria2 supports UDP port-hopping to evade per-port blocking. Append a comma-separated port spec to the base port in the URI:
+
+```bash
+# base port 443, also hop across 5000-6000
+ws proxy profile add hy2-hop 'hysteria2://<auth>@host:443,5000-6000?sni=host&hopInterval=30&up=50mbps&down=200mbps&congestion=brutal'
+```
+
+| Query parameter | Default | Description |
+|-----------------|---------|-------------|
+| `hopInterval` | `30` | Seconds between port hops (≥5) |
+| `up` | — | Upstream bandwidth hint (e.g. `50mbps`) |
+| `down` | — | Downstream bandwidth hint (e.g. `200mbps`) |
+| `congestion` | — | Congestion algorithm: `reno`, `bbr`, `brutal`, `force-brutal` |
+
+## Diagnostics: `ws proxy doctor`
+
+`ws proxy doctor` runs an ordered, fail-fast diagnostic of the full proxy stack:
+
+1. Docker reachable
+2. Proxy image present
+3. Active profile passes `xray run -test` inside the container
+4. Container is running and healthy
+5. Proxy network has the expected subnet
+6. Default route inside proxy container is correct
+7. Live egress probe (IP reachability through the tunnel)
+8. Protocol-specific sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
+
+It stops at the first hard failure and prints a remediation hint plus exits non-zero. Use `--json` for a machine-readable report.
+
+```bash
+ws proxy doctor            # human-readable, fail-fast
+ws proxy doctor --json     # full JSON result list
+```
+
+## Verifying the tunnel: `ws proxy test`
+
+`ws proxy test` proves the tunnel is active by comparing the direct exit IP to the proxied exit IP:
+
+```bash
+ws proxy test              # human-readable (✓/✗ + latency)
+ws proxy test --json       # JSON: {DirectIP, ProxiedIP, Tunneled, Latency}
+```
+
+Exits 0 when `Tunneled=true` (the two IPs differ), exits 1 otherwise.
 
 ## Editing routing rules
 
