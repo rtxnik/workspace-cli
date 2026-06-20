@@ -43,7 +43,7 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 		return err
 	}
 
-	targetCfg, err := generateProfileConfig(uri)
+	targetCfg, err := GenerateProfileConfig(uri)
 	if err != nil {
 		return err
 	}
@@ -272,9 +272,11 @@ func summarizeHysteria(s *ProfileSummary, ob xrayconf.Outbound) error {
 	return nil
 }
 
-// generateProfileConfig parses a proxy share URI and builds the full xray
+// GenerateProfileConfig parses a proxy share URI and builds the full xray
 // config for it, dispatching on URI scheme. New protocols plug in here.
-func generateProfileConfig(uri string) (*xrayconf.XrayConfig, error) {
+// This is the single authoritative dispatch point; proxyengine.BuildConfig
+// reuses it via xray.GenerateProfileConfig.
+func GenerateProfileConfig(uri string) (*xrayconf.XrayConfig, error) {
 	switch {
 	case strings.HasPrefix(uri, "vless://"):
 		parsed, err := vless.Parse(uri)
