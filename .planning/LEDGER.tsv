@@ -1,2 +1,6 @@
 timestamp	files	outcome	gate_result	notes
 2026-06-20T00:00:00Z	internal/xrayconf internal/vless internal/hysteria2 internal/xray	kept	go build+vet+test all green	Task 1: extract neutral xray-config types into internal/xrayconf; byte-identical golden passes
+2026-06-20T00:00:00Z	internal/hysteria2 internal/xray cmd	kept	go build+vet+test+golangci-lint all green	Task 2: replace allowInsecure with pinnedPeerCertSha256; normalizePinSHA256 (hex-colon/hex/base64); warn-drop on insecure flag; DetailedProfile.PinSHA256; show Pinned: yes/no
+2026-06-20T00:00:00Z	internal/hysteria2 cmd internal/xray	kept	go build+vet+test+golangci-lint all green	Task 3: honor port-hopping (udphop) + bandwidth + congestion; stripPortHopping returns full spec; HopPorts/HopInterval/Up/Down/Congestion on Config; drop stale port-hopping-dropped warnings
+2026-06-20T12:19:35Z	internal/xrayconf internal/xray cmd internal/vless	kept	go build+vet+test+golangci-lint all green (0 issues)	Task 4: xray-tree writes 0600 files / 0700 dirs; TestAddProfilePerms RED→GREEN; updated xrayconf+vless perm assertions
+2026-06-20T13:00:00Z	internal/hysteria2	kept	go build+vet+test+golangci-lint all green (0 issues, 5 new tests)	Task 5: golden configs (base/obfs/pin/udphop) + TestHysteriaStreamKeysAllowed key-guard; UPDATE_GOLDEN=1 regenerates; no stray keys, no allowInsecure, pinnedPeerCertSha256 present
