@@ -339,10 +339,11 @@ func removeStaleLockFilesImpl(paths []string) error {
 // Aggregator + renderer + Cobra wiring
 // --------------------------------------------------------------------------
 
-// runChecks invokes all 5 check functions and returns the slice in display
+// runVaultChecks invokes all 5 check functions and returns the slice in display
 // order (orphan, stale-lock, token, fd-pass, xrepo). Order matches CONTEXT
-// D-12 numbering so operator vocabulary stays stable.
-func runChecks(ctx context.Context) []*doctorCheck {
+// D-12 numbering so operator vocabulary stays stable. Named distinctly from the
+// proxy doctor's generic runChecks([]Check) Result to avoid a package collision.
+func runVaultChecks(ctx context.Context) []*doctorCheck {
 	return []*doctorCheck{
 		doctorOrphanCheckFn(ctx),
 		doctorStaleLockCheckFn(ctx),
@@ -500,7 +501,7 @@ func newVaultDoctorCmd() *cobra.Command {
 				ctx = context.Background()
 			}
 
-			checks := runChecks(ctx)
+			checks := runVaultChecks(ctx)
 			jsonFlag, _ := cmd.Flags().GetBool("json")
 			if err := renderChecks(cmd.OutOrStdout(), checks, jsonFlag); err != nil {
 				return fmt.Errorf("doctor: render: %w", err)

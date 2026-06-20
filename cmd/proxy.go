@@ -455,6 +455,7 @@ func init() {
 	proxyCmd.AddCommand(proxyLogsCmd)
 	proxyCmd.AddCommand(proxyRebuildCmd)
 	proxyCmd.AddCommand(proxyTestCmd)
+	proxyCmd.AddCommand(proxyDoctorCmd)
 	proxyCmd.AddCommand(proxyDebugCmd)
 	proxyCmd.AddCommand(proxyUpdateCmd)
 	proxyCmd.AddCommand(proxyInitCmd)
