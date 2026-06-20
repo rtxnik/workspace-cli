@@ -2,6 +2,7 @@ package proxyengine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -14,11 +15,31 @@ import (
 )
 
 // ProbeResult holds the outcome of a live tunnel-connectivity probe.
+// Latency is the raw duration used for human display; JSON output uses the
+// derived latencyMs field (integer milliseconds) per the API contract.
 type ProbeResult struct {
 	DirectIP  string        `json:"directIP"`
 	ProxiedIP string        `json:"proxiedIP"`
 	Tunneled  bool          `json:"tunneled"`
-	Latency   time.Duration `json:"latencyMs"`
+	Latency   time.Duration `json:"-"`
+}
+
+// MarshalJSON implements json.Marshaler so that latencyMs is always emitted as
+// integer milliseconds (Latency.Milliseconds()), not nanoseconds. The struct
+// tag `json:"-"` on Latency suppresses the raw int64 nanosecond value.
+func (r ProbeResult) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		DirectIP  string `json:"directIP"`
+		ProxiedIP string `json:"proxiedIP"`
+		Tunneled  bool   `json:"tunneled"`
+		LatencyMs int64  `json:"latencyMs"`
+	}
+	return json.Marshal(wire{
+		DirectIP:  r.DirectIP,
+		ProxiedIP: r.ProxiedIP,
+		Tunneled:  r.Tunneled,
+		LatencyMs: r.Latency.Milliseconds(),
+	})
 }
 
 // tunneled returns true only when both IPs are non-empty and different.

@@ -20,12 +20,12 @@ type LogConfig struct {
 }
 
 type Inbound struct {
-	Tag            string          `json:"tag"`
-	Port           int             `json:"port"`
-	Protocol       string          `json:"protocol"`
-	Settings       InboundSetting  `json:"settings"`
-	Sniffing       *Sniffing       `json:"sniffing,omitempty"`
-	StreamSettings *InboundStream  `json:"streamSettings,omitempty"`
+	Tag            string         `json:"tag"`
+	Port           int            `json:"port"`
+	Protocol       string         `json:"protocol"`
+	Settings       InboundSetting `json:"settings"`
+	Sniffing       *Sniffing      `json:"sniffing,omitempty"`
+	StreamSettings *InboundStream `json:"streamSettings,omitempty"`
 }
 
 type InboundSetting struct {
