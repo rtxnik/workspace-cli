@@ -89,7 +89,7 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 // Name. Profiles whose JSON cannot be parsed are logged via output.Warn
 // (stderr) and skipped — list never errors on a single bad profile.
 func ListProfiles(cfg config.Config) ([]ProfileSummary, error) {
-	if err := os.MkdirAll(cfg.XrayProfilesDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.XrayProfilesDir, 0o700); err != nil {
 		return nil, fmt.Errorf("ensure profiles dir: %w", err)
 	}
 
