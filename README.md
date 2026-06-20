@@ -54,7 +54,7 @@ ws proxy rebuild                  # Rebuild image + recreate
 ws proxy status                   # Show running state, health, uptime
 ws proxy logs                     # Tail container logs
 ws proxy test                     # Prove tunnel is active (compares direct vs proxied exit IP)
-ws proxy test --json              # Machine-readable {DirectIP, ProxiedIP, Tunneled, Latency}
+ws proxy test --json              # Machine-readable {"directIP", "proxiedIP", "tunneled", "latencyMs"}
 ws proxy doctor                   # Ordered fail-fast diagnostic of the full proxy stack
 ws proxy doctor --json            # Machine-readable diagnostic report
 ws proxy debug on|off             # Toggle verbose xray logging

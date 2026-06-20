@@ -164,15 +164,26 @@ func checkDockerReachable(cfg config.Config) CheckOutcome {
 	}
 }
 
-// checkImagePresent: HARD. ProxyCheck index 2 is "Proxy image built".
+// checkImagePresent: HARD. Looks up the "Proxy image built" entry by name so it
+// is robust to reordering in ProxyCheck's result list.
 func checkImagePresent(cfg config.Config) CheckOutcome {
 	results := docker.ProxyCheck(cfg)
-	if len(results) > 2 && results[2].Passed {
-		return CheckOutcome{OK: true, Detail: cfg.ProxyImage}
+	for _, r := range results {
+		if r.Name == "Proxy image built" {
+			if r.Passed {
+				return CheckOutcome{OK: true, Detail: cfg.ProxyImage}
+			}
+			return CheckOutcome{
+				OK:  false,
+				Fix: "Build the proxy image: ws proxy rebuild",
+			}
+		}
 	}
+	// Named entry not found — treat as failed check.
 	return CheckOutcome{
-		OK:  false,
-		Fix: "Build the proxy image: ws proxy rebuild",
+		OK:     false,
+		Detail: `"Proxy image built" check not found in ProxyCheck results`,
+		Fix:    "Build the proxy image: ws proxy rebuild",
 	}
 }
 
