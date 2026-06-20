@@ -462,6 +462,7 @@ func init() {
 	proxyCmd.AddCommand(proxyFixRoutesCmd)
 	proxyCmd.AddCommand(proxyRestartCmd)
 	proxyCmd.AddCommand(proxyRecreateCmd)
+	proxyCmd.AddCommand(proxyUpgradeConfigCmd)
 	proxyCmd.AddCommand(profileCmd)
 	rootCmd.AddCommand(proxyCmd)
 }

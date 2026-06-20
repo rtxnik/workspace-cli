@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 	"github.com/rtxnik/workspace-cli/internal/xray"
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 	"github.com/spf13/cobra"
 )
 
@@ -145,6 +148,7 @@ func proxyDoctorChecks(cfg config.Config, eng proxyengine.Engine) []Check {
 		{Name: "dev-container default route via proxy", Run: func() CheckOutcome { return checkDefaultRoute(cfg) }},
 		{Name: "real egress (tunnel exit-IP)", Run: func() CheckOutcome { return checkEgress(cfg, eng) }},
 		{Name: "protocol sanity", Run: func() CheckOutcome { return checkProtocolSanity(cfg) }},
+		{Name: "inbound sockopt.tproxy (advisory)", Run: func() CheckOutcome { return checkInboundTproxy(cfg) }},
 	}
 }
 
@@ -366,4 +370,36 @@ func vlessProtocolSanity(dp xray.DetailedProfile) CheckOutcome {
 		detail += " shortId set"
 	}
 	return CheckOutcome{OK: true, Detail: detail}
+}
+
+// checkInboundTproxy is a SOFT advisory check: it warns when the active profile's
+// dokodemo-door inbound is missing streamSettings.sockopt.tproxy="tproxy" (needed
+// for TPROXY-mode transparent proxying). OK is always true so the doctor run
+// does not abort here — existing operators may not have migrated yet.
+func checkInboundTproxy(cfg config.Config) CheckOutcome {
+	name, err := xray.ReadActiveProfileName(cfg)
+	if err != nil || name == "" {
+		// No active profile — a more fundamental check already covers this.
+		return CheckOutcome{OK: true, Detail: "no active profile (skipped)"}
+	}
+	profilePath := filepath.Join(cfg.XrayProfilesDir, name+".json")
+	data, err := os.ReadFile(profilePath)
+	if err != nil {
+		return CheckOutcome{OK: true, Detail: "could not read active profile (skipped)"}
+	}
+	var xc xrayconf.XrayConfig
+	if err := json.Unmarshal(data, &xc); err != nil {
+		return CheckOutcome{OK: true, Detail: "could not parse active profile (skipped)"}
+	}
+	if len(xc.Inbounds) > 0 &&
+		xc.Inbounds[0].StreamSettings != nil &&
+		xc.Inbounds[0].StreamSettings.Sockopt != nil &&
+		xc.Inbounds[0].StreamSettings.Sockopt.Tproxy == "tproxy" {
+		return CheckOutcome{OK: true, Detail: "sockopt.tproxy=tproxy present"}
+	}
+	return CheckOutcome{
+		OK:     true,
+		Detail: "ADVISORY: active profile inbound missing sockopt.tproxy (TPROXY mode may not work)",
+		Fix:    "ws proxy upgrade-config",
+	}
 }
