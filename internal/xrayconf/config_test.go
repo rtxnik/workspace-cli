@@ -119,3 +119,12 @@ func TestWriteConfig(t *testing.T) {
 		t.Errorf("log level = %q, want %q", check.Log.Level, "warning")
 	}
 }
+
+// TestAssembleInboundTproxy verifies that AssembleConfig sets sockopt.tproxy on the inbound.
+func TestAssembleInboundTproxy(t *testing.T) {
+	xc := AssembleConfig(Outbound{Tag: "proxy-1", Protocol: "vless", Settings: []byte("{}")})
+	if xc.Inbounds[0].StreamSettings == nil || xc.Inbounds[0].StreamSettings.Sockopt == nil ||
+		xc.Inbounds[0].StreamSettings.Sockopt.Tproxy != "tproxy" {
+		t.Fatalf("inbound missing sockopt.tproxy: %+v", xc.Inbounds[0].StreamSettings)
+	}
+}

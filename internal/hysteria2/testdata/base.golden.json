@@ -18,6 +18,11 @@
           "tls",
           "quic"
         ]
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy"
+        }
       }
     }
   ],

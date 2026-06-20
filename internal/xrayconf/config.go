@@ -20,11 +20,12 @@ type LogConfig struct {
 }
 
 type Inbound struct {
-	Tag      string         `json:"tag"`
-	Port     int            `json:"port"`
-	Protocol string         `json:"protocol"`
-	Settings InboundSetting `json:"settings"`
-	Sniffing *Sniffing      `json:"sniffing,omitempty"`
+	Tag            string          `json:"tag"`
+	Port           int             `json:"port"`
+	Protocol       string          `json:"protocol"`
+	Settings       InboundSetting  `json:"settings"`
+	Sniffing       *Sniffing       `json:"sniffing,omitempty"`
+	StreamSettings *InboundStream  `json:"streamSettings,omitempty"`
 }
 
 type InboundSetting struct {
@@ -35,6 +36,16 @@ type InboundSetting struct {
 type Sniffing struct {
 	Enabled      bool     `json:"enabled"`
 	DestOverride []string `json:"destOverride"`
+}
+
+// InboundStream holds transport-level settings for an inbound.
+type InboundStream struct {
+	Sockopt *Sockopt `json:"sockopt,omitempty"`
+}
+
+// Sockopt controls socket-level options on an inbound listener.
+type Sockopt struct {
+	Tproxy string `json:"tproxy,omitempty"`
 }
 
 type Outbound struct {
@@ -81,6 +92,7 @@ func AssembleConfig(proxy Outbound) *XrayConfig {
 					Enabled:      true,
 					DestOverride: []string{"http", "tls", "quic"},
 				},
+				StreamSettings: &InboundStream{Sockopt: &Sockopt{Tproxy: "tproxy"}},
 			},
 		},
 		Outbounds: []Outbound{
