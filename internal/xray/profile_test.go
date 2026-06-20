@@ -432,6 +432,32 @@ func TestSummarizeProfileHysteria2(t *testing.T) {
 	}
 }
 
+// TestListProfilesPerms verifies that ListProfiles creates the profiles dir at
+// 0700 (not 0755) when it does not yet exist. A user who runs `ws proxy list`
+// before ever running `ws proxy profile add` must not end up with a
+// group/world-readable xray tree.
+func TestListProfilesPerms(t *testing.T) {
+	dir := t.TempDir()
+	// XrayProfilesDir must NOT exist yet — ListProfiles must create it.
+	cfg := config.Config{
+		XrayConfig:      filepath.Join(dir, "config.json"),
+		XrayProfilesDir: filepath.Join(dir, "profiles"),
+	}
+	if _, err := os.Stat(cfg.XrayProfilesDir); err == nil {
+		t.Fatal("pre-condition failed: profiles dir must not exist before calling ListProfiles")
+	}
+	if _, err := ListProfiles(cfg); err != nil {
+		t.Fatalf("ListProfiles: %v", err)
+	}
+	di, err := os.Stat(cfg.XrayProfilesDir)
+	if err != nil {
+		t.Fatalf("stat profiles dir: %v", err)
+	}
+	if di.Mode().Perm() != 0o700 {
+		t.Errorf("ListProfiles created profiles dir with perm %o, want 700", di.Mode().Perm())
+	}
+}
+
 func TestAddProfilePerms(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XRAY_CONFIG", filepath.Join(dir, "config.json"))
