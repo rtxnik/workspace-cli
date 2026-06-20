@@ -59,6 +59,9 @@ func MigrateLegacy(cfg config.Config) (bool, error) {
 	if err := os.Rename(cfg.XrayConfig, primaryPath); err != nil {
 		return false, fmt.Errorf("rename %s -> %s: %w", cfg.XrayConfig, primaryPath, err)
 	}
+	if err := os.Chmod(primaryPath, 0o600); err != nil {
+		return false, fmt.Errorf("chmod %s: %w", primaryPath, err)
+	}
 
 	// Relative symlink target (NOT absolute) so the link survives chezmoi apply
 	// rewrites and DevPod rebuilds. Wave-3 AtomicSymlink reused here rather than

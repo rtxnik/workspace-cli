@@ -14,22 +14,22 @@ import (
 // Raw fields (UUID/PublicKey/ShortID/SpiderX/Auth/ObfsPassword) are unmasked;
 // callers MUST apply MaskUUID/MaskShort before rendering unless --reveal is set (D-13).
 type DetailedProfile struct {
-	Name          string `json:"name"`
-	Protocol      string `json:"protocol,omitempty"` // "" vless, "hysteria2" hy2
-	Transport     string `json:"transport"`
-	Address       string `json:"address"`
-	Port          int    `json:"port"`
-	Security      string `json:"security"`
-	SNI           string `json:"sni,omitempty"`
-	UUID          string `json:"uuid,omitempty"`
-	PublicKey     string `json:"publicKey,omitempty"`
-	ShortID       string `json:"shortId,omitempty"`
-	SpiderX       string `json:"spiderX,omitempty"`
-	Auth          string `json:"auth,omitempty"`
-	Obfs          string `json:"obfs,omitempty"`
-	ObfsPassword  string `json:"obfsPassword,omitempty"`
-	PinSHA256     string `json:"pinSHA256,omitempty"`
-	Active        bool   `json:"active"`
+	Name         string `json:"name"`
+	Protocol     string `json:"protocol,omitempty"` // "" vless, "hysteria2" hy2
+	Transport    string `json:"transport"`
+	Address      string `json:"address"`
+	Port         int    `json:"port"`
+	Security     string `json:"security"`
+	SNI          string `json:"sni,omitempty"`
+	UUID         string `json:"uuid,omitempty"`
+	PublicKey    string `json:"publicKey,omitempty"`
+	ShortID      string `json:"shortId,omitempty"`
+	SpiderX      string `json:"spiderX,omitempty"`
+	Auth         string `json:"auth,omitempty"`
+	Obfs         string `json:"obfs,omitempty"`
+	ObfsPassword string `json:"obfsPassword,omitempty"`
+	PinSHA256    string `json:"pinSHA256,omitempty"`
+	Active       bool   `json:"active"`
 }
 
 // MaskUUID preserves first 8 hex chars of a UUID then masks the rest.
@@ -165,7 +165,7 @@ func loadHysteria(dp *DetailedProfile, ob xrayconf.Outbound) error {
 	var ss struct {
 		Security    string `json:"security"`
 		TLSSettings struct {
-			ServerName          string `json:"serverName"`
+			ServerName           string `json:"serverName"`
 			PinnedPeerCertSha256 string `json:"pinnedPeerCertSha256"`
 		} `json:"tlsSettings"`
 		HysteriaSettings struct {
