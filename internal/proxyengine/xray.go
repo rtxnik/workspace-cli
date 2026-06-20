@@ -1,8 +1,10 @@
 package proxyengine
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/xray"
@@ -34,4 +36,29 @@ func (XrayEngine) BuildConfig(p Profile) ([]byte, error) {
 // of the build → validate contract even though the implementation lives in xray.
 func (XrayEngine) Validate(cfg config.Config, profileName string) error {
 	return xray.ValidateProfile(cfg, profileName)
+}
+
+// Probe performs a live tunnel-connectivity check. It fetches the host's
+// direct egress IP (plain HTTP GET baseline) and the container's egress IP
+// (docker exec curl), then compares them. Tunneled=true only when both are
+// valid, non-empty, and different — proving traffic exits via the tunnel.
+func (XrayEngine) Probe(cfg config.Config) (ProbeResult, error) {
+	start := time.Now()
+
+	directIP, err := fetchDirectIP(context.Background())
+	if err != nil {
+		return ProbeResult{}, fmt.Errorf("direct baseline: %w", err)
+	}
+
+	proxiedIP, err := fetchProxiedIP(cfg)
+	if err != nil {
+		return ProbeResult{}, fmt.Errorf("proxied egress: %w", err)
+	}
+
+	return ProbeResult{
+		DirectIP:  directIP,
+		ProxiedIP: proxiedIP,
+		Tunneled:  tunneled(directIP, proxiedIP),
+		Latency:   time.Since(start),
+	}, nil
 }

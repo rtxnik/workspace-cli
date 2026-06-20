@@ -12,6 +12,7 @@ import (
 	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/hysteria2"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 	"github.com/rtxnik/workspace-cli/internal/vless"
 	"github.com/spf13/cobra"
 )
@@ -229,24 +230,45 @@ var proxyRebuildCmd = &cobra.Command{
 
 var proxyTestCmd = &cobra.Command{
 	Use:   "test",
-	Short: "Test proxy connectivity",
+	Short: "Prove tunnel is active by comparing direct vs proxied exit IP",
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		st, err := docker.ProxyStatus(cfg)
 		if err != nil || !st.Running {
-			output.Die("Proxy is not running")
+			output.Die("proxy is not running — start it first: ws proxy up")
 		}
 
-		output.Info("Testing proxy connectivity...")
-		output.Detail(fmt.Sprintf("Uptime: %s", st.Uptime))
-		if st.Health != "" {
-			output.Detail(fmt.Sprintf("Health: %s", st.Health))
+		output.Info("Probing tunnel (comparing direct vs proxied exit IP)...")
+
+		result, err := proxyengine.Default().Probe(cfg)
+		if err != nil {
+			output.Die(fmt.Sprintf("probe failed: %s", err))
 		}
 
-		if st.Health == "healthy" {
-			output.Success("Proxy is healthy")
+		jsonFlag, _ := cmd.Flags().GetBool("json")
+		if jsonFlag {
+			output.JSON(result)
+			if !result.Tunneled {
+				os.Exit(1)
+			}
+			return
+		}
+
+		tunnelMark := "✗"
+		if result.Tunneled {
+			tunnelMark = "✓"
+		}
+		label := output.StyleDim.Render
+		fmt.Printf("%s  %s\n", label("Direct IP "), result.DirectIP)
+		fmt.Printf("%s %s\n", label("Proxied IP"), result.ProxiedIP)
+		fmt.Printf("%s   %s\n", label("Tunneled "), tunnelMark)
+		fmt.Printf("%s  %s\n", label("Latency  "), result.Latency.Truncate(time.Millisecond).String())
+
+		if result.Tunneled {
+			output.Success("Tunnel active — exit IPs differ")
 		} else {
-			output.Warn("Proxy health check not passing")
+			output.Warn("Tunnel NOT active — direct and proxied exit IPs are the same")
+			os.Exit(1)
 		}
 	},
 }
@@ -426,6 +448,8 @@ func init() {
 	proxyInitCmd.Flags().Bool("add", false, "Add node to existing config instead of creating new")
 	proxyDownCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 	proxyRebuildCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
+	proxyTestCmd.Flags().Bool("json", false, "Output probe result as JSON")
+	proxyStatusCmd.Flags().Bool("json", false, "Output status as JSON")
 
 	proxyCmd.AddCommand(proxyUpCmd)
 	proxyCmd.AddCommand(proxyDownCmd)
