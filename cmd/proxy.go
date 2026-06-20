@@ -448,9 +448,6 @@ func init() {
 	proxyInitCmd.Flags().Bool("add", false, "Add node to existing config instead of creating new")
 	proxyDownCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 	proxyRebuildCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
-	proxyTestCmd.Flags().Bool("json", false, "Output probe result as JSON")
-	proxyStatusCmd.Flags().Bool("json", false, "Output status as JSON")
-
 	proxyCmd.AddCommand(proxyUpCmd)
 	proxyCmd.AddCommand(proxyDownCmd)
 	proxyCmd.AddCommand(proxyStatusCmd)
