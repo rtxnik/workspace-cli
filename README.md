@@ -38,7 +38,7 @@ ws profile-delete myprofile              # Delete custom profile
 
 ### Proxy
 
-VLESS and Hysteria2 proxy via xray-core (pinned to v26.2.6) in a Docker container. Daily flow is profile-based — see [docs/proxy-profiles.md](docs/proxy-profiles.md) for the full guide.
+VLESS and Hysteria2 proxy via xray-core (pinned to v26.2.6) in a Docker container. Daily flow is profile-based — see [docs/proxy-profiles.md](docs/proxy-profiles.md) for the full guide. For rebuild, upgrade, and validation after a code change, follow the [operator runbook](docs/proxy-runbook.md).
 
 ```bash
 # Setup
@@ -103,11 +103,12 @@ Environment variables (with defaults):
 ## Build
 
 ```bash
-make build    # Build binary
-make test     # Run tests
-make vet      # Static analysis
-make lint     # golangci-lint
-make install  # Install to GOPATH/bin
+make build      # Build binary
+make test       # Run tests
+make vet        # Static analysis
+make lint       # golangci-lint
+make install    # Install to GOPATH/bin
+make test-e2e   # Docker e2e harness (requires Docker + a live primary profile)
 ```
 
 ## License
