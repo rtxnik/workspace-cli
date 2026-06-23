@@ -88,7 +88,21 @@ docker build -t "${WS_PROXY_IMAGE:-devpod-proxy}" "$HOME/.config/workspaces/prof
 
 echo "== starting proxy (ws proxy up) =="
 # `up` creates + starts the container from the freshly built image.
-"$WS" proxy up
+up_rc=0
+"$WS" proxy up || up_rc=$?
+
+# Always surface container state + xray logs — the entrypoint and xray stderr
+# are the ground truth for why the datapath did or did not come up.
+echo "== proxy container state =="
+docker ps -a --filter "name=${PROXY_CONTAINER}" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' || true
+echo "== proxy container logs (entrypoint + xray) =="
+docker logs "${PROXY_CONTAINER}" 2>&1 | tail -60 || true
+echo "== xray cap / listen state inside container =="
+docker exec "${PROXY_CONTAINER}" sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = xray ] && { echo "xray pid $(basename "$p")"; grep -E "Cap(Eff|Prm|Bnd)" "$p/status"; }; done; ss -lntu 2>/dev/null | grep -E ":12345" || echo "(:12345 not listening)"' || true
+if [ "$up_rc" -ne 0 ]; then
+  echo "::error::ws proxy up failed (rc=$up_rc) — see container logs above"
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # T2-T5: doctor assertions (mode-dependent)
