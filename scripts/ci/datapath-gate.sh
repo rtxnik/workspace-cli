@@ -91,16 +91,25 @@ echo "== starting proxy (ws proxy up) =="
 up_rc=0
 "$WS" proxy up || up_rc=$?
 
-# Always surface container state + xray logs — the entrypoint and xray stderr
-# are the ground truth for why the datapath did or did not come up.
+# Always surface container state — the entrypoint/xray crash loop is the ground
+# truth for why the datapath did or did not come up.
 echo "== proxy container state =="
 docker ps -a --filter "name=${PROXY_CONTAINER}" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' || true
-echo "== proxy container logs (entrypoint + xray) =="
-docker logs "${PROXY_CONTAINER}" 2>&1 | tail -60 || true
-echo "== xray cap / listen state inside container =="
-docker exec "${PROXY_CONTAINER}" sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = xray ] && { echo "xray pid $(basename "$p")"; grep -E "Cap(Eff|Prm|Bnd)" "$p/status"; }; done; ss -lntu 2>/dev/null | grep -E ":12345" || echo "(:12345 not listening)"' || true
+echo "== proxy container logs =="
+docker logs "${PROXY_CONTAINER}" 2>&1 | tail -40 || echo "(container restarting; logs unavailable — see direct run below)"
+# Direct diagnostic run (no entrypoint iptables, no restart loop): show the
+# capability the binary carries and exactly why xray validates/exits.
+echo "== direct xray diagnostic =="
+docker run --rm --cap-add NET_ADMIN \
+  -v "$HOME/.config/xray:/etc/xray:ro" \
+  --entrypoint sh "${WS_PROXY_IMAGE:-devpod-proxy}" -c '
+    echo "[getcap]"; getcap /usr/local/bin/xray
+    echo "[xray -test]"; su -s /bin/sh xray -c "xray run -test -c /etc/xray/config.json" 2>&1 | head -25
+    echo "[xray run 3s]"; timeout 3 su -s /bin/sh xray -c "xray run -c /etc/xray/config.json" 2>&1 | head -25
+    echo "[end]"
+  ' 2>&1 | head -70 || true
 if [ "$up_rc" -ne 0 ]; then
-  echo "::error::ws proxy up failed (rc=$up_rc) — see container logs above"
+  echo "::error::ws proxy up failed (rc=$up_rc) — see container logs / direct run above"
   exit 1
 fi
 
