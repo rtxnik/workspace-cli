@@ -140,6 +140,27 @@ timeout 5 docker run --rm --cap-add NET_ADMIN --user xray \
 echo "   diag4 exit: $d4 (124 = bind OK)"
 head -40 /tmp/diag4.log || true
 
+echo "== diag 5: sysctl values + writability (root cause is EROFS on /proc/sys at entrypoint line 28) =="
+echo "-- (A) with the 'ws proxy up' HostConfig --sysctl set: what every iface INHERITS --"
+# shellcheck disable=SC2016  # $(...) is meant to run inside the container, not expand on the host
+timeout 30 docker run --rm \
+  --cap-add NET_ADMIN \
+  --sysctl net.ipv4.ip_forward=1 \
+  --sysctl net.ipv4.conf.all.rp_filter=0 \
+  --sysctl net.ipv4.conf.default.rp_filter=0 \
+  --sysctl net.ipv4.conf.all.route_localnet=1 \
+  --entrypoint sh "$IMG" -c '
+    echo "rp_filter:";      grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
+    echo "route_localnet:"; grep -H . /proc/sys/net/ipv4/conf/*/route_localnet
+    echo "ip_forward: $(cat /proc/sys/net/ipv4/ip_forward)"
+    if echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter 2>/dev/null; then echo "proc-sys: WRITABLE"; else echo "proc-sys: READ-ONLY (EROFS) -- confirms root cause"; fi
+  ' 2>&1 | head -40 || true
+echo "-- (B) plain container, NO --sysctl: fresh-netns kernel defaults --"
+timeout 30 docker run --rm --entrypoint sh "$IMG" -c '
+    echo "rp_filter:";      grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
+    echo "route_localnet:"; grep -H . /proc/sys/net/ipv4/conf/*/route_localnet
+  ' 2>&1 | head -20 || true
+
 # Drop the restart-looping container so it cannot keep flapping during later steps.
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 
