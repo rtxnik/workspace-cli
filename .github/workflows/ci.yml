@@ -56,3 +56,43 @@ jobs:
               echo "::error::gofmt drift in changed files:"; echo "$drift"; exit 1
             fi
           fi
+
+  datapath:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # OWNER ACTION REQUIRED: f4f0114 is the dotfiles feature/sp1-datapath-correctness
+      # HEAD at time of writing (local commit, not yet pushed). This ref will not
+      # resolve in CI until the dotfiles branch is pushed and the PR merged.
+      # After the dotfiles PR merges, repoint this to the merged main SHA.
+      DOTFILES_REF: "f4f0114"
+      # WS_TEST_URI drives strict mode (real profile + exit-IP assertion).
+      # If the WS_TEST_ENDPOINT secret is unset the gate runs in flow-only mode
+      # (TPROXY preconditions + forwarding leg asserted; exit-IP comparison skipped).
+      WS_TEST_URI: ${{ secrets.WS_TEST_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+      - name: Preflight — load TPROXY kernel modules
+        run: |
+          sudo modprobe xt_TPROXY xt_socket || {
+            echo "::error::runner kernel lacks xt_TPROXY/xt_socket; datapath gate cannot run"
+            exit 1
+          }
+      - name: Checkout dotfiles proxy recipe (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: rtxnik/dotfiles
+          ref: ${{ env.DOTFILES_REF }}
+          path: _dotfiles
+      - name: Build ws
+        run: make build
+      - name: Stage proxy recipe where ws expects it
+        run: |
+          mkdir -p "$HOME/.config/workspaces/profiles"
+          cp -r _dotfiles/dot_config/workspaces/profiles/proxy "$HOME/.config/workspaces/profiles/proxy"
+      - name: Run red-line datapath gate (T2-T5 + T13)
+        run: sudo -E WS_BIN="$PWD/ws" bash scripts/ci/datapath-gate.sh
