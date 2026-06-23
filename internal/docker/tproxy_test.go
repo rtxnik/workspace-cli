@@ -1,6 +1,14 @@
 package docker
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+)
 
 func TestForwardingVerdict(t *testing.T) {
 	cases := []struct {
@@ -71,5 +79,85 @@ func TestParseIPRuleHasFwmark(t *testing.T) {
 	}
 	if parseIPRuleHasFwmark("0:\tfrom all lookup local\n", 1) {
 		t.Error("missing fwmark rule should fail")
+	}
+}
+
+func TestForwardingEgressProbe_HappyPathAndCleanup(t *testing.T) {
+	var gotHost *container.HostConfig
+	var gotNet *network.NetworkingConfig
+	removed := false
+	mock := &mockClient{
+		createFn: func(_ context.Context, _ *container.Config, host *container.HostConfig, n *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			gotHost, gotNet = host, n
+			return container.CreateResponse{ID: "sc-id"}, nil
+		},
+		removeFn: func(_ context.Context, _ string, opts container.RemoveOptions) error {
+			removed = true
+			if !opts.Force {
+				t.Error("sidecar must be force-removed")
+			}
+			return nil
+		},
+	}
+	defer withMock(mock)()
+
+	orig := execInContainer
+	defer func() { execInContainer = orig }()
+	calls := 0
+	execInContainer = func(_ string, args ...string) ([]byte, error) {
+		calls++
+		switch {
+		case args[0] == "curl" && calls == 1:
+			return []byte("198.51.100.7\n"), nil // direct
+		case args[0] == "ip":
+			return []byte(""), nil // reroute
+		case args[0] == "curl":
+			return []byte("203.0.113.9\n"), nil // forwarded
+		}
+		return nil, nil
+	}
+
+	got, err := ForwardingEgressProbe(testCfg())
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if got.DirectIP != "198.51.100.7" || got.ForwardedIP != "203.0.113.9" {
+		t.Errorf("got %+v", got)
+	}
+	if !removed {
+		t.Error("sidecar leaked (ContainerRemove not called)")
+	}
+	if gotHost == nil || len(gotHost.CapAdd) != 1 || gotHost.CapAdd[0] != "NET_ADMIN" {
+		t.Errorf("sidecar HostConfig CapAdd = %+v, want [NET_ADMIN]", gotHost)
+	}
+	if gotNet == nil || gotNet.EndpointsConfig[testCfg().ProxyNetwork] == nil {
+		t.Error("sidecar not attached to the ws-proxy network")
+	}
+}
+
+func TestForwardingEgressProbe_CleansUpOnExecError(t *testing.T) {
+	removed := false
+	mock := &mockClient{
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			return container.CreateResponse{ID: "sc-id"}, nil
+		},
+		removeFn: func(_ context.Context, _ string, _ container.RemoveOptions) error {
+			removed = true
+			return nil
+		},
+	}
+	defer withMock(mock)()
+
+	orig := execInContainer
+	defer func() { execInContainer = orig }()
+	execInContainer = func(_ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("exec boom")
+	}
+
+	if _, err := ForwardingEgressProbe(testCfg()); err == nil {
+		t.Error("expected error from failing exec")
+	}
+	if !removed {
+		t.Error("sidecar must be removed even when a probe step fails")
 	}
 }

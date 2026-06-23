@@ -1,11 +1,15 @@
 package docker
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"os/exec"
 	"strconv"
 	"strings"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/rtxnik/workspace-cli/internal/config"
 )
 
@@ -97,6 +101,91 @@ const (
 	tproxyPort = 12345
 	tproxyMark = 1
 )
+
+// execInContainer runs `docker exec <name> <args...>` and returns CombinedOutput.
+// Package var so tests can inject a fake (mirrors newClientFunc). The DockerClient
+// SDK interface has no exec method, so in-container commands shell out to docker.
+var execInContainer = func(name string, args ...string) ([]byte, error) {
+	out, err := exec.Command("docker", append([]string{"exec", name}, args...)...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("docker exec %s %v: %w (output: %s)", name, args, err, out)
+	}
+	return out, nil
+}
+
+const sidecarName = "ws-proxy-fwdcheck"
+
+// ForwardingProbe is the result of probing the TPROXY forwarding leg from an
+// ephemeral sidecar attached to the ws-proxy network.
+type ForwardingProbe struct {
+	DirectIP    string // sidecar egress on its default bridge route (would-be direct)
+	ForwardedIP string // sidecar egress after default route -> ProxyIP (through TPROXY)
+}
+
+// ForwardingEgressProbe launches a throwaway container on the ws-proxy network,
+// measures its direct egress IP, re-routes its default gateway through the proxy
+// (cfg.ProxyIP) to force traffic across the TPROXY forwarding leg, and measures
+// the forwarded egress IP. The sidecar reuses the proxy image (it ships curl +
+// iproute2) with the entrypoint overridden to a no-op sleep, and is removed
+// unconditionally — even on error or panic.
+func ForwardingEgressProbe(cfg config.Config) (ForwardingProbe, error) {
+	cli, err := newClientFunc()
+	if err != nil {
+		return ForwardingProbe{}, fmt.Errorf("docker client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutWrite)
+	defer cancel()
+
+	resp, err := cli.ContainerCreate(ctx,
+		&container.Config{
+			Image:      cfg.ProxyImage,
+			Entrypoint: []string{"sleep", "300"}, // do NOT run the TPROXY entrypoint
+		},
+		&container.HostConfig{
+			CapAdd:     []string{"NET_ADMIN"}, // needed for `ip route replace`
+			AutoRemove: true,
+		},
+		&network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				cfg.ProxyNetwork: {}, // auto-assigned IP (must NOT be cfg.ProxyIP)
+			},
+		},
+		nil, sidecarName,
+	)
+	if err != nil {
+		return ForwardingProbe{}, fmt.Errorf("create sidecar: %w", err)
+	}
+	// Guaranteed cleanup, even on early return / panic. Force-remove tolerates
+	// an already-gone container (AutoRemove may have fired).
+	defer func() {
+		rmCtx, rmCancel := context.WithTimeout(context.Background(), timeoutStop)
+		defer rmCancel()
+		_ = cli.ContainerRemove(rmCtx, resp.ID, container.RemoveOptions{Force: true})
+	}()
+
+	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return ForwardingProbe{}, fmt.Errorf("start sidecar: %w", err)
+	}
+
+	directOut, err := execInContainer(sidecarName, "curl", "-s", "--max-time", "5", "https://ifconfig.me")
+	if err != nil {
+		return ForwardingProbe{}, fmt.Errorf("sidecar direct probe: %w", err)
+	}
+	if _, err := execInContainer(sidecarName, "ip", "route", "replace", "default", "via", cfg.ProxyIP); err != nil {
+		return ForwardingProbe{}, fmt.Errorf("sidecar reroute: %w", err)
+	}
+	fwdOut, err := execInContainer(sidecarName, "curl", "-s", "--max-time", "5", "https://ifconfig.me")
+	if err != nil {
+		return ForwardingProbe{}, fmt.Errorf("sidecar forwarded probe: %w", err)
+	}
+
+	return ForwardingProbe{
+		DirectIP:    validateProbeIP(string(directOut)),
+		ForwardedIP: validateProbeIP(string(fwdOut)),
+	}, nil
+}
 
 // TproxyPreconditions runs the HARD runtime preconditions inside the proxy
 // container via ProxyExec and returns them in fail-fast order (cheap localizers
