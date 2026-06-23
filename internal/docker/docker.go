@@ -20,9 +20,9 @@ import (
 
 // Timeouts for Docker operations.
 const (
-	timeoutRead    = 10 * time.Second
-	timeoutWrite   = 30 * time.Second
-	timeoutStop    = 15 * time.Second
+	timeoutRead  = 10 * time.Second
+	timeoutWrite = 30 * time.Second
+	timeoutStop  = 15 * time.Second
 )
 
 // Status holds proxy container status info.
@@ -133,9 +133,14 @@ func ProxyUp(cfg config.Config) error {
 			// because both files live under the bound directory. :ro because
 			// a vulnerability in xray must never write back into the
 			// operator's home tree.
-			Binds:         []string{filepath.Dir(cfg.XrayConfig) + ":/etc/xray/:ro"},
-			CapAdd:        []string{"NET_ADMIN"},
-			Sysctls:       map[string]string{"net.ipv4.ip_forward": "1"},
+			Binds:  []string{filepath.Dir(cfg.XrayConfig) + ":/etc/xray/:ro"},
+			CapAdd: []string{"NET_ADMIN"},
+			Sysctls: map[string]string{
+				"net.ipv4.ip_forward":              "1",
+				"net.ipv4.conf.all.rp_filter":      "0",
+				"net.ipv4.conf.default.rp_filter":  "0",
+				"net.ipv4.conf.all.route_localnet": "1",
+			},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		},
 		&network.NetworkingConfig{
