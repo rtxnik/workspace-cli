@@ -79,12 +79,15 @@ fi
 # ---------------------------------------------------------------------------
 # Build image and bring proxy up
 # ---------------------------------------------------------------------------
-echo "== building proxy image (ws proxy rebuild) =="
-# ws proxy rebuild runs docker build against $PROFILES_DIR/proxy.
-# The dotfiles recipe must already be staged there by the CI job.
-"$WS" proxy rebuild --force
+echo "== building proxy image (docker build) =="
+# Build the image directly rather than `ws proxy rebuild`: rebuild also
+# *recreates* the proxy container and waits for its health, which fails on a
+# fresh CI runner where no proxy container exists yet ("No such container").
+# The dotfiles recipe was staged at $PROFILES_DIR/proxy by the CI job.
+docker build -t "${WS_PROXY_IMAGE:-devpod-proxy}" "$HOME/.config/workspaces/profiles/proxy"
 
 echo "== starting proxy (ws proxy up) =="
+# `up` creates + starts the container from the freshly built image.
 "$WS" proxy up
 
 # ---------------------------------------------------------------------------
