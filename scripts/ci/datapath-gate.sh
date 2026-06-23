@@ -95,19 +95,54 @@ up_rc=0
 # truth for why the datapath did or did not come up.
 echo "== proxy container state =="
 docker ps -a --filter "name=${PROXY_CONTAINER}" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' || true
-echo "== proxy container logs =="
-docker logs "${PROXY_CONTAINER}" 2>&1 | tail -40 || echo "(container restarting; logs unavailable — see direct run below)"
-# Direct diagnostic run (no entrypoint iptables, no restart loop): show the
-# capability the binary carries and exactly why xray validates/exits.
-echo "== direct xray diagnostic =="
-docker run --rm --cap-add NET_ADMIN \
+echo "== proxy container logs (bounded) =="
+timeout 15 docker logs "${PROXY_CONTAINER}" 2>&1 | tail -40 \
+  || echo "(logs unavailable — container restarting; see bounded diagnostics below)"
+
+# ---------------------------------------------------------------------------
+# Bounded crash-loop diagnostics. EVERY docker invocation is timeout-wrapped so
+# this block can never hang (a prior `timeout N su ...` diagnostic orphaned xray
+# and hung the job for 8+ min). Goal: capture WHERE startup dies — iptables, an
+# rp_filter write, xray config validation, or the IP_TRANSPARENT bind — without
+# a restart loop masking the stderr.
+# ---------------------------------------------------------------------------
+IMG="${WS_PROXY_IMAGE:-devpod-proxy}"
+
+echo "== diag 1: file capability on the xray binary (did the setcap xattr survive into the runtime image?) =="
+timeout 30 docker run --rm --entrypoint getcap "$IMG" /usr/local/bin/xray 2>&1 | head -5 || true
+
+echo "== diag 2: one-shot REAL entrypoint, mirroring 'ws proxy up' HostConfig (cap-add + sysctls), --rm + no restart, bounded 20s =="
+echo "   (this shows the exact line the entrypoint dies on: iptables / rp_filter / xray validate / xray exec)"
+d2=0
+timeout 20 docker run --rm \
+  --cap-add NET_ADMIN \
+  --sysctl net.ipv4.ip_forward=1 \
+  --sysctl net.ipv4.conf.all.rp_filter=0 \
+  --sysctl net.ipv4.conf.default.rp_filter=0 \
+  --sysctl net.ipv4.conf.all.route_localnet=1 \
   -v "$HOME/.config/xray:/etc/xray:ro" \
-  --entrypoint sh "${WS_PROXY_IMAGE:-devpod-proxy}" -c '
-    echo "[getcap]"; getcap /usr/local/bin/xray
-    echo "[xray -test]"; su -s /bin/sh xray -c "xray run -test -c /etc/xray/config.json" 2>&1 | head -25
-    echo "[xray run 3s]"; timeout 3 su -s /bin/sh xray -c "xray run -c /etc/xray/config.json" 2>&1 | head -25
-    echo "[end]"
-  ' 2>&1 | head -70 || true
+  "$IMG" > /tmp/diag2.log 2>&1 || d2=$?
+echo "   diag2 exit: $d2 (124 = stayed up past 20s = healthy startup; fast non-zero = startup abort)"
+head -60 /tmp/diag2.log || true
+
+echo "== diag 3: xray config validation as the 'xray' user (catches v26.2.6 schema drift / candidate b) =="
+timeout 30 docker run --rm --cap-add NET_ADMIN --user xray \
+  -v "$HOME/.config/xray:/etc/xray:ro" \
+  --entrypoint /usr/local/bin/xray "$IMG" run -test -c /etc/xray/config.json > /tmp/diag3.log 2>&1 || true
+head -30 /tmp/diag3.log || true
+
+echo "== diag 4: real xray run as 'xray' user (non-root, file-cap path), bounded 5s — isolates the IP_TRANSPARENT bind (candidate a) =="
+echo "   (exit 124 = bound the tproxy socket and stayed up = caps OK; fast non-124 exit with an error = bind/cap failure)"
+d4=0
+timeout 5 docker run --rm --cap-add NET_ADMIN --user xray \
+  -v "$HOME/.config/xray:/etc/xray:ro" \
+  --entrypoint /usr/local/bin/xray "$IMG" run -c /etc/xray/config.json > /tmp/diag4.log 2>&1 || d4=$?
+echo "   diag4 exit: $d4 (124 = bind OK)"
+head -40 /tmp/diag4.log || true
+
+# Drop the restart-looping container so it cannot keep flapping during later steps.
+docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
+
 if [ "$up_rc" -ne 0 ]; then
   echo "::error::ws proxy up failed (rc=$up_rc) — see container logs / direct run above"
   exit 1

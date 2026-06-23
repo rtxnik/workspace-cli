@@ -59,6 +59,9 @@ jobs:
 
   datapath:
     runs-on: ubuntu-latest
+    # Hard ceiling: every docker command in the gate is also timeout-wrapped, but
+    # this guarantees the job can never hang the workflow (a prior diagnostic did).
+    timeout-minutes: 8
     permissions:
       contents: read
     env:
