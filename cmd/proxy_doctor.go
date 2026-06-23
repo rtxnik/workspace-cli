@@ -144,9 +144,11 @@ func proxyDoctorChecks(cfg config.Config, eng proxyengine.Engine) []Check {
 		{Name: "proxy image present", Run: func() CheckOutcome { return checkImagePresent(cfg) }},
 		{Name: "active profile valid (xray -test)", Run: func() CheckOutcome { return checkActiveProfileValid(cfg, eng) }},
 		{Name: "proxy container running and healthy", Run: func() CheckOutcome { return checkContainerHealthy(cfg) }},
+		{Name: "tproxy preconditions", Run: func() CheckOutcome { return checkTproxyPreconditions(cfg) }},
 		{Name: "ws-proxy network + subnet", Run: func() CheckOutcome { return checkNetworkSubnet(cfg) }},
 		{Name: "dev-container default route via proxy", Run: func() CheckOutcome { return checkDefaultRoute(cfg) }},
-		{Name: "real egress (tunnel exit-IP)", Run: func() CheckOutcome { return checkEgress(cfg, eng) }},
+		{Name: "self-egress (proxy tunnel exit-IP)", Run: func() CheckOutcome { return checkEgress(cfg, eng) }},
+		{Name: "forwarding datapath (dev-container exit-IP)", Run: func() CheckOutcome { return checkForwardingEgress(cfg, eng) }},
 		{Name: "protocol sanity", Run: func() CheckOutcome { return checkProtocolSanity(cfg) }},
 		{Name: "inbound sockopt.tproxy (advisory)", Run: func() CheckOutcome { return checkInboundTproxy(cfg) }},
 	}
@@ -307,6 +309,44 @@ func checkEgress(cfg config.Config, eng proxyengine.Engine) CheckOutcome {
 		Detail: fmt.Sprintf("TCP exit-IP %s (direct %s); UDP: SKIP (best-effort, no UDP datapath probe)",
 			probe.ProxiedIP, probe.DirectIP),
 	}
+}
+
+// checkTproxyPreconditions HARD-fails on the first failing runtime prerequisite
+// of the TPROXY datapath, naming which one broke so the operator can localize.
+func checkTproxyPreconditions(cfg config.Config) CheckOutcome {
+	for _, p := range docker.TproxyPreconditions(cfg) {
+		if !p.OK {
+			return CheckOutcome{
+				OK:     false,
+				Detail: p.Name + ": FAIL — " + p.Detail,
+				Fix:    "Rebuild the proxy image and restart: ws proxy rebuild && ws proxy recreate",
+			}
+		}
+	}
+	return CheckOutcome{OK: true, Detail: "cap/rp_filter/listen/mangle/fwmark all present"}
+}
+
+// checkForwardingEgress proves dev-container traffic traverses the TPROXY
+// forwarding leg (not just the proxy's own egress) via an ephemeral sidecar.
+func checkForwardingEgress(cfg config.Config, eng proxyengine.Engine) CheckOutcome {
+	self, err := eng.Probe(cfg)
+	if err != nil {
+		return CheckOutcome{OK: false, Fix: "self-egress probe failed: " + err.Error() + ". Run: ws proxy test"}
+	}
+	fwd, err := docker.ForwardingEgressProbe(cfg)
+	if err != nil {
+		// Infrastructure error: could not test. Surface as HARD — never a silent pass.
+		return CheckOutcome{OK: false, Detail: "could not run forwarding probe", Fix: "Forwarding sidecar failed: " + err.Error()}
+	}
+	ok, reason := docker.ForwardingVerdict(self.ProxiedIP, fwd.ForwardedIP, fwd.DirectIP)
+	if !ok {
+		return CheckOutcome{
+			OK:     false,
+			Detail: fmt.Sprintf("self=%s forwarded=%s direct=%s (%s)", self.ProxiedIP, fwd.ForwardedIP, fwd.DirectIP, reason),
+			Fix:    "Dev-container traffic is NOT tunnelling. Check xray cap_net_admin and rp_filter via the preconditions above.",
+		}
+	}
+	return CheckOutcome{OK: true, Detail: fmt.Sprintf("forwarded exit-IP %s via tunnel", fwd.ForwardedIP)}
 }
 
 // checkProtocolSanity: HARD that the profile loads; advisory thereafter.
