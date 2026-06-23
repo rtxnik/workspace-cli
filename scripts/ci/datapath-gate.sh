@@ -91,100 +91,55 @@ echo "== starting proxy (ws proxy up) =="
 up_rc=0
 "$WS" proxy up || up_rc=$?
 
-# Always surface container state — the entrypoint/xray crash loop is the ground
-# truth for why the datapath did or did not come up.
-echo "== proxy container state =="
-docker ps -a --filter "name=${PROXY_CONTAINER}" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' || true
-echo "== proxy container logs (bounded) =="
-timeout 15 docker logs "${PROXY_CONTAINER}" 2>&1 | tail -40 \
-  || echo "(logs unavailable — container restarting; see bounded diagnostics below)"
-
-# ---------------------------------------------------------------------------
-# Bounded crash-loop diagnostics. EVERY docker invocation is timeout-wrapped so
-# this block can never hang (a prior `timeout N su ...` diagnostic orphaned xray
-# and hung the job for 8+ min). Goal: capture WHERE startup dies — iptables, an
-# rp_filter write, xray config validation, or the IP_TRANSPARENT bind — without
-# a restart loop masking the stderr.
-# ---------------------------------------------------------------------------
-IMG="${WS_PROXY_IMAGE:-devpod-proxy}"
-
-echo "== diag 1: file capability on the xray binary (did the setcap xattr survive into the runtime image?) =="
-timeout 30 docker run --rm --entrypoint getcap "$IMG" /usr/local/bin/xray 2>&1 | head -5 || true
-
-echo "== diag 2: one-shot REAL entrypoint, mirroring 'ws proxy up' HostConfig (cap-add + sysctls), --rm + no restart, bounded 20s =="
-echo "   (this shows the exact line the entrypoint dies on: iptables / rp_filter / xray validate / xray exec)"
-d2=0
-timeout 20 docker run --rm \
-  --cap-add NET_ADMIN \
-  --sysctl net.ipv4.ip_forward=1 \
-  --sysctl net.ipv4.conf.all.rp_filter=0 \
-  --sysctl net.ipv4.conf.default.rp_filter=0 \
-  --sysctl net.ipv4.conf.all.route_localnet=1 \
-  -v "$HOME/.config/xray:/etc/xray:ro" \
-  "$IMG" > /tmp/diag2.log 2>&1 || d2=$?
-echo "   diag2 exit: $d2 (124 = stayed up past 20s = healthy startup; fast non-zero = startup abort)"
-head -60 /tmp/diag2.log || true
-
-echo "== diag 3: xray config validation as the 'xray' user (catches v26.2.6 schema drift / candidate b) =="
-timeout 30 docker run --rm --cap-add NET_ADMIN --user xray \
-  -v "$HOME/.config/xray:/etc/xray:ro" \
-  --entrypoint /usr/local/bin/xray "$IMG" run -test -c /etc/xray/config.json > /tmp/diag3.log 2>&1 || true
-head -30 /tmp/diag3.log || true
-
-echo "== diag 4: real xray run as 'xray' user (non-root, file-cap path), bounded 5s — isolates the IP_TRANSPARENT bind (candidate a) =="
-echo "   (exit 124 = bound the tproxy socket and stayed up = caps OK; fast non-124 exit with an error = bind/cap failure)"
-d4=0
-timeout 5 docker run --rm --cap-add NET_ADMIN --user xray \
-  -v "$HOME/.config/xray:/etc/xray:ro" \
-  --entrypoint /usr/local/bin/xray "$IMG" run -c /etc/xray/config.json > /tmp/diag4.log 2>&1 || d4=$?
-echo "   diag4 exit: $d4 (124 = bind OK)"
-head -40 /tmp/diag4.log || true
-
-echo "== diag 5: sysctl values + writability (root cause is EROFS on /proc/sys at entrypoint line 28) =="
-echo "-- (A) with the 'ws proxy up' HostConfig --sysctl set: what every iface INHERITS --"
-# shellcheck disable=SC2016  # $(...) is meant to run inside the container, not expand on the host
-timeout 30 docker run --rm \
-  --cap-add NET_ADMIN \
-  --sysctl net.ipv4.ip_forward=1 \
-  --sysctl net.ipv4.conf.all.rp_filter=0 \
-  --sysctl net.ipv4.conf.default.rp_filter=0 \
-  --sysctl net.ipv4.conf.all.route_localnet=1 \
-  --entrypoint sh "$IMG" -c '
-    echo "rp_filter:";      grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
-    echo "route_localnet:"; grep -H . /proc/sys/net/ipv4/conf/*/route_localnet
-    echo "ip_forward: $(cat /proc/sys/net/ipv4/ip_forward)"
-    if echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter 2>/dev/null; then echo "proc-sys: WRITABLE"; else echo "proc-sys: READ-ONLY (EROFS) -- confirms root cause"; fi
-  ' 2>&1 | head -40 || true
-echo "-- (B) plain container, NO --sysctl: fresh-netns kernel defaults --"
-timeout 30 docker run --rm --entrypoint sh "$IMG" -c '
-    echo "rp_filter:";      grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
-    echo "route_localnet:"; grep -H . /proc/sys/net/ipv4/conf/*/route_localnet
-  ' 2>&1 | head -20 || true
-
-echo "== diag 6: PROPOSED complete --sysctl set — does Docker accept per-iface lo.*, and are all values correct? =="
-echo "   (lo pre-exists --sysctl application so it needs explicit lo.* entries; eth0 inherits default.*)"
-d6=0
-timeout 30 docker run --rm \
-  --cap-add NET_ADMIN \
-  --sysctl net.ipv4.ip_forward=1 \
-  --sysctl net.ipv4.conf.all.rp_filter=0 \
-  --sysctl net.ipv4.conf.default.rp_filter=0 \
-  --sysctl net.ipv4.conf.lo.rp_filter=0 \
-  --sysctl net.ipv4.conf.all.route_localnet=1 \
-  --sysctl net.ipv4.conf.default.route_localnet=1 \
-  --sysctl net.ipv4.conf.lo.route_localnet=1 \
-  --entrypoint sh "$IMG" -c '
-    echo "rp_filter:";      grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
-    echo "route_localnet:"; grep -H . /proc/sys/net/ipv4/conf/*/route_localnet
-  ' > /tmp/diag6.log 2>&1 || d6=$?
-echo "   diag6 exit: $d6 (0 = Docker accepted the full --sysctl set; want rp_filter=0 + route_localnet=1 on every iface)"
-cat /tmp/diag6.log || true
-
-# Drop the restart-looping container so it cannot keep flapping during later steps.
-docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
-
+# On failure, surface bounded crash-loop diagnostics that localize WHERE startup
+# died — every docker invocation is timeout-wrapped so this block can never hang
+# (a prior `timeout N su ...` diagnostic orphaned xray and hung the job 8+ min).
+# On success the healthy container is left running for the doctor assertions below.
 if [ "$up_rc" -ne 0 ]; then
-  echo "::error::ws proxy up failed (rc=$up_rc) — see container logs / direct run above"
+  IMG="${WS_PROXY_IMAGE:-devpod-proxy}"
+  echo "== proxy container state =="
+  docker ps -a --filter "name=${PROXY_CONTAINER}" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' || true
+  echo "== proxy container logs (bounded) =="
+  timeout 15 docker logs "${PROXY_CONTAINER}" 2>&1 | tail -40 \
+    || echo "(logs unavailable — container restarting; see bounded diagnostics below)"
+
+  echo "== diag 1: file capability on the xray binary (did the setcap xattr survive into the runtime image?) =="
+  timeout 30 docker run --rm --entrypoint getcap "$IMG" /usr/local/bin/xray 2>&1 | head -5 || true
+
+  echo "== diag 2: one-shot REAL entrypoint, mirroring 'ws proxy up' HostConfig, --rm + no restart, bounded 20s =="
+  echo "   (shows the exact line the entrypoint dies on: iptables / rp_filter / xray validate / xray exec)"
+  d2=0
+  timeout 20 docker run --rm \
+    --cap-add NET_ADMIN \
+    --sysctl net.ipv4.ip_forward=1 \
+    --sysctl net.ipv4.conf.all.rp_filter=0 \
+    --sysctl net.ipv4.conf.default.rp_filter=0 \
+    --sysctl net.ipv4.conf.lo.rp_filter=0 \
+    --sysctl net.ipv4.conf.all.route_localnet=1 \
+    --sysctl net.ipv4.conf.default.route_localnet=1 \
+    --sysctl net.ipv4.conf.lo.route_localnet=1 \
+    -v "$HOME/.config/xray:/etc/xray:ro" \
+    "$IMG" > /tmp/diag2.log 2>&1 || d2=$?
+  echo "   diag2 exit: $d2 (124 = stayed up past 20s = healthy startup; fast non-zero = startup abort)"
+  head -60 /tmp/diag2.log || true
+
+  echo "== diag 3: xray config validation as the 'xray' user (catches config schema drift) =="
+  timeout 30 docker run --rm --cap-add NET_ADMIN --user xray \
+    -v "$HOME/.config/xray:/etc/xray:ro" \
+    --entrypoint /usr/local/bin/xray "$IMG" run -test -c /etc/xray/config.json > /tmp/diag3.log 2>&1 || true
+  head -30 /tmp/diag3.log || true
+
+  echo "== diag 4: real xray run as 'xray' user, bounded 5s — isolates the IP_TRANSPARENT bind =="
+  echo "   (exit 124 = bound the tproxy socket and stayed up = caps OK; fast non-124 exit = bind/cap failure)"
+  d4=0
+  timeout 5 docker run --rm --cap-add NET_ADMIN --user xray \
+    -v "$HOME/.config/xray:/etc/xray:ro" \
+    --entrypoint /usr/local/bin/xray "$IMG" run -c /etc/xray/config.json > /tmp/diag4.log 2>&1 || d4=$?
+  echo "   diag4 exit: $d4 (124 = bind OK)"
+  head -40 /tmp/diag4.log || true
+
+  docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
+  echo "::error::ws proxy up failed (rc=$up_rc) — see bounded diagnostics above"
   exit 1
 fi
 

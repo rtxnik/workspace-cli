@@ -135,11 +135,21 @@ func ProxyUp(cfg config.Config) error {
 			// operator's home tree.
 			Binds:  []string{filepath.Dir(cfg.XrayConfig) + ":/etc/xray/:ro"},
 			CapAdd: []string{"NET_ADMIN"},
+			// /proc/sys is mounted read-only inside a default container (runc's
+			// default readonlyPaths), so the entrypoint cannot reliably write
+			// these at runtime — the runtime must supply them declaratively here.
+			// `lo` is created at netns init, BEFORE these are applied, so it does
+			// NOT inherit the `default` values and needs explicit `lo.*` entries;
+			// `eth0` is attached afterwards and inherits `default.*`. Effective
+			// rp_filter is max(conf.all, conf.<iface>), so every iface must be 0.
 			Sysctls: map[string]string{
-				"net.ipv4.ip_forward":              "1",
-				"net.ipv4.conf.all.rp_filter":      "0",
-				"net.ipv4.conf.default.rp_filter":  "0",
-				"net.ipv4.conf.all.route_localnet": "1",
+				"net.ipv4.ip_forward":                  "1",
+				"net.ipv4.conf.all.rp_filter":          "0",
+				"net.ipv4.conf.default.rp_filter":      "0",
+				"net.ipv4.conf.lo.rp_filter":           "0",
+				"net.ipv4.conf.all.route_localnet":     "1",
+				"net.ipv4.conf.default.route_localnet": "1",
+				"net.ipv4.conf.lo.route_localnet":      "1",
 			},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		},
