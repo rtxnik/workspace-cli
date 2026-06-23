@@ -161,6 +161,25 @@ timeout 30 docker run --rm --entrypoint sh "$IMG" -c '
     echo "route_localnet:"; grep -H . /proc/sys/net/ipv4/conf/*/route_localnet
   ' 2>&1 | head -20 || true
 
+echo "== diag 6: PROPOSED complete --sysctl set — does Docker accept per-iface lo.*, and are all values correct? =="
+echo "   (lo pre-exists --sysctl application so it needs explicit lo.* entries; eth0 inherits default.*)"
+d6=0
+timeout 30 docker run --rm \
+  --cap-add NET_ADMIN \
+  --sysctl net.ipv4.ip_forward=1 \
+  --sysctl net.ipv4.conf.all.rp_filter=0 \
+  --sysctl net.ipv4.conf.default.rp_filter=0 \
+  --sysctl net.ipv4.conf.lo.rp_filter=0 \
+  --sysctl net.ipv4.conf.all.route_localnet=1 \
+  --sysctl net.ipv4.conf.default.route_localnet=1 \
+  --sysctl net.ipv4.conf.lo.route_localnet=1 \
+  --entrypoint sh "$IMG" -c '
+    echo "rp_filter:";      grep -H . /proc/sys/net/ipv4/conf/*/rp_filter
+    echo "route_localnet:"; grep -H . /proc/sys/net/ipv4/conf/*/route_localnet
+  ' > /tmp/diag6.log 2>&1 || d6=$?
+echo "   diag6 exit: $d6 (0 = Docker accepted the full --sysctl set; want rp_filter=0 + route_localnet=1 on every iface)"
+cat /tmp/diag6.log || true
+
 # Drop the restart-looping container so it cannot keep flapping during later steps.
 docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 
