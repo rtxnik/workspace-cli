@@ -203,10 +203,11 @@ var proxyRebuildCmd = &cobra.Command{
 		if !force {
 			warnProxyConnected(cfg)
 		}
+		allowDrift, _ := cmd.Flags().GetBool("allow-drift")
 
 		runner := output.NewStepRunner(
 			output.Step{Name: "Building proxy image", Fn: func() error {
-				return docker.BuildProxyImage(cfg, "")
+				return docker.BuildProxyImage(cfg, "", allowDrift)
 			}},
 			output.Step{Name: "Recreating container", Fn: func() error {
 				st, _ := docker.ProxyStatus(cfg)
@@ -329,7 +330,7 @@ var proxyUpdateCmd = &cobra.Command{
 		}
 
 		if err := output.RunWithSpinner(fmt.Sprintf("Building proxy image with xray-core %s", version), func() error {
-			return docker.BuildProxyImage(cfg, version)
+			return docker.BuildProxyImage(cfg, version, false)
 		}); err != nil {
 			output.Die(err.Error())
 		}
@@ -448,6 +449,7 @@ func init() {
 	proxyInitCmd.Flags().Bool("add", false, "Add node to existing config instead of creating new")
 	proxyDownCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 	proxyRebuildCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
+	proxyRebuildCmd.Flags().Bool("allow-drift", false, "Build even if the proxy recipe differs from the pinned known-good recipe")
 	proxyCmd.AddCommand(proxyUpCmd)
 	proxyCmd.AddCommand(proxyDownCmd)
 	proxyCmd.AddCommand(proxyStatusCmd)

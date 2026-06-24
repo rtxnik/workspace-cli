@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/proxyrecipe"
 )
 
 // Timeouts for Docker operations.
@@ -275,7 +276,7 @@ func ProxyRebuild(cfg config.Config) error {
 	st, _ := ProxyStatus(cfg)
 	wasRunning := st.Running
 
-	if err := BuildProxyImage(cfg, ""); err != nil {
+	if err := BuildProxyImage(cfg, "", false); err != nil {
 		return err
 	}
 
@@ -329,15 +330,44 @@ func proxyRecreate(cfg config.Config) error {
 	return ProxyUp(cfg)
 }
 
-// BuildProxyImage builds the proxy Docker image. If version is non-empty,
-// it's passed as a build arg to override the default xray-core version.
-func BuildProxyImage(cfg config.Config, version string) error {
-	proxyDir := filepath.Join(cfg.ProfilesDir, "proxy")
-	args := []string{"build", "-t", cfg.ProxyImage}
+// buildProxyArgs assembles the `docker build` arguments, gating on the recipe
+// verification result. On drift without allowDrift it returns an error; with
+// allowDrift it stamps the datapath label "unverified" so the doctor still flags
+// the build rather than trusting it.
+func buildProxyArgs(cfg config.Config, version string, res proxyrecipe.Result, allowDrift bool) ([]string, error) {
+	datapath := res.Mode
+	if !res.OK {
+		if !allowDrift {
+			return nil, fmt.Errorf("proxy recipe drift: %s. Run 'chezmoi apply' to restore the canonical recipe, or rebuild intentionally with 'ws proxy rebuild --allow-drift'", res.DriftSummary())
+		}
+		datapath = "unverified"
+	}
+
+	args := []string{
+		"build", "-t", cfg.ProxyImage,
+		"--label", LabelDatapath + "=" + datapath,
+		"--label", LabelRecipe + "=" + res.CombinedDigest,
+	}
 	if version != "" {
 		args = append(args, "--build-arg", "XRAY_VERSION="+version)
 	}
-	args = append(args, proxyDir)
+	args = append(args, filepath.Join(cfg.ProfilesDir, "proxy"))
+	return args, nil
+}
+
+// BuildProxyImage builds the proxy Docker image. It first verifies the on-disk
+// recipe against the embedded content pin (C5): a drifted recipe is refused
+// unless allowDrift is set (in which case the image is stamped "unverified").
+// If version is non-empty it is passed as the XRAY_VERSION build arg.
+func BuildProxyImage(cfg config.Config, version string, allowDrift bool) error {
+	res, err := proxyrecipe.Verify(cfg.ProfilesDir)
+	if err != nil {
+		return fmt.Errorf("verify proxy recipe: %w", err)
+	}
+	args, err := buildProxyArgs(cfg, version, res, allowDrift)
+	if err != nil {
+		return err
+	}
 
 	cmd := exec.Command("docker", args...)
 	cmd.Stdout = os.Stdout
