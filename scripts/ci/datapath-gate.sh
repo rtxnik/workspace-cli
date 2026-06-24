@@ -271,8 +271,13 @@ else
   cat /tmp/doctor_dead.json
   echo "-- asserting: doctor RED, first failure earlier than self-egress --"
   dead_ok="$(jq -r '.ok' /tmp/doctor_dead.json)"
-  dead_fail="$(jq -r '.checks[.failedAt].name' /tmp/doctor_dead.json)"
-  if [ "$dead_ok" != "false" ] || [ "$dead_fail" = "self-egress (proxy tunnel exit-IP)" ]; then
+  dead_fail="$(jq -r '.checks[.failedAt].name // ""' /tmp/doctor_dead.json)"
+  # Fail the gate unless the doctor went RED (.ok==false) AND named a concrete
+  # first-failure check that is EARLIER than the normal freedom self-egress
+  # failure. An empty/null first-failure (unexpected schema) is treated as a
+  # failure, not a false-green.
+  if [ "$dead_ok" != "false" ] || [ -z "$dead_fail" ] || [ "$dead_fail" = "null" ] \
+     || [ "$dead_fail" = "self-egress (proxy tunnel exit-IP)" ]; then
     echo "::error::after killing xray the doctor did not fail before the self-egress check (ok=${dead_ok} firstFailure='${dead_fail}') — a killed datapath must not be masked (T13 regression)"
     exit 1
   fi
