@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
@@ -88,7 +89,7 @@ func upgradeProfile(path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("marshal: %w", err)
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := fsutil.WriteFile(path, out, 0o600); err != nil {
 		return false, fmt.Errorf("write: %w", err)
 	}
 	return true, nil

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 )
 
 // XrayConfig represents a full xray configuration.
@@ -136,5 +138,5 @@ func writeConfig(path string, xray *XrayConfig) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0o600)
+	return fsutil.WriteFile(path, data, 0o600)
 }
