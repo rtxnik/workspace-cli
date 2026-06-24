@@ -70,7 +70,7 @@ jobs:
       # SHA or a branch/tag name — a short SHA is treated as a branch pattern and
       # fails to resolve. OWNER ACTION: after the dotfiles PR merges, repoint this
       # to the merged main commit SHA (and the branch may be deleted).
-      DOTFILES_REF: "e01229d1fd1e29eb06948a11bbf3aa34eaad2b50"
+      DOTFILES_REF: "14d969cd86242e06096727a419aaa883776843a2"
       # WS_TEST_URI drives strict mode (real profile + exit-IP assertion).
       # If the WS_TEST_ENDPOINT secret is unset the gate runs in flow-only mode
       # (TPROXY preconditions + forwarding leg asserted; exit-IP comparison skipped).
