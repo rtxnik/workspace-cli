@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -425,6 +426,44 @@ func ensureProxyNetwork(cli DockerClient, ctx context.Context, cfg config.Config
 func imageExists(ctx context.Context, cli DockerClient, image string) bool {
 	_, _, err := cli.ImageInspectWithRaw(ctx, image)
 	return err == nil
+}
+
+// Image LABEL keys stamped by BuildProxyImage and read by the datapath-contract
+// doctor check (C5).
+const (
+	LabelDatapath = "ws.proxy.datapath"
+	LabelRecipe   = "ws.proxy.recipe"
+)
+
+// ImageLabels returns the LABELs of cfg.ProxyImage. It parses the raw inspect
+// JSON (.Config.Labels) rather than the typed struct so it is independent of
+// docker SDK version churn in the ImageInspect type.
+func ImageLabels(cfg config.Config) (map[string]string, error) {
+	cli, err := newClientFunc()
+	if err != nil {
+		return nil, fmt.Errorf("docker client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
+	defer cancel()
+
+	_, raw, err := cli.ImageInspectWithRaw(ctx, cfg.ProxyImage)
+	if err != nil {
+		return nil, fmt.Errorf("inspect image %q: %w", cfg.ProxyImage, err)
+	}
+	var parsed struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("parse image inspect for %q: %w", cfg.ProxyImage, err)
+	}
+	if parsed.Config.Labels == nil {
+		return map[string]string{}, nil
+	}
+	return parsed.Config.Labels, nil
 }
 
 // WaitForHealth polls the container health status until healthy or timeout.
