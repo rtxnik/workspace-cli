@@ -236,6 +236,11 @@ echo "self-UDP capture probe passed (the proxy's own UDP egress is marked into t
 # T13: kill xray inside the container; doctor must detect dead socket
 # ---------------------------------------------------------------------------
 echo "== T13: killing xray inside proxy container =="
+# xray is the container's PID 1 (the entrypoint execs it), so killing it makes the
+# container exit. Disable the restart policy FIRST so it does NOT self-heal
+# (RestartPolicy=unless-stopped) during the probe window — otherwise the doctor
+# races a restarting container and the kill is masked (health=starting).
+docker update --restart=no "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 docker exec "${PROXY_CONTAINER}" sh -c 'kill -9 $(pidof xray) 2>/dev/null || true'
 sleep 2
 
@@ -250,23 +255,25 @@ if [ -n "${WS_TEST_URI:-}" ]; then
   echo "T13 passed: doctor correctly exited non-zero after xray was killed"
   cat /tmp/doctor_dead.json
 else
-  # Flow-only mode: assert tproxy preconditions check now .ok == false
-  # (xray dead → no LISTEN / no CapEff → preconditions must flip RED).
-  echo "== T13 (flow-only): tproxy preconditions must be RED with dead xray =="
+  # Flow-only mode: after the kill the container is stopped (restart disabled
+  # above), so the doctor's fail-fast halts at "proxy container running and
+  # healthy" (container not running) BEFORE it reaches "tproxy preconditions".
+  # Either of those two datapath-liveness checks failing proves the doctor
+  # detects the killed datapath; the regression we guard against is the doctor
+  # staying GREEN and masking it.
+  echo "== T13 (flow-only): doctor must go RED at a datapath-liveness check with dead xray =="
   rc13=0
   "$WS" proxy doctor --json > /tmp/doctor_dead.json 2>&1 || rc13=$?
   echo "doctor exited ${rc13} (non-zero expected):"
   cat /tmp/doctor_dead.json
-  echo "-- asserting: tproxy preconditions check .ok == false --"
-  if ! jq -e '
-    .checks[]
-    | select(.name == "tproxy preconditions")
-    | .ok == false
-  ' /tmp/doctor_dead.json > /dev/null; then
-    echo "::error::tproxy preconditions check stayed GREEN after xray was killed — doctor does not detect dead socket (T13 regression)"
+  echo "-- asserting: doctor RED at a datapath-liveness check --"
+  dead_ok="$(jq -r '.ok' /tmp/doctor_dead.json)"
+  dead_fail="$(jq -r '.checks[.failedAt].name' /tmp/doctor_dead.json)"
+  if [ "$dead_ok" != "false" ] || { [ "$dead_fail" != "proxy container running and healthy" ] && [ "$dead_fail" != "tproxy preconditions" ]; }; then
+    echo "::error::after killing xray the doctor did not go RED at a datapath-liveness check (ok=${dead_ok} firstFailure='${dead_fail}') — a killed datapath must not be masked (T13 regression)"
     exit 1
   fi
-  echo "T13 flow-only passed: tproxy preconditions correctly RED after xray killed"
+  echo "T13 flow-only passed: doctor went RED at '${dead_fail}' after xray killed"
 fi
 
 echo ""
