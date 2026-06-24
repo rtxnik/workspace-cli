@@ -81,6 +81,13 @@ func upgradeProfile(path string) (bool, error) {
 		return false, nil
 	}
 
+	// D4-06: the canonical inbound is fixed at port 12345 (the entrypoint TPROXY
+	// rule binds --on-port 12345). Normalizing a non-canonical port is correct,
+	// but must never be silent — a non-12345 port was never captured anyway.
+	if len(xc.Inbounds) > 0 && xc.Inbounds[0].Port != 0 && xc.Inbounds[0].Port != 12345 {
+		log.Printf("ws proxy upgrade-config: profile %s inbound port %d normalized to 12345 (required by the TPROXY datapath)",
+			filepath.Base(path), xc.Inbounds[0].Port)
+	}
 	// Build canonical inbounds and splice them in, keeping outbounds + routing.
 	canonical := xrayconf.AssembleConfig(proxy)
 	xc.Inbounds = canonical.Inbounds

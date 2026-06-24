@@ -1,9 +1,12 @@
 package xray
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
@@ -147,5 +150,77 @@ func TestUpgradeInboundsNoProxyOutbound(t *testing.T) {
 	}
 	if changed != 0 {
 		t.Errorf("changed = %d, want 0", changed)
+	}
+}
+
+func TestUpgradeInboundsWarnsOnNonCanonicalPort(t *testing.T) {
+	cfg, profilesDir := mkUpgradeTestCfg(t)
+
+	proxy := xrayconf.Outbound{
+		Tag:      "proxy-1",
+		Protocol: "vless",
+		Settings: json.RawMessage(`{"vnext":[{"address":"example.com","port":443,"users":[{"id":"uid-9"}]}]}`),
+	}
+	xc := xrayconf.AssembleConfig(proxy)
+	xc.Inbounds[0].StreamSettings = nil // legacy: triggers an upgrade
+	xc.Inbounds[0].Port = 9999          // non-canonical port
+	data, err := json.MarshalIndent(xc, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profilesDir, "primary.json"), data, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	changed, err := UpgradeProfileInbounds(cfg)
+	if err != nil {
+		t.Fatalf("UpgradeProfileInbounds: %v", err)
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want 1", changed)
+	}
+	if !strings.Contains(buf.String(), "normalized to 12345") || !strings.Contains(buf.String(), "9999") {
+		t.Errorf("missing port-normalization warning; log = %q", buf.String())
+	}
+
+	// The upgraded profile must be canonical: port 12345.
+	gotData, _ := os.ReadFile(filepath.Join(profilesDir, "primary.json"))
+	var got xrayconf.XrayConfig
+	if err := json.Unmarshal(gotData, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Inbounds) == 0 || got.Inbounds[0].Port != 12345 {
+		t.Errorf("inbound port = %v, want 12345", got.Inbounds)
+	}
+}
+
+func TestUpgradeInboundsNoWarnOnCanonicalPort(t *testing.T) {
+	cfg, profilesDir := mkUpgradeTestCfg(t)
+
+	proxy := xrayconf.Outbound{
+		Tag:      "proxy-1",
+		Protocol: "vless",
+		Settings: json.RawMessage(`{"vnext":[{"address":"example.com","port":443,"users":[{"id":"uid-8"}]}]}`),
+	}
+	xc := xrayconf.AssembleConfig(proxy)
+	xc.Inbounds[0].StreamSettings = nil // legacy: triggers an upgrade, port already 12345
+	data, _ := json.MarshalIndent(xc, "", "  ")
+	if err := os.WriteFile(filepath.Join(profilesDir, "primary.json"), data, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	if _, err := UpgradeProfileInbounds(cfg); err != nil {
+		t.Fatalf("UpgradeProfileInbounds: %v", err)
+	}
+	if strings.Contains(buf.String(), "normalized to 12345") {
+		t.Errorf("unexpected normalization warning for canonical port; log = %q", buf.String())
 	}
 }
