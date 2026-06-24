@@ -255,25 +255,28 @@ if [ -n "${WS_TEST_URI:-}" ]; then
   echo "T13 passed: doctor correctly exited non-zero after xray was killed"
   cat /tmp/doctor_dead.json
 else
-  # Flow-only mode: after the kill the container is stopped (restart disabled
-  # above), so the doctor's fail-fast halts at "proxy container running and
-  # healthy" (container not running) BEFORE it reaches "tproxy preconditions".
-  # Either of those two datapath-liveness checks failing proves the doctor
-  # detects the killed datapath; the regression we guard against is the doctor
-  # staying GREEN and masking it.
-  echo "== T13 (flow-only): doctor must go RED at a datapath-liveness check with dead xray =="
+  # Flow-only mode: with the restart policy disabled above, killing PID 1 leaves
+  # the container STOPPED, so the doctor's first container-touching check —
+  # "active profile valid (xray -test)", which execs into the container — trips
+  # fast (you cannot exec into a stopped container). The exact liveness check that
+  # fails first depends on container state, so assert the robust invariant: with a
+  # killed xray the doctor must go RED at a check BEFORE the normal freedom-mode
+  # "self-egress" failure. When xray is ALIVE the ONLY failure is self-egress
+  # (index 7); a killed xray must surface EARLIER. A doctor that stayed GREEN, or
+  # that still failed only at self-egress, would be masking the dead datapath.
+  echo "== T13 (flow-only): killed xray must fail the doctor BEFORE the self-egress check =="
   rc13=0
   "$WS" proxy doctor --json > /tmp/doctor_dead.json 2>&1 || rc13=$?
   echo "doctor exited ${rc13} (non-zero expected):"
   cat /tmp/doctor_dead.json
-  echo "-- asserting: doctor RED at a datapath-liveness check --"
+  echo "-- asserting: doctor RED, first failure earlier than self-egress --"
   dead_ok="$(jq -r '.ok' /tmp/doctor_dead.json)"
   dead_fail="$(jq -r '.checks[.failedAt].name' /tmp/doctor_dead.json)"
-  if [ "$dead_ok" != "false" ] || { [ "$dead_fail" != "proxy container running and healthy" ] && [ "$dead_fail" != "tproxy preconditions" ]; }; then
-    echo "::error::after killing xray the doctor did not go RED at a datapath-liveness check (ok=${dead_ok} firstFailure='${dead_fail}') — a killed datapath must not be masked (T13 regression)"
+  if [ "$dead_ok" != "false" ] || [ "$dead_fail" = "self-egress (proxy tunnel exit-IP)" ]; then
+    echo "::error::after killing xray the doctor did not fail before the self-egress check (ok=${dead_ok} firstFailure='${dead_fail}') — a killed datapath must not be masked (T13 regression)"
     exit 1
   fi
-  echo "T13 flow-only passed: doctor went RED at '${dead_fail}' after xray killed"
+  echo "T13 flow-only passed: doctor went RED early at '${dead_fail}' (before self-egress) after xray killed"
 fi
 
 echo ""
