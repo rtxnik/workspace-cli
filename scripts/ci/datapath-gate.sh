@@ -53,8 +53,16 @@ if [ -z "${WS_TEST_URI:-}" ]; then
   # overall doctor green — it asserts the tproxy preconditions check
   # specifically, and confirms doctor's first failure is the expected
   # self-egress check (proving all earlier precondition checks passed).
-  mkdir -p "$HOME/.config/xray"
-  cat > "$HOME/.config/xray/config.json" <<'XRAY_EOF'
+  # Provision the freedom config as a NAMED PROFILE exactly the way
+  # `ws proxy init` lays it out: profiles/freedom.json + a RELATIVE symlink
+  # config.json -> profiles/freedom.json. The doctor's "active profile valid"
+  # check (checkActiveProfileValid -> ReadActiveProfileName) requires
+  # cfg.XrayConfig to be a symlink into profiles/ — a plain config.json regular
+  # file fails that check at index 2, BEFORE the self-egress check (index 7)
+  # this gate asserts on. The relative symlink resolves both on the host (the
+  # doctor) and inside the container's whole-directory /etc/xray/ bind mount.
+  mkdir -p "$HOME/.config/xray/profiles"
+  cat > "$HOME/.config/xray/profiles/freedom.json" <<'XRAY_EOF'
 {
   "inbounds": [
     {
@@ -69,6 +77,7 @@ if [ -z "${WS_TEST_URI:-}" ]; then
   ]
 }
 XRAY_EOF
+  ln -sf profiles/freedom.json "$HOME/.config/xray/config.json"
 else
   echo "== strict mode: provisioning profile from WS_TEST_URI =="
   # ws proxy init <uri> parses VLESS or Hysteria2 URIs and writes
