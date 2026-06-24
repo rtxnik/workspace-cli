@@ -20,6 +20,29 @@ archives:
 checksum:
   name_template: checksums.txt
 
+signs:
+  - id: minisign
+    cmd: minisign
+    # Sign the checksum manifest only. checksums.txt already enumerates every
+    # archive's SHA-256, so one signature transitively authenticates all
+    # artifacts. Default (prehashed) format — do NOT add -l.
+    args:
+      - "-S"
+      - "-s"
+      - "{{ .Env.MINISIGN_SECRET_KEY_FILE }}"
+      - "-m"
+      - "${artifact}"
+      - "-x"
+      - "${signature}"
+    signature: "${artifact}.minisig"
+    artifacts: checksum
+    # minisign reads the secret-key password from stdin when stdin is not a TTY.
+    stdin: "{{ .Env.MINISIGN_PASSWORD }}"
+
+sboms:
+  - id: archive
+    artifacts: archive
+
 changelog:
   sort: asc
   filters:
