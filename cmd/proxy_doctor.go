@@ -143,6 +143,7 @@ func proxyDoctorChecks(cfg config.Config, eng proxyengine.Engine) []Check {
 		{Name: "docker reachable", Run: func() CheckOutcome { return checkDockerReachable(cfg) }},
 		{Name: "proxy image present", Run: func() CheckOutcome { return checkImagePresent(cfg) }},
 		{Name: "active profile valid (xray -test)", Run: func() CheckOutcome { return checkActiveProfileValid(cfg, eng) }},
+		{Name: "datapath contract (image ↔ profile)", Run: func() CheckOutcome { return checkDatapathContract(cfg) }},
 		{Name: "proxy container running and healthy", Run: func() CheckOutcome { return checkContainerHealthy(cfg) }},
 		{Name: "tproxy preconditions", Run: func() CheckOutcome { return checkTproxyPreconditions(cfg) }},
 		{Name: "ws-proxy network + subnet", Run: func() CheckOutcome { return checkNetworkSubnet(cfg) }},
@@ -421,6 +422,68 @@ func vlessProtocolSanity(dp xray.DetailedProfile) CheckOutcome {
 		detail += " shortId set"
 	}
 	return CheckOutcome{OK: true, Detail: detail}
+}
+
+// activeProfileDatapathMode derives the active profile's datapath mode from its
+// inbound sockopt.tproxy: "tproxy" when present, "redirect" otherwise. This is
+// the same signal checkInboundTproxy inspects.
+func activeProfileDatapathMode(cfg config.Config) (string, error) {
+	name, err := xray.ReadActiveProfileName(cfg)
+	if err != nil || name == "" {
+		return "", fmt.Errorf("no active profile")
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.XrayProfilesDir, name+".json"))
+	if err != nil {
+		return "", fmt.Errorf("read active profile %q: %w", name, err)
+	}
+	var xc xrayconf.XrayConfig
+	if err := json.Unmarshal(data, &xc); err != nil {
+		return "", fmt.Errorf("parse active profile %q: %w", name, err)
+	}
+	if len(xc.Inbounds) > 0 &&
+		xc.Inbounds[0].StreamSettings != nil &&
+		xc.Inbounds[0].StreamSettings.Sockopt != nil &&
+		xc.Inbounds[0].StreamSettings.Sockopt.Tproxy == "tproxy" {
+		return "tproxy", nil
+	}
+	return "redirect", nil
+}
+
+// datapathContractVerdict HARD-fails when the proxy image's datapath LABEL is
+// absent (built by an old/unverified ws) or disagrees with the active profile's
+// mode (the C5 / audit-T12 black-hole: e.g. a redirect image under a tproxy
+// profile). Pure so it is unit-testable without docker.
+func datapathContractVerdict(labels map[string]string, profileMode string) CheckOutcome {
+	imgMode := labels[docker.LabelDatapath]
+	if imgMode == "" {
+		return CheckOutcome{
+			OK:     false,
+			Detail: "proxy image has no " + docker.LabelDatapath + " label (built by an old or unverified ws)",
+			Fix:    "Rebuild with a current ws: ws proxy rebuild",
+		}
+	}
+	if imgMode != profileMode {
+		return CheckOutcome{
+			OK:     false,
+			Detail: fmt.Sprintf("image datapath=%q but active profile mode=%q (black-hole risk)", imgMode, profileMode),
+			Fix:    "Realign image and profile: ws proxy rebuild  (and, if the profile is stale, ws proxy upgrade-config)",
+		}
+	}
+	return CheckOutcome{OK: true, Detail: fmt.Sprintf("image datapath=%q matches active profile", imgMode)}
+}
+
+// checkDatapathContract: HARD. Compares the running proxy image's datapath LABEL
+// against the active profile's derived mode. Closes the silent half-desync (C5).
+func checkDatapathContract(cfg config.Config) CheckOutcome {
+	labels, err := docker.ImageLabels(cfg)
+	if err != nil {
+		return CheckOutcome{OK: false, Fix: "Could not inspect proxy image labels: " + err.Error() + ". Rebuild: ws proxy rebuild"}
+	}
+	mode, err := activeProfileDatapathMode(cfg)
+	if err != nil {
+		return CheckOutcome{OK: false, Detail: err.Error(), Fix: "Could not determine the active profile's datapath mode."}
+	}
+	return datapathContractVerdict(labels, mode)
 }
 
 // checkInboundTproxy is a SOFT advisory check: it warns when the active profile's
