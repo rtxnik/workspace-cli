@@ -220,8 +220,10 @@ docker exec "${PROXY_CONTAINER}" iptables -t mangle -Z XRAY_SELF \
 # The MARK happens during OUTPUT traversal, so external reachability is irrelevant.
 docker exec "${PROXY_CONTAINER}" bash -c 'echo -n x > /dev/udp/8.8.8.8/53' || true
 # Read the udp MARK rule's packet counter (col 1 = pkts) from the chain.
+# `iptables -L -v -x -n` on the nft backend (ubuntu-latest) renders the protocol
+# column NUMERICALLY (17 = udp, 6 = tcp), not as a name — so match both forms.
 udp_pkts="$(docker exec "${PROXY_CONTAINER}" iptables -t mangle -L XRAY_SELF -v -x -n \
-  | awk '$3 == "MARK" && $4 == "udp" { print $1; exit }')"
+  | awk '$3 == "MARK" && ($4 == "udp" || $4 == "17") { print $1; exit }')"
 echo "XRAY_SELF udp MARK rule matched ${udp_pkts:-0} packet(s)"
 if [ -z "${udp_pkts:-}" ] || [ "${udp_pkts:-0}" -lt 1 ]; then
   echo "::error::self-UDP egress was NOT marked by mangle XRAY_SELF — UDP self-egress leaks around the tunnel (TCP-only REDIRECT regression)"
