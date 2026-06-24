@@ -56,11 +56,15 @@ func MigrateLegacy(cfg config.Config) (bool, error) {
 		return false, fmt.Errorf("lstat %s: %w", primaryPath, err)
 	}
 
+	// D5-03: tighten to 0600 BEFORE the move so the file never sits at the new
+	// path with looser source permissions. Same inode — it arrives at
+	// primaryPath already 0600. If a later step fails, the legacy file is left
+	// at 0600 (tighter = safe, never a leak).
+	if err := os.Chmod(cfg.XrayConfig, 0o600); err != nil {
+		return false, fmt.Errorf("chmod %s: %w", cfg.XrayConfig, err)
+	}
 	if err := os.Rename(cfg.XrayConfig, primaryPath); err != nil {
 		return false, fmt.Errorf("rename %s -> %s: %w", cfg.XrayConfig, primaryPath, err)
-	}
-	if err := os.Chmod(primaryPath, 0o600); err != nil {
-		return false, fmt.Errorf("chmod %s: %w", primaryPath, err)
 	}
 
 	// Relative symlink target (NOT absolute) so the link survives chezmoi apply
