@@ -196,6 +196,10 @@ func TestParseInputAcceptsMark(t *testing.T) {
 	if parseInputAcceptsMark("-A INPUT -m mark --mark 0x2 -j ACCEPT\n", 1) {
 		t.Error("a different mark must not match")
 	}
+	// A mark-accept on a DIFFERENT chain must not satisfy the INPUT parser.
+	if parseInputAcceptsMark("-A FORWARD -m mark --mark 0x1 -j ACCEPT\n", 1) {
+		t.Error("a mark-accept on FORWARD must not count as an INPUT accept")
+	}
 }
 
 func TestParseXraySelfMarksUDP(t *testing.T) {
@@ -206,5 +210,9 @@ func TestParseXraySelfMarksUDP(t *testing.T) {
 	}
 	if parseXraySelfMarksUDP("-A XRAY_SELF -p tcp -j MARK --set-xmark 0x1/0xffffffff\n") {
 		t.Error("tcp-only chain must fail (udp self-egress would leak)")
+	}
+	// Absent chain (iptables error text) must return false, not panic.
+	if parseXraySelfMarksUDP("iptables: No chain/target/match by that name.\n") {
+		t.Error("absent chain must fail")
 	}
 }
