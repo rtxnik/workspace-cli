@@ -196,6 +196,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Self-UDP capture probe: the proxy's OWN UDP egress must be MARKed by the
+# mangle XRAY_SELF chain (the old nat REDIRECT was TCP-only → UDP self-egress
+# leaked around the tunnel). Capture-only: we assert the UDP MARK rule's packet
+# counter increments when the container (as root, NOT uid xray) emits one
+# datagram to a PUBLIC dst — NOT a full round-trip (freedom has no UDP echo).
+# ---------------------------------------------------------------------------
+echo "== self-UDP capture probe: XRAY_SELF must MARK the proxy's own UDP egress =="
+# Zero the chain counters for a deterministic reading.
+docker exec "${PROXY_CONTAINER}" iptables -t mangle -Z XRAY_SELF
+# Emit exactly one locally-originated UDP datagram to a PUBLIC ip:port. bash ships
+# in ubuntu:24.04; /dev/udp opens the socket and the write sends one datagram.
+# The MARK happens during OUTPUT traversal, so external reachability is irrelevant.
+docker exec "${PROXY_CONTAINER}" bash -c 'echo -n x > /dev/udp/8.8.8.8/53' || true
+# Read the udp MARK rule's packet counter (col 1 = pkts) from the chain.
+udp_pkts="$(docker exec "${PROXY_CONTAINER}" iptables -t mangle -L XRAY_SELF -v -x -n \
+  | awk '$3 == "MARK" && $4 == "udp" { print $1; exit }')"
+echo "XRAY_SELF udp MARK rule matched ${udp_pkts:-0} packet(s)"
+if [ -z "${udp_pkts:-}" ] || [ "${udp_pkts:-0}" -lt 1 ]; then
+  echo "::error::self-UDP egress was NOT marked by mangle XRAY_SELF — UDP self-egress leaks around the tunnel (TCP-only REDIRECT regression)"
+  docker exec "${PROXY_CONTAINER}" iptables -t mangle -L XRAY_SELF -v -x -n || true
+  exit 1
+fi
+echo "self-UDP capture probe passed (the proxy's own UDP egress is marked into the tunnel)"
+
+# ---------------------------------------------------------------------------
 # T13: kill xray inside the container; doctor must detect dead socket
 # ---------------------------------------------------------------------------
 echo "== T13: killing xray inside proxy container =="
