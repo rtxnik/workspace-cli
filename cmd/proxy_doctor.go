@@ -323,7 +323,7 @@ func checkTproxyPreconditions(cfg config.Config) CheckOutcome {
 			}
 		}
 	}
-	return CheckOutcome{OK: true, Detail: "cap/rp_filter/listen/mangle/fwmark all present"}
+	return CheckOutcome{OK: true, Detail: "cap/rp_filter/listen/mangle/fwmark/self-egress-contour all present"}
 }
 
 // checkForwardingEgress proves dev-container traffic traverses the TPROXY

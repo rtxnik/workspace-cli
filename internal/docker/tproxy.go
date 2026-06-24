@@ -282,5 +282,31 @@ func TproxyPreconditions(cfg config.Config) []Precondition {
 		Detail: fmt.Sprintf("ip rule must route fwmark %d to the local table", tproxyMark),
 	})
 
+	// P6: self-egress loop guard is the FIRST rule of the mangle XRAY_SELF chain
+	// (mis-order → infinite loop / bypass). `xs` is reused by P8.
+	xs, _ := ProxyExec(cfg, "iptables", "-t", "mangle", "-S", "XRAY_SELF")
+	out = append(out, Precondition{
+		Name:   "self-egress loop guard first",
+		OK:     parseXraySelfLoopGuardFirst(string(xs)),
+		Detail: "mangle XRAY_SELF rule #1 must be -m owner --uid-owner xray -j RETURN",
+	})
+
+	// P7: INPUT accepts the looped-back self packets (else a default-DROP INPUT
+	// silently eats them — XTLS discussion #4039).
+	inp, _ := ProxyExec(cfg, "iptables", "-S", "INPUT")
+	out = append(out, Precondition{
+		Name:   "INPUT accepts self mark",
+		OK:     parseInputAcceptsMark(string(inp), tproxyMark),
+		Detail: fmt.Sprintf("INPUT must ACCEPT -m mark --mark %d (policy-routed self packets)", tproxyMark),
+	})
+
+	// P8: XRAY_SELF marks UDP too (the old REDIRECT was nat/TCP-only, so the
+	// proxy's own UDP/QUIC self-egress leaked around the tunnel).
+	out = append(out, Precondition{
+		Name:   "self-egress captures UDP",
+		OK:     parseXraySelfMarksUDP(string(xs)),
+		Detail: "mangle XRAY_SELF must MARK -p udp so the proxy's own UDP/QUIC egress is tunnelled",
+	})
+
 	return out
 }
