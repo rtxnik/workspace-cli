@@ -1,6 +1,11 @@
 package cmd
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/proxyengine"
+)
 
 // TestDoctorStopsAtFirstFailure proves the runner is fail-fast: it stops at the
 // first failing HARD check, records its index in FailedAt, and never invokes any
@@ -55,6 +60,33 @@ func TestDoctorSoftCheckDoesNotStop(t *testing.T) {
 	}
 	if !ran {
 		t.Fatal("check after a soft warn must still run")
+	}
+}
+
+// TestProxyDoctorChecks_IncludeTproxyRuntimeChecks asserts that the TPROXY
+// runtime checks (tproxy preconditions and forwarding datapath) are registered
+// in the ordered check list, at the correct positions relative to the container
+// health and self-egress checks.
+func TestProxyDoctorChecks_IncludeTproxyRuntimeChecks(t *testing.T) {
+	checks := proxyDoctorChecks(config.Config{}, proxyengine.Default())
+	var names []string
+	for _, c := range checks {
+		names = append(names, c.Name)
+	}
+	wantOrdered := []string{
+		"proxy container running and healthy",
+		"tproxy preconditions",
+		"self-egress (proxy tunnel exit-IP)",
+		"forwarding datapath (dev-container exit-IP)",
+	}
+	idx := 0
+	for _, n := range names {
+		if idx < len(wantOrdered) && n == wantOrdered[idx] {
+			idx++
+		}
+	}
+	if idx != len(wantOrdered) {
+		t.Errorf("checks missing or out of order.\n got: %v\nwant subsequence: %v", names, wantOrdered)
 	}
 }
 

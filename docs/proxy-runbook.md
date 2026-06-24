@@ -52,7 +52,7 @@ Runs the ordered, fail-fast diagnostic chain:
 4. proxy container running and healthy
 5. ws-proxy network + subnet
 6. dev-container default route via proxy
-7. real egress (tunnel exit-IP) — TCP
+7. self-egress (proxy tunnel exit-IP) — TCP
 8. protocol sanity
 9. inbound sockopt.tproxy (advisory)
 

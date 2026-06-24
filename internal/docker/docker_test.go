@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -710,6 +711,53 @@ func TestVerifyProxyReadyForReload_InspectError(t *testing.T) {
 }
 
 // --- BindMountIsWholeDir regression ---
+
+func TestProxyUp_HostConfigHasTproxySysctls(t *testing.T) {
+	// ProxyUp only reaches ContainerCreate when the image "exists" and the
+	// xray config file is present on disk.
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+
+	var gotHost *container.HostConfig
+	mock := &mockClient{
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil // image present
+		},
+		createFn: func(_ context.Context, _ *container.Config, host *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			gotHost = host
+			return container.CreateResponse{ID: "test-id"}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	if err := ProxyUp(cfg); err != nil {
+		t.Fatalf("ProxyUp: %v", err)
+	}
+	if gotHost == nil {
+		t.Fatal("ContainerCreate was not called")
+	}
+	want := map[string]string{
+		"net.ipv4.ip_forward":                  "1",
+		"net.ipv4.conf.all.rp_filter":          "0",
+		"net.ipv4.conf.default.rp_filter":      "0",
+		"net.ipv4.conf.lo.rp_filter":           "0",
+		"net.ipv4.conf.all.route_localnet":     "1",
+		"net.ipv4.conf.default.route_localnet": "1",
+		"net.ipv4.conf.lo.route_localnet":      "1",
+	}
+	for k, v := range want {
+		if got := gotHost.Sysctls[k]; got != v {
+			t.Errorf("Sysctls[%q] = %q, want %q", k, got, v)
+		}
+	}
+	if len(gotHost.CapAdd) != 1 || gotHost.CapAdd[0] != "NET_ADMIN" {
+		t.Errorf("CapAdd = %v, want [NET_ADMIN]", gotHost.CapAdd)
+	}
+}
 
 func TestBindMountIsWholeDir_StillWorks(t *testing.T) {
 	cfg := testCfg()

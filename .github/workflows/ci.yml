@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -33,9 +36,67 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.5"
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
+      - name: gofmt (changed Go files)
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ]; then base="${{ github.event.before }}"; fi
+          git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1 || base="$(git rev-parse origin/main 2>/dev/null || echo HEAD~1)"
+          mapfile -t files < <(git diff --name-only --diff-filter=d "$base" HEAD -- '*.go')
+          if [ "${#files[@]}" -gt 0 ]; then
+            drift=$(gofmt -l "${files[@]}")
+            if [ -n "$drift" ]; then
+              echo "::error::gofmt drift in changed files:"; echo "$drift"; exit 1
+            fi
+          fi
+
+  datapath:
+    runs-on: ubuntu-latest
+    # Hard ceiling: every docker command in the gate is also timeout-wrapped, but
+    # this guarantees the job can never hang the workflow (a prior diagnostic did).
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    env:
+      # Full commit SHA of dotfiles main after PR rtxnik/dotfiles#15 merged
+      # (the self-egress mangle-OUTPUT-MARK entrypoint). actions/checkout requires
+      # a full 40-char SHA or a branch/tag name — a short SHA is treated as a
+      # branch pattern and fails to resolve. Pin a SHA (not `main`) so the gate is
+      # reproducible; bump it when the proxy recipe changes again.
+      DOTFILES_REF: "38c4accb4c9c09f2d5f82510e898fd7d6bcde51f"
+      # WS_TEST_URI drives strict mode (real profile + exit-IP assertion).
+      # If the WS_TEST_ENDPOINT secret is unset the gate runs in flow-only mode
+      # (TPROXY preconditions + forwarding leg asserted; exit-IP comparison skipped).
+      WS_TEST_URI: ${{ secrets.WS_TEST_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+      - name: Preflight — load TPROXY kernel modules
+        run: |
+          sudo modprobe xt_TPROXY xt_socket || {
+            echo "::error::runner kernel lacks xt_TPROXY/xt_socket; datapath gate cannot run"
+            exit 1
+          }
+      - name: Checkout dotfiles proxy recipe (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: rtxnik/dotfiles
+          ref: ${{ env.DOTFILES_REF }}
+          path: _dotfiles
+      - name: Build ws
+        run: make build
+      - name: Stage proxy recipe where ws expects it
+        run: |
+          mkdir -p "$HOME/.config/workspaces/profiles"
+          cp -r _dotfiles/dot_config/workspaces/profiles/proxy "$HOME/.config/workspaces/profiles/proxy"
+      - name: Run red-line datapath gate (T2-T5 + T13)
+        run: sudo -E WS_BIN="$PWD/ws" bash scripts/ci/datapath-gate.sh

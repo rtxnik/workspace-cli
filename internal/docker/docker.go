@@ -20,9 +20,9 @@ import (
 
 // Timeouts for Docker operations.
 const (
-	timeoutRead    = 10 * time.Second
-	timeoutWrite   = 30 * time.Second
-	timeoutStop    = 15 * time.Second
+	timeoutRead  = 10 * time.Second
+	timeoutWrite = 30 * time.Second
+	timeoutStop  = 15 * time.Second
 )
 
 // Status holds proxy container status info.
@@ -133,9 +133,24 @@ func ProxyUp(cfg config.Config) error {
 			// because both files live under the bound directory. :ro because
 			// a vulnerability in xray must never write back into the
 			// operator's home tree.
-			Binds:         []string{filepath.Dir(cfg.XrayConfig) + ":/etc/xray/:ro"},
-			CapAdd:        []string{"NET_ADMIN"},
-			Sysctls:       map[string]string{"net.ipv4.ip_forward": "1"},
+			Binds:  []string{filepath.Dir(cfg.XrayConfig) + ":/etc/xray/:ro"},
+			CapAdd: []string{"NET_ADMIN"},
+			// /proc/sys is mounted read-only inside a default container (runc's
+			// default readonlyPaths), so the entrypoint cannot reliably write
+			// these at runtime — the runtime must supply them declaratively here.
+			// `lo` is created at netns init, BEFORE these are applied, so it does
+			// NOT inherit the `default` values and needs explicit `lo.*` entries;
+			// `eth0` is attached afterwards and inherits `default.*`. Effective
+			// rp_filter is max(conf.all, conf.<iface>), so every iface must be 0.
+			Sysctls: map[string]string{
+				"net.ipv4.ip_forward":                  "1",
+				"net.ipv4.conf.all.rp_filter":          "0",
+				"net.ipv4.conf.default.rp_filter":      "0",
+				"net.ipv4.conf.lo.rp_filter":           "0",
+				"net.ipv4.conf.all.route_localnet":     "1",
+				"net.ipv4.conf.default.route_localnet": "1",
+				"net.ipv4.conf.lo.route_localnet":      "1",
+			},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		},
 		&network.NetworkingConfig{
