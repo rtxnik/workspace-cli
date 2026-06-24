@@ -18,6 +18,20 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.5"
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+      - name: Install syft (for SBOMs)
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Write minisign secret key to a temp file
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          key_file="$(mktemp)"
+          printf '%s' "$MINISIGN_SECRET_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          echo "MINISIGN_SECRET_KEY_FILE=$key_file" >> "$GITHUB_ENV"
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -25,3 +39,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}

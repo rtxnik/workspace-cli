@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/proxyrecipe"
 )
 
 // Timeouts for Docker operations.
@@ -274,7 +276,7 @@ func ProxyRebuild(cfg config.Config) error {
 	st, _ := ProxyStatus(cfg)
 	wasRunning := st.Running
 
-	if err := BuildProxyImage(cfg, ""); err != nil {
+	if err := BuildProxyImage(cfg, "", false); err != nil {
 		return err
 	}
 
@@ -328,15 +330,44 @@ func proxyRecreate(cfg config.Config) error {
 	return ProxyUp(cfg)
 }
 
-// BuildProxyImage builds the proxy Docker image. If version is non-empty,
-// it's passed as a build arg to override the default xray-core version.
-func BuildProxyImage(cfg config.Config, version string) error {
-	proxyDir := filepath.Join(cfg.ProfilesDir, "proxy")
-	args := []string{"build", "-t", cfg.ProxyImage}
+// buildProxyArgs assembles the `docker build` arguments, gating on the recipe
+// verification result. On drift without allowDrift it returns an error; with
+// allowDrift it stamps the datapath label "unverified" so the doctor still flags
+// the build rather than trusting it.
+func buildProxyArgs(cfg config.Config, version string, res proxyrecipe.Result, allowDrift bool) ([]string, error) {
+	datapath := res.Mode
+	if !res.OK {
+		if !allowDrift {
+			return nil, fmt.Errorf("proxy recipe drift: %s. Run 'chezmoi apply' to restore the canonical recipe, or rebuild intentionally with 'ws proxy rebuild --allow-drift'", res.DriftSummary())
+		}
+		datapath = "unverified"
+	}
+
+	args := []string{
+		"build", "-t", cfg.ProxyImage,
+		"--label", LabelDatapath + "=" + datapath,
+		"--label", LabelRecipe + "=" + res.CombinedDigest,
+	}
 	if version != "" {
 		args = append(args, "--build-arg", "XRAY_VERSION="+version)
 	}
-	args = append(args, proxyDir)
+	args = append(args, filepath.Join(cfg.ProfilesDir, "proxy"))
+	return args, nil
+}
+
+// BuildProxyImage builds the proxy Docker image. It first verifies the on-disk
+// recipe against the embedded content pin (C5): a drifted recipe is refused
+// unless allowDrift is set (in which case the image is stamped "unverified").
+// If version is non-empty it is passed as the XRAY_VERSION build arg.
+func BuildProxyImage(cfg config.Config, version string, allowDrift bool) error {
+	res, err := proxyrecipe.Verify(cfg.ProfilesDir)
+	if err != nil {
+		return fmt.Errorf("verify proxy recipe: %w", err)
+	}
+	args, err := buildProxyArgs(cfg, version, res, allowDrift)
+	if err != nil {
+		return err
+	}
 
 	cmd := exec.Command("docker", args...)
 	cmd.Stdout = os.Stdout
@@ -425,6 +456,44 @@ func ensureProxyNetwork(cli DockerClient, ctx context.Context, cfg config.Config
 func imageExists(ctx context.Context, cli DockerClient, image string) bool {
 	_, _, err := cli.ImageInspectWithRaw(ctx, image)
 	return err == nil
+}
+
+// Image LABEL keys stamped by BuildProxyImage and read by the datapath-contract
+// doctor check (C5).
+const (
+	LabelDatapath = "ws.proxy.datapath"
+	LabelRecipe   = "ws.proxy.recipe"
+)
+
+// ImageLabels returns the LABELs of cfg.ProxyImage. It parses the raw inspect
+// JSON (.Config.Labels) rather than the typed struct so it is independent of
+// docker SDK version churn in the ImageInspect type.
+func ImageLabels(cfg config.Config) (map[string]string, error) {
+	cli, err := newClientFunc()
+	if err != nil {
+		return nil, fmt.Errorf("docker client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
+	defer cancel()
+
+	_, raw, err := cli.ImageInspectWithRaw(ctx, cfg.ProxyImage)
+	if err != nil {
+		return nil, fmt.Errorf("inspect image %q: %w", cfg.ProxyImage, err)
+	}
+	var parsed struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("parse image inspect for %q: %w", cfg.ProxyImage, err)
+	}
+	if parsed.Config.Labels == nil {
+		return map[string]string{}, nil
+	}
+	return parsed.Config.Labels, nil
 }
 
 // WaitForHealth polls the container health status until healthy or timeout.

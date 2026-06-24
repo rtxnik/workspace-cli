@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 )
 
@@ -87,6 +88,56 @@ func TestProxyDoctorChecks_IncludeTproxyRuntimeChecks(t *testing.T) {
 	}
 	if idx != len(wantOrdered) {
 		t.Errorf("checks missing or out of order.\n got: %v\nwant subsequence: %v", names, wantOrdered)
+	}
+}
+
+func TestDatapathContractVerdict(t *testing.T) {
+	cases := []struct {
+		name    string
+		labels  map[string]string
+		profile string
+		wantOK  bool
+	}{
+		{"match tproxy", map[string]string{docker.LabelDatapath: "tproxy"}, "tproxy", true},
+		{"match redirect", map[string]string{docker.LabelDatapath: "redirect"}, "redirect", true},
+		{"mismatch black-hole", map[string]string{docker.LabelDatapath: "redirect"}, "tproxy", false},
+		{"absent label fails closed", map[string]string{}, "tproxy", false},
+		{"unverified drift build fails", map[string]string{docker.LabelDatapath: "unverified"}, "tproxy", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := datapathContractVerdict(c.labels, c.profile)
+			if out.OK != c.wantOK {
+				t.Errorf("verdict OK = %v, want %v (detail=%q)", out.OK, c.wantOK, out.Detail)
+			}
+			if !out.OK && out.Fix == "" {
+				t.Error("a failing verdict must carry a Fix hint")
+			}
+		})
+	}
+}
+
+// The datapath-contract check is registered before the container-health check
+// (a wrong-datapath image makes downstream health/preconditions meaningless).
+func TestProxyDoctorChecks_IncludeDatapathContract(t *testing.T) {
+	checks := proxyDoctorChecks(config.Config{}, proxyengine.Default())
+	var names []string
+	for _, c := range checks {
+		names = append(names, c.Name)
+	}
+	wantOrdered := []string{
+		"active profile valid (xray -test)",
+		"datapath contract (image ↔ profile)",
+		"proxy container running and healthy",
+	}
+	idx := 0
+	for _, n := range names {
+		if idx < len(wantOrdered) && n == wantOrdered[idx] {
+			idx++
+		}
+	}
+	if idx != len(wantOrdered) {
+		t.Errorf("datapath-contract check missing or out of order.\n got: %v\nwant subsequence: %v", names, wantOrdered)
 	}
 }
 

@@ -100,3 +100,50 @@ jobs:
           cp -r _dotfiles/dot_config/workspaces/profiles/proxy "$HOME/.config/workspaces/profiles/proxy"
       - name: Run red-line datapath gate (T2-T5 + T13)
         run: sudo -E WS_BIN="$PWD/ws" bash scripts/ci/datapath-gate.sh
+
+  snapshot-gate:
+    name: Release snapshot + signature/SBOM gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Generate ephemeral minisign key
+        run: |
+          set -euo pipefail
+          key_dir="$(mktemp -d)"
+          printf 'ci-snapshot\nci-snapshot\n' | minisign -G \
+            -p "${key_dir}/minisign.pub" \
+            -s "${key_dir}/minisign.key"
+          {
+            echo "MINISIGN_SECRET_KEY_FILE=${key_dir}/minisign.key"
+            echo "MINISIGN_PUBLIC_KEY_FILE=${key_dir}/minisign.pub"
+            echo "MINISIGN_PASSWORD=ci-snapshot"
+          } >> "$GITHUB_ENV"
+      - name: Build snapshot release with signing + SBOMs
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean
+        env:
+          MINISIGN_SECRET_KEY_FILE: ${{ env.MINISIGN_SECRET_KEY_FILE }}
+          MINISIGN_PASSWORD: ${{ env.MINISIGN_PASSWORD }}
+      - name: Verify signature + SBOM artifacts
+        run: |
+          set -euo pipefail
+          test -f dist/checksums.txt
+          test -f dist/checksums.txt.minisig
+          minisign -V -p "${MINISIGN_PUBLIC_KEY_FILE}" -m dist/checksums.txt -x dist/checksums.txt.minisig
+          ls dist/*.sbom.json >/dev/null 2>&1 || { echo "::error::no SBOM artifacts produced"; exit 1; }
+      - name: Exercise the verified installer
+        run: sh scripts/install_test.sh

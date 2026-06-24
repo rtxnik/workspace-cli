@@ -759,6 +759,58 @@ func TestProxyUp_HostConfigHasTproxySysctls(t *testing.T) {
 	}
 }
 
+// --- ImageLabels tests ---
+
+func TestImageLabels_ParsesRawConfigLabels(t *testing.T) {
+	mock := &mockClient{
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			raw := []byte(`{"Config":{"Labels":{"ws.proxy.datapath":"tproxy","ws.proxy.recipe":"abc123"}}}`)
+			return types.ImageInspect{}, raw, nil
+		},
+	}
+	defer withMock(mock)()
+
+	labels, err := ImageLabels(testCfg())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if labels[LabelDatapath] != "tproxy" {
+		t.Errorf("%s = %q, want tproxy", LabelDatapath, labels[LabelDatapath])
+	}
+	if labels[LabelRecipe] != "abc123" {
+		t.Errorf("%s = %q, want abc123", LabelRecipe, labels[LabelRecipe])
+	}
+}
+
+func TestImageLabels_NoLabelsReturnsEmptyMap(t *testing.T) {
+	mock := &mockClient{
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, []byte(`{"Config":{}}`), nil
+		},
+	}
+	defer withMock(mock)()
+
+	labels, err := ImageLabels(testCfg())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if labels == nil {
+		t.Fatal("expected non-nil empty map")
+	}
+	if len(labels) != 0 {
+		t.Errorf("expected empty map, got %v", labels)
+	}
+}
+
+func TestImageLabels_InspectErrorPropagates(t *testing.T) {
+	mock := &mockClient{} // default imageInspFn returns not-found
+	defer withMock(mock)()
+
+	if _, err := ImageLabels(testCfg()); err == nil {
+		t.Fatal("expected error when image inspect fails")
+	}
+}
+
 func TestBindMountIsWholeDir_StillWorks(t *testing.T) {
 	cfg := testCfg()
 	wholeDirHost := filepath.Dir(cfg.XrayConfig)

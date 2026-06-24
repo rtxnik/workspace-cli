@@ -93,7 +93,16 @@ echo "== building proxy image (docker build) =="
 # *recreates* the proxy container and waits for its health, which fails on a
 # fresh CI runner where no proxy container exists yet ("No such container").
 # The dotfiles recipe was staged at $PROFILES_DIR/proxy by the CI job.
-docker build -t "${WS_PROXY_IMAGE:-devpod-proxy}" "$HOME/.config/workspaces/profiles/proxy"
+#
+# Stamp the datapath LABEL that `ws proxy rebuild` applies after verifying the
+# pinned recipe (C5): the staged recipe IS the canonical tproxy recipe
+# (dotfiles ref == the ws-embedded pin), so this mirrors the real build path.
+# Without it the new HARD doctor check `datapath contract (image <-> profile)`
+# fail-closes on a missing label and the run stops before the precondition
+# checks this gate asserts on.
+docker build -t "${WS_PROXY_IMAGE:-devpod-proxy}" \
+  --label ws.proxy.datapath=tproxy \
+  "$HOME/.config/workspaces/profiles/proxy"
 
 echo "== starting proxy (ws proxy up) =="
 # `up` creates + starts the container from the freshly built image.
