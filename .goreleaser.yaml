@@ -25,7 +25,8 @@ signs:
     cmd: minisign
     # Sign the checksum manifest only. checksums.txt already enumerates every
     # archive's SHA-256, so one signature transitively authenticates all
-    # artifacts. Default (prehashed) format — do NOT add -l.
+    # artifacts. Default (non-prehashed) format — keep sign and verify
+    # symmetric; do NOT add -l, and do NOT add -H to only one side.
     args:
       - "-S"
       - "-s"
