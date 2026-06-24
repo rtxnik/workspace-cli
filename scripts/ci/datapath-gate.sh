@@ -204,7 +204,8 @@ fi
 # ---------------------------------------------------------------------------
 echo "== self-UDP capture probe: XRAY_SELF must MARK the proxy's own UDP egress =="
 # Zero the chain counters for a deterministic reading.
-docker exec "${PROXY_CONTAINER}" iptables -t mangle -Z XRAY_SELF
+docker exec "${PROXY_CONTAINER}" iptables -t mangle -Z XRAY_SELF \
+  || { echo "::error::XRAY_SELF chain missing — self-egress contour was not applied by the entrypoint"; exit 1; }
 # Emit exactly one locally-originated UDP datagram to a PUBLIC ip:port. bash ships
 # in ubuntu:24.04; /dev/udp opens the socket and the write sends one datagram.
 # The MARK happens during OUTPUT traversal, so external reachability is irrelevant.
