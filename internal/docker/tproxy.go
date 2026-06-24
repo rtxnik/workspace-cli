@@ -90,6 +90,54 @@ func parseIPRuleHasFwmark(rules string, mark int) bool {
 		strings.Contains(rules, fmt.Sprintf("fwmark %d", mark))
 }
 
+// parseXraySelfLoopGuardFirst reports whether the first appended rule of the
+// mangle XRAY_SELF chain is the uid-owner loop guard that RETURNs xray's own
+// traffic. Parses `iptables -t mangle -S XRAY_SELF`. The uid renders numerically
+// in -S output (e.g. `--uid-owner 102`), so the match is structural: the first
+// `-A XRAY_SELF` line must carry a uid-owner match and target RETURN. Returns
+// false for an absent chain (iptables error text) without panicking.
+func parseXraySelfLoopGuardFirst(rules string) bool {
+	for _, line := range strings.Split(rules, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "-A XRAY_SELF") {
+			continue // skip -N / blank / error lines until the first appended rule
+		}
+		return strings.Contains(line, "--uid-owner") && strings.Contains(line, "-j RETURN")
+	}
+	return false
+}
+
+// parseInputAcceptsMark reports whether `iptables -S INPUT` contains a rule that
+// ACCEPTs packets carrying the given fwmark (hex `0x1` or decimal form), so the
+// policy-routed self packets re-entering via lo are not silently dropped under a
+// default-DROP INPUT policy.
+func parseInputAcceptsMark(rules string, mark int) bool {
+	for _, line := range strings.Split(rules, "\n") {
+		if !strings.Contains(line, "-A INPUT") || !strings.Contains(line, "-j ACCEPT") {
+			continue
+		}
+		if strings.Contains(line, fmt.Sprintf("--mark 0x%x", mark)) ||
+			strings.Contains(line, fmt.Sprintf("--mark %d", mark)) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseXraySelfMarksUDP reports whether the mangle XRAY_SELF chain MARKs UDP
+// (not only TCP), so the proxy's own UDP/QUIC self-egress is captured into the
+// tunnel rather than leaking around the old TCP-only REDIRECT path. Parses
+// `iptables -t mangle -S XRAY_SELF`.
+func parseXraySelfMarksUDP(rules string) bool {
+	for _, line := range strings.Split(rules, "\n") {
+		if strings.Contains(line, "-A XRAY_SELF") &&
+			strings.Contains(line, "-p udp") &&
+			strings.Contains(line, "-j MARK") {
+			return true
+		}
+	}
+	return false
+}
+
 // Precondition is one runtime kernel/runtime prerequisite of the TPROXY datapath.
 type Precondition struct {
 	Name   string

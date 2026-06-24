@@ -161,3 +161,50 @@ func TestForwardingEgressProbe_CleansUpOnExecError(t *testing.T) {
 		t.Error("sidecar must be removed even when a probe step fails")
 	}
 }
+
+func TestParseXraySelfLoopGuardFirst(t *testing.T) {
+	// -S renders the uid numerically (e.g. 102) and MARK as --set-xmark.
+	good := "-N XRAY_SELF\n" +
+		"-A XRAY_SELF -m owner --uid-owner 102 -j RETURN\n" +
+		"-A XRAY_SELF -d 127.0.0.0/8 -j RETURN\n" +
+		"-A XRAY_SELF -p tcp -j MARK --set-xmark 0x1/0xffffffff\n" +
+		"-A XRAY_SELF -p udp -j MARK --set-xmark 0x1/0xffffffff\n"
+	if !parseXraySelfLoopGuardFirst(good) {
+		t.Error("expected uid-owner RETURN recognized as the first XRAY_SELF rule")
+	}
+	// Mis-ordered: a MARK rule precedes the loop guard.
+	bad := "-N XRAY_SELF\n" +
+		"-A XRAY_SELF -p tcp -j MARK --set-xmark 0x1/0xffffffff\n" +
+		"-A XRAY_SELF -m owner --uid-owner 102 -j RETURN\n"
+	if parseXraySelfLoopGuardFirst(bad) {
+		t.Error("mis-ordered chain (MARK before guard) must fail")
+	}
+	// Chain absent (iptables prints an error to combined output) must fail, not panic.
+	if parseXraySelfLoopGuardFirst("iptables: No chain/target/match by that name.\n") {
+		t.Error("absent chain must fail")
+	}
+}
+
+func TestParseInputAcceptsMark(t *testing.T) {
+	withAccept := "-P INPUT ACCEPT\n-A INPUT -m mark --mark 0x1 -j ACCEPT\n"
+	if !parseInputAcceptsMark(withAccept, 1) {
+		t.Error("expected mark-accept rule recognized")
+	}
+	if parseInputAcceptsMark("-P INPUT ACCEPT\n", 1) {
+		t.Error("missing mark-accept must fail")
+	}
+	if parseInputAcceptsMark("-A INPUT -m mark --mark 0x2 -j ACCEPT\n", 1) {
+		t.Error("a different mark must not match")
+	}
+}
+
+func TestParseXraySelfMarksUDP(t *testing.T) {
+	withUDP := "-A XRAY_SELF -p tcp -j MARK --set-xmark 0x1/0xffffffff\n" +
+		"-A XRAY_SELF -p udp -j MARK --set-xmark 0x1/0xffffffff\n"
+	if !parseXraySelfMarksUDP(withUDP) {
+		t.Error("expected udp MARK rule recognized")
+	}
+	if parseXraySelfMarksUDP("-A XRAY_SELF -p tcp -j MARK --set-xmark 0x1/0xffffffff\n") {
+		t.Error("tcp-only chain must fail (udp self-egress would leak)")
+	}
+}
