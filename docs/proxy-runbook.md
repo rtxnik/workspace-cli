@@ -122,3 +122,23 @@ ws proxy profile show primary
 | `ws proxy profile list` | List profiles (active marked) |
 | `ws proxy profile show <name>` | Show profile (masked) |
 | `make test-e2e` | Docker e2e harness (CI gate) |
+
+---
+
+## CI datapath coverage (SP-4)
+
+The `datapath` CI job builds the proxy image (`ws-proxy:gate`) from the pinned
+dotfiles recipe and runs:
+
+- **Red-line preconditions (T2–T5) + dead-socket detection (T13)** — `scripts/ci/datapath-gate.sh`.
+- **H6 golden validity** — `xray -test` over every committed golden config and a
+  generated VLESS URI matrix, using the image's own pinned xray-core
+  (version-correct by construction): `make test-golden-xray`.
+- **H7 profile-lifecycle integration** — `make test-integration-proxy`.
+
+**Flow-only boundary.** Without the `WS_TEST_ENDPOINT` repository secret the job
+runs in *flow-only* mode: preconditions, the forwarding-leg structure, T13, and
+H6 semantic validity are all enforced, but the **exit-IP value comparison**
+(`TestProxyE2E`, `Tunneled == true`) is skipped — it needs a real upstream.
+Setting `WS_TEST_ENDPOINT` promotes the job to *strict* mode and runs the full
+tunnel assertion. The gate prints a loud banner when running flow-only.
