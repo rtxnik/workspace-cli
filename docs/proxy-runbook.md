@@ -122,3 +122,34 @@ ws proxy profile show primary
 | `ws proxy profile list` | List profiles (active marked) |
 | `ws proxy profile show <name>` | Show profile (masked) |
 | `make test-e2e` | Docker e2e harness (CI gate) |
+
+---
+
+## CI datapath coverage (SP-4)
+
+The `datapath` CI job builds the proxy image (`ws-proxy:gate`) from the pinned
+dotfiles recipe and runs:
+
+- **Red-line preconditions (T2–T5) + dead-socket detection (T13)** — `scripts/ci/datapath-gate.sh`.
+- **H6 golden validity** — `xray -test` over the xray-valid committed goldens
+  (hysteria2 `base`/`obfs`/`udphop`) and a generated VLESS URI matrix (reality,
+  ws-tls, grpc, httpupgrade, xhttp; valid REALITY key), using the image's own
+  pinned xray-core (version-correct by construction): `make test-golden-xray`.
+  Two committed goldens are deliberately excluded from this gate (still covered
+  by their byte-stability tests) and tracked as fast-follow findings:
+  `pin.golden.json` (ws emits `pinnedPeerCertSha256` base64, xray v26 hex-decodes
+  it) and `assemble_vless.golden.json` (placeholder REALITY key). The `h2`
+  transport is also omitted — xray v26 removed it (migrated to XHTTP) while ws
+  still parses it.
+- **H7 profile-lifecycle integration** — `make test-integration-proxy`.
+
+**Flow-only boundary.** Without the `WS_TEST_ENDPOINT` repository secret the job
+runs in *flow-only* mode: preconditions, the forwarding-leg structure, T13, and
+H6 semantic validity are all enforced, but the **exit-IP value comparison**
+(`TestProxyE2E`, `Tunneled == true`) is skipped — it needs a real upstream.
+Setting `WS_TEST_ENDPOINT` promotes the job to *strict* mode and runs the full
+tunnel assertion. The gate prints a loud banner when running flow-only.
+
+(The `WS_TEST_ENDPOINT` repository secret is exposed to the job as the
+`WS_TEST_URI` environment variable — `WS_TEST_URI: ${{ secrets.WS_TEST_ENDPOINT }}`
+in `ci.yml` — which is what `datapath-gate.sh` and the strict-mode step read.)
