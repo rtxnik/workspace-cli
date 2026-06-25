@@ -131,9 +131,16 @@ The `datapath` CI job builds the proxy image (`ws-proxy:gate`) from the pinned
 dotfiles recipe and runs:
 
 - **Red-line preconditions (T2–T5) + dead-socket detection (T13)** — `scripts/ci/datapath-gate.sh`.
-- **H6 golden validity** — `xray -test` over every committed golden config and a
-  generated VLESS URI matrix, using the image's own pinned xray-core
-  (version-correct by construction): `make test-golden-xray`.
+- **H6 golden validity** — `xray -test` over the xray-valid committed goldens
+  (hysteria2 `base`/`obfs`/`udphop`) and a generated VLESS URI matrix (reality,
+  ws-tls, grpc, httpupgrade, xhttp; valid REALITY key), using the image's own
+  pinned xray-core (version-correct by construction): `make test-golden-xray`.
+  Two committed goldens are deliberately excluded from this gate (still covered
+  by their byte-stability tests) and tracked as fast-follow findings:
+  `pin.golden.json` (ws emits `pinnedPeerCertSha256` base64, xray v26 hex-decodes
+  it) and `assemble_vless.golden.json` (placeholder REALITY key). The `h2`
+  transport is also omitted — xray v26 removed it (migrated to XHTTP) while ws
+  still parses it.
 - **H7 profile-lifecycle integration** — `make test-integration-proxy`.
 
 **Flow-only boundary.** Without the `WS_TEST_ENDPOINT` repository secret the job
