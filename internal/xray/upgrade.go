@@ -54,7 +54,7 @@ func UpgradeProfileInbounds(cfg config.Config) (int, error) {
 }
 
 // upgradeProfile upgrades a single profile file. Returns true if the file was
-// changed (i.e. the inbound did not already have sockopt.tproxy).
+// changed (inbound migration or outbound repair).
 func upgradeProfile(path string) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -66,33 +66,47 @@ func upgradeProfile(path string) (bool, error) {
 		return false, fmt.Errorf("parse: %w", err)
 	}
 
-	// Already current: inbound has sockopt.tproxy.
-	if len(xc.Inbounds) > 0 &&
+	base := filepath.Base(path)
+
+	// Inbound migration: splice canonical inbounds (sockopt.tproxy) unless the
+	// inbound is already current. Requires a proxy outbound to build them.
+	inboundCurrent := len(xc.Inbounds) > 0 &&
 		xc.Inbounds[0].StreamSettings != nil &&
 		xc.Inbounds[0].StreamSettings.Sockopt != nil &&
-		xc.Inbounds[0].StreamSettings.Sockopt.Tproxy == "tproxy" {
+		xc.Inbounds[0].StreamSettings.Sockopt.Tproxy == "tproxy"
+
+	inboundChanged := false
+	if !inboundCurrent {
+		proxy, found := firstProxyOutbound(xc.Outbounds)
+		if found {
+			// D4-06: the canonical inbound is fixed at port 12345; normalizing a
+			// non-canonical port is correct but must never be silent.
+			if len(xc.Inbounds) > 0 && xc.Inbounds[0].Port != 0 && xc.Inbounds[0].Port != 12345 {
+				log.Printf("ws proxy upgrade-config: profile %s inbound port %d normalized to 12345 (required by the TPROXY datapath)",
+					base, xc.Inbounds[0].Port)
+			}
+			xc.Inbounds = xrayconf.AssembleConfig(proxy).Inbounds
+			inboundChanged = true
+		} else {
+			log.Printf("ws proxy upgrade-config: skipping inbound migration for %s — no proxy outbound found", base)
+		}
+	}
+
+	// Outbound repair: re-encode legacy cert pins, migrate h2 -> xhttp.
+	repairs, err := RepairConfig(&xc)
+	if err != nil {
+		return false, fmt.Errorf("repair outbounds: %w", err)
+	}
+	for _, r := range repairs {
+		log.Printf("ws proxy upgrade-config: %s — %s", base, r)
+	}
+	outboundChanged := len(repairs) > 0
+
+	if !inboundChanged && !outboundChanged {
 		return false, nil
 	}
 
-	// Find the first proxy outbound.
-	proxy, found := firstProxyOutbound(xc.Outbounds)
-	if !found {
-		log.Printf("ws proxy upgrade-config: skipping %s — no proxy outbound found", filepath.Base(path))
-		return false, nil
-	}
-
-	// D4-06: the canonical inbound is fixed at port 12345 (the entrypoint TPROXY
-	// rule binds --on-port 12345). Normalizing a non-canonical port is correct,
-	// but must never be silent — a non-12345 port was never captured anyway.
-	if len(xc.Inbounds) > 0 && xc.Inbounds[0].Port != 0 && xc.Inbounds[0].Port != 12345 {
-		log.Printf("ws proxy upgrade-config: profile %s inbound port %d normalized to 12345 (required by the TPROXY datapath)",
-			filepath.Base(path), xc.Inbounds[0].Port)
-	}
-	// Build canonical inbounds and splice them in, keeping outbounds + routing.
-	canonical := xrayconf.AssembleConfig(proxy)
-	xc.Inbounds = canonical.Inbounds
-
-	out, err := json.MarshalIndent(xc, "", "  ")
+	out, err := json.MarshalIndent(&xc, "", "  ")
 	if err != nil {
 		return false, fmt.Errorf("marshal: %w", err)
 	}

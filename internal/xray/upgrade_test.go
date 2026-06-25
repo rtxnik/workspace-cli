@@ -224,3 +224,63 @@ func TestUpgradeInboundsNoWarnOnCanonicalPort(t *testing.T) {
 		t.Errorf("unexpected normalization warning for canonical port; log = %q", buf.String())
 	}
 }
+
+func writeProfile(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return p
+}
+
+// currentInbound is a complete inbound block that already carries
+// sockopt.tproxy, so the inbound migration is a no-op and only the outbound
+// repair should fire. This is the regression for the restructure.
+const currentInbound = `"inbounds":[{"tag":"transparent","port":12345,"protocol":"dokodemo-door","settings":{"network":"tcp,udp","followRedirect":true},"streamSettings":{"sockopt":{"tproxy":"tproxy"}}}]`
+
+func TestUpgradeProfile_RepairsOutboundWithCurrentInbound(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"log":{"loglevel":"warning"},` + currentInbound + `,"outbounds":[` +
+		`{"tag":"proxy-1","protocol":"hysteria","settings":{"version":2,"address":"h.example","port":443},` +
+		`"streamSettings":{"network":"hysteria","security":"tls","hysteriaSettings":{"version":2,"auth":"pw"},` +
+		`"tlsSettings":{"serverName":"h.example","alpn":["h3"],"fingerprint":"chrome","pinnedPeerCertSha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}},` +
+		`{"tag":"direct","protocol":"freedom","settings":{}}]}`
+	p := writeProfile(t, dir, "primary.json", body)
+
+	changed, err := upgradeProfile(p)
+	if err != nil {
+		t.Fatalf("upgradeProfile: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed=true (legacy base64 pin outbound)")
+	}
+
+	data, _ := os.ReadFile(p)
+	if strings.Contains(string(data), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") {
+		t.Errorf("base64 pin still present after repair:\n%s", data)
+	}
+	if !strings.Contains(string(data), "0000000000000000000000000000000000000000000000000000000000000000") {
+		t.Errorf("hex pin missing after repair:\n%s", data)
+	}
+}
+
+func TestUpgradeProfile_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"log":{"loglevel":"warning"},` + currentInbound + `,"outbounds":[` +
+		`{"tag":"proxy-1","protocol":"hysteria","settings":{},"streamSettings":{"network":"hysteria","security":"tls",` +
+		`"tlsSettings":{"pinnedPeerCertSha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}},` +
+		`{"tag":"direct","protocol":"freedom","settings":{}}]}`
+	p := writeProfile(t, dir, "primary.json", body)
+
+	if _, err := upgradeProfile(p); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	changed, err := upgradeProfile(p)
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if changed {
+		t.Error("second pass must report no change (idempotent)")
+	}
+}
