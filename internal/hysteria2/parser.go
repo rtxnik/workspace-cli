@@ -18,7 +18,7 @@ type Config struct {
 	ALPN          []string
 	Fingerprint   string
 	AllowInsecure bool
-	PinSHA256     string // normalized base64 of 32-byte SHA-256; empty = no pinning
+	PinSHA256     string // normalized lowercase hex of 32-byte SHA-256; empty = no pinning
 
 	// Salamander obfuscation (optional)
 	Obfs         string // "salamander" or ""

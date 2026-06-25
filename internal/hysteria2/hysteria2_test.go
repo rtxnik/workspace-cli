@@ -177,7 +177,8 @@ func TestGenerateConfigPinNoInsecure(t *testing.T) {
 	if _, ok := tls["allowInsecure"]; ok {
 		t.Errorf("allowInsecure must never be emitted")
 	}
-	if tls["pinnedPeerCertSha256"] != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" {
+	// xray v26 hex-decodes this field; ws must emit lowercase hex, not base64.
+	if tls["pinnedPeerCertSha256"] != "0000000000000000000000000000000000000000000000000000000000000000" {
 		t.Errorf("pin = %v", tls["pinnedPeerCertSha256"])
 	}
 }

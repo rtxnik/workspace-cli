@@ -93,10 +93,12 @@ If TPROXY misbehaves on the operator's kernel (e.g. the container lacks `CAP_NET
 When the upstream endpoint uses a self-signed certificate, compute the leaf cert SHA-256 pin and pass it as `?pinSHA256=<value>` in the hysteria2 URI:
 
 ```bash
-openssl x509 -in cert.pem -outform DER | openssl dgst -sha256 -binary | base64
+openssl x509 -in cert.pem -outform DER | openssl dgst -sha256 -binary | xxd -p -c 256
 ```
 
-Alternatively, `ws proxy doctor` prints the observed leaf SHA-256 when it can dial the endpoint over TCP-TLS (hysteria2 is QUIC/UDP, so a TCP refusal is expected on QUIC-only endpoints — the observed value from the doctor output is the one to pin).
+This prints the pin as lowercase hex — the same form `ws` writes into the config (`tlsSettings.pinnedPeerCertSha256`, which xray v26 hex-decodes) and `ws proxy doctor` prints. `?pinSHA256=` also accepts colon-separated hex (`AA:BB:…`), uppercase hex, or base64; all normalize to lowercase hex internally.
+
+Alternatively, `ws proxy doctor` prints the observed leaf SHA-256 (lowercase hex) when it can dial the endpoint over TCP-TLS (hysteria2 is QUIC/UDP, so a TCP refusal is expected on QUIC-only endpoints — the observed value from the doctor output is the one to pin).
 
 To inspect the currently configured pin:
 
@@ -131,16 +133,15 @@ The `datapath` CI job builds the proxy image (`ws-proxy:gate`) from the pinned
 dotfiles recipe and runs:
 
 - **Red-line preconditions (T2–T5) + dead-socket detection (T13)** — `scripts/ci/datapath-gate.sh`.
-- **H6 golden validity** — `xray -test` over the xray-valid committed goldens
-  (hysteria2 `base`/`obfs`/`udphop`) and a generated VLESS URI matrix (reality,
-  ws-tls, grpc, httpupgrade, xhttp; valid REALITY key), using the image's own
-  pinned xray-core (version-correct by construction): `make test-golden-xray`.
-  Two committed goldens are deliberately excluded from this gate (still covered
-  by their byte-stability tests) and tracked as fast-follow findings:
-  `pin.golden.json` (ws emits `pinnedPeerCertSha256` base64, xray v26 hex-decodes
-  it) and `assemble_vless.golden.json` (placeholder REALITY key). The `h2`
-  transport is also omitted — xray v26 removed it (migrated to XHTTP) while ws
-  still parses it.
+- **H6 golden validity** — `xray -test` over all five committed goldens
+  (hysteria2 `base`/`obfs`/`pin`/`udphop` and `assemble_vless`) and a generated
+  7-transport VLESS URI matrix (tcp-reality, tcp-http-header, ws-tls, grpc,
+  httpupgrade, xhttp, and `h2` — 12 configs total; valid REALITY key), using the
+  image's own pinned xray-core (version-correct by construction):
+  `make test-golden-xray`. ws emits the cert pin as lowercase hex (xray v26
+  hex-decodes `tlsSettings.pinnedPeerCertSha256`), and a parsed `type=h2` URI is
+  migrated to an XHTTP stream-one config at generation, so both are semantically
+  validated here.
 - **H7 profile-lifecycle integration** — `make test-integration-proxy`.
 
 **Flow-only boundary.** Without the `WS_TEST_ENDPOINT` repository secret the job

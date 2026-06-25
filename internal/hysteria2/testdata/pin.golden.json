@@ -47,7 +47,7 @@
             "h3"
           ],
           "fingerprint": "chrome",
-          "pinnedPeerCertSha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "pinnedPeerCertSha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "serverName": "h.example"
         }
       }

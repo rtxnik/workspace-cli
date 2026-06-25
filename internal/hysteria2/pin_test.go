@@ -3,16 +3,24 @@ package hysteria2
 import "testing"
 
 func TestNormalizePinSHA256(t *testing.T) {
-	// 32 zero bytes -> base64 "AAAA...=" ; hex-colon form must map to the same base64.
-	hexColon := "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
-	wantB64 := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-	got, err := normalizePinSHA256(hexColon)
-	if err != nil || got != wantB64 {
-		t.Fatalf("hex-colon: got %q err %v, want %q", got, err, wantB64)
+	// xray-core v26 hex-decodes tlsSettings.pinnedPeerCertSha256
+	// (hex.DecodeString after stripping ':'), so the normalized form ws stores
+	// and emits MUST be lowercase hex — never base64 (the '=' padding trips
+	// xray's hex decoder). Every accepted input encoding (hex-with-colons,
+	// bare hex, base64) normalizes to the same 64-char lowercase hex string.
+	const wantHex = "0000000000000000000000000000000000000000000000000000000000000000"
+	inputs := map[string]string{
+		"hex-colon": "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00",
+		"bare-hex":  wantHex,
+		"base64":    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // base64 of the same 32 zero bytes
 	}
-	if got, err := normalizePinSHA256(wantB64); err != nil || got != wantB64 {
-		t.Fatalf("base64 passthrough: got %q err %v", got, err)
+	for name, in := range inputs {
+		got, err := normalizePinSHA256(in)
+		if err != nil || got != wantHex {
+			t.Fatalf("%s: normalizePinSHA256(%q) = %q, err %v; want %q", name, in, got, err, wantHex)
+		}
 	}
+
 	if _, err := normalizePinSHA256("not-a-pin"); err == nil {
 		t.Fatalf("expected error for junk input")
 	}
