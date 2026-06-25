@@ -109,7 +109,7 @@ ws proxy profile add hy2-exit 'hysteria2://<auth>@host:443?sni=host&pinSHA256=AA
 ws proxy profile add hy2-exit 'hysteria2://<auth>@host:443?sni=host&pinSHA256=<base64>'
 ```
 
-`ws proxy doctor` prints the observed leaf SHA-256 of the endpoint (via a best-effort TCP-TLS probe). Because Hysteria2 is QUIC/UDP, a TCP refusal is normal — in that case the doctor prints a caveat and marks the check as inconclusive rather than failed. To get the fingerprint from outside the tool, you can use:
+`ws proxy doctor` prints the observed leaf SHA-256 of the endpoint as lowercase hex without colons (via a best-effort TCP-TLS probe) — the same form `ws` stores in the config. Because Hysteria2 is QUIC/UDP, a TCP refusal is normal — in that case the doctor prints a caveat and marks the check as inconclusive rather than failed. To get the fingerprint from outside the tool, you can use (the colon-hex it prints is accepted verbatim by `?pinSHA256=`):
 
 ```bash
 openssl s_client -connect host:443 2>/dev/null </dev/null \

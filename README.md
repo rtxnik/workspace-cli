@@ -82,7 +82,7 @@ Key parameters:
 
 | Parameter | Notes |
 |-----------|-------|
-| `pinSHA256` | Leaf cert SHA-256 (hex-colon, bare hex, or base64) for self-signed endpoints. `ws proxy doctor` prints the observed value. `allowInsecure`/`insecure` is not supported on xray-core v26.2.6. |
+| `pinSHA256` | Leaf cert SHA-256 (hex-colon, bare hex, or base64) for self-signed endpoints; stored and compared as lowercase hex. `ws proxy doctor` prints the observed value (lowercase hex). `allowInsecure`/`insecure` is not supported on xray-core v26.2.6. |
 | `<port>,<ranges>` | Port-hopping: e.g. `443,5000-6000`. Requires `hopInterval` (default 30 s, min 5). |
 | `congestion` | `reno` \| `bbr` \| `brutal` \| `force-brutal` |
 
