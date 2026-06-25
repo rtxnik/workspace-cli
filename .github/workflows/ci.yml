@@ -110,6 +110,24 @@ jobs:
           go test -tags docker_e2e ./cmd/ -run TestXrayValidatesConfigs -v 2>&1 | tee /tmp/h6.log
           bash scripts/ci/assert-ran.sh TestXrayValidatesConfigs < /tmp/h6.log
 
+      - name: Restart dev-proxy for H7 (T13 left it stopped)
+        run: |
+          # T13 disabled the restart policy and killed xray (PID 1), leaving
+          # dev-proxy stopped. Restore the restart policy and bring it back up
+          # so requireDevProxy (docker ps -q -f name=dev-proxy) sees it running.
+          docker update --restart=unless-stopped dev-proxy
+          docker start dev-proxy
+          # Wait until the container is healthy / running before proceeding.
+          for i in $(seq 1 15); do
+            status="$(docker inspect -f '{{.State.Status}}' dev-proxy 2>/dev/null || echo missing)"
+            if [ "$status" = "running" ]; then
+              echo "dev-proxy is running"
+              break
+            fi
+            echo "waiting for dev-proxy ($status) ... $i/15"
+            sleep 1
+          done
+
       - name: H7 — proxy profile-lifecycle integration (dev-proxy is up)
         run: |
           set -o pipefail
