@@ -30,7 +30,9 @@ func RepairOutbound(ob xrayconf.Outbound) (xrayconf.Outbound, []string, error) {
 		return ob, nil, fmt.Errorf("parse streamSettings: %w", err)
 	}
 
-	changes := repairPin(ss)
+	var changes []string
+	changes = append(changes, repairPin(ss)...)
+	changes = append(changes, repairH2(ss)...)
 
 	if len(changes) == 0 {
 		return ob, nil, nil
@@ -62,4 +64,63 @@ func repairPin(ss map[string]any) []string {
 	}
 	tls["pinnedPeerCertSha256"] = hexPin
 	return []string{"re-encoded cert pin to lowercase hex"}
+}
+
+// repairH2 migrates a stored h2 transport to its xray v26 replacement, XHTTP
+// stream-one (xray removed the HTTP/2 transport). Mirrors internal/vless's
+// generation of a parsed type=h2 URI so the two never drift.
+func repairH2(ss map[string]any) []string {
+	if net, _ := ss["network"].(string); net != "h2" {
+		return nil
+	}
+	xhttp := map[string]any{"mode": "stream-one", "path": ""}
+	if http, ok := ss["httpSettings"].(map[string]any); ok {
+		if p, ok := http["path"].(string); ok {
+			xhttp["path"] = p
+		}
+		if h := firstHost(http["host"]); h != "" {
+			xhttp["host"] = h
+		}
+	}
+	ss["network"] = "xhttp"
+	ss["xhttpSettings"] = xhttp
+	delete(ss, "httpSettings")
+	return []string{"migrated h2 transport to xhttp stream-one"}
+}
+
+// firstHost reads a host string from the stored h2 httpSettings.host, which the
+// pre-fix generator wrote as a []string; a plain string is tolerated too.
+func firstHost(v any) string {
+	switch h := v.(type) {
+	case string:
+		return h
+	case []any:
+		if len(h) > 0 {
+			s, _ := h[0].(string)
+			return s
+		}
+	}
+	return ""
+}
+
+// RepairConfig applies RepairOutbound to every proxy outbound in xc, mutating it
+// in place. A per-outbound parse failure is logged and skipped (the run is never
+// aborted). Returns the combined repair descriptions across all outbounds.
+func RepairConfig(xc *xrayconf.XrayConfig) ([]string, error) {
+	var changes []string
+	for i, ob := range xc.Outbounds {
+		if !proxyProtocols[ob.Protocol] {
+			continue
+		}
+		repaired, c, err := RepairOutbound(ob)
+		if err != nil {
+			log.Printf("ws proxy upgrade-config: skipping outbound %q — %v", ob.Tag, err)
+			continue
+		}
+		if len(c) > 0 {
+			xc.Outbounds[i] = repaired
+			changes = append(changes, c...)
+		}
+	}
+	return changes, nil
 }
