@@ -142,3 +142,7 @@ H6 semantic validity are all enforced, but the **exit-IP value comparison**
 (`TestProxyE2E`, `Tunneled == true`) is skipped — it needs a real upstream.
 Setting `WS_TEST_ENDPOINT` promotes the job to *strict* mode and runs the full
 tunnel assertion. The gate prints a loud banner when running flow-only.
+
+(The `WS_TEST_ENDPOINT` repository secret is exposed to the job as the
+`WS_TEST_URI` environment variable — `WS_TEST_URI: ${{ secrets.WS_TEST_ENDPOINT }}`
+in `ci.yml` — which is what `datapath-gate.sh` and the strict-mode step read.)

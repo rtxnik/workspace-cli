@@ -30,16 +30,17 @@ var vlessMatrix = []struct{ name, uri string }{
 	{"vless-xhttp-reality", "vless://77777777-7777-7777-7777-777777777777@xhttp.example.com:443?type=xhttp&security=reality&sni=www.google.com&fp=chrome&pbk=xhttp-pub&sid=ef&path=%2Fxpath&mode=auto#xhttp-node"},
 }
 
-// moduleRoot derives the repository root (dir holding go.mod) from this test
-// file's location: cmd/<file> -> root.
-func moduleRoot() string {
+// repoRoot derives the repository root (dir holding go.mod) from this test
+// file's location: cmd/<file> -> root. (Named repoRoot, not moduleRoot, to
+// avoid shadowing the local moduleRoot var in proxy_e2e_test.go.)
+func repoRoot() string {
 	_, testFile, _, _ := runtime.Caller(0)
 	return filepath.Dir(filepath.Dir(testFile))
 }
 
 // committedGoldens lists the committed golden config files (complete configs).
 func committedGoldens() []string {
-	root := moduleRoot()
+	root := repoRoot()
 	return []string{
 		filepath.Join(root, "internal", "hysteria2", "testdata", "base.golden.json"),
 		filepath.Join(root, "internal", "hysteria2", "testdata", "obfs.golden.json"),
