@@ -27,6 +27,9 @@ test-e2e:
 test-golden-xray:
 	go test -tags docker_e2e ./cmd/ -run TestXrayValidatesConfigs -v
 
+# Local/operator target — runs all three integration tests (TestProfileLifecycleE2E
+# is an operator-machine checkpoint that needs writable real ~/.config/xray state).
+# CI runs only TestIntegration_Cycle (see .github/workflows/ci.yml H7 step).
 test-integration-proxy:
 	go test -tags integration ./internal/xray/ -run 'TestIntegration_Cycle|TestProfileLifecycleE2E|TestExistingStateDiscovery' -v
 

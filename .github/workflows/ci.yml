@@ -131,10 +131,18 @@ jobs:
           done
 
       - name: H7 — proxy profile-lifecycle integration (dev-proxy is up)
+        # Only TestIntegration_Cycle runs in CI: it is t.Setenv-isolated to a
+        # tmpdir (it never touches the real ~/.config/xray) and exercises the
+        # add/swap/read/rm pipeline against the live dev-proxy. The other two
+        # `integration` tests are intentionally NOT run here:
+        #   - TestProfileLifecycleE2E is the operator-machine checkpoint (its own
+        #     doc): it mutates the real ~/.config/xray/profiles, which the sudo'd
+        #     datapath gate root-owns, so a non-sudo runner write is EPERM.
+        #   - TestExistingStateDiscovery skips without an operator profile set.
+        # `make test-integration-proxy` still runs all three for local operators.
         run: |
           set -o pipefail
-          go test -tags integration ./internal/xray/ \
-            -run 'TestIntegration_Cycle|TestProfileLifecycleE2E|TestExistingStateDiscovery' -v 2>&1 | tee /tmp/h7.log
+          go test -tags integration ./internal/xray/ -run 'TestIntegration_Cycle' -v 2>&1 | tee /tmp/h7.log
           bash scripts/ci/assert-ran.sh TestIntegration_Cycle < /tmp/h7.log
 
       - name: H7 (strict) — full-tunnel e2e (only when WS_TEST_URI is set)
