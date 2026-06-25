@@ -8,7 +8,7 @@ import (
 )
 
 // zeroPinHex is a 64-character hex string representing 32 zero bytes,
-// accepted by normalizePinSHA256 and used as a placeholder in golden tests.
+// accepted by NormalizePinSHA256 and used as a placeholder in golden tests.
 const zeroPinHex = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // goldenCase describes one golden test fixture.

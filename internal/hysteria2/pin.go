@@ -7,13 +7,13 @@ import (
 	"strings"
 )
 
-// normalizePinSHA256 converts a certificate SHA-256 pin into xray-core's
+// NormalizePinSHA256 converts a certificate SHA-256 pin into xray-core's
 // expected form: lowercase hex of the raw 32 sha256 bytes
 // (tlsSettings.pinnedPeerCertSha256, which xray v26 hex-decodes after stripping
 // ':'). Accepts hysteria-style hex-with-colons ("AA:BB:.."), bare hex, or an
 // already-base64 value. Returns "" for empty input; an error for anything
 // that is not exactly 32 bytes once decoded.
-func normalizePinSHA256(pin string) (string, error) {
+func NormalizePinSHA256(pin string) (string, error) {
 	pin = strings.TrimSpace(pin)
 	if pin == "" {
 		return "", nil
