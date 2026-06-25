@@ -30,7 +30,13 @@ func requireProxyImage(t *testing.T) string {
 func xrayTestConfig(image, hostPath string) (string, error) {
 	dir := filepath.Dir(hostPath)
 	base := filepath.Base(hostPath)
+	// The image's xray carries file capability cap_net_admin+ep (set via setcap
+	// in the recipe Dockerfile). Exec'ing a binary whose effective file-cap is
+	// outside the container's capability bounding set fails with EPERM
+	// ("operation not permitted"), so NET_ADMIN must be added even though
+	// `xray -test` only parses the config and never uses the capability.
 	cmd := exec.Command("docker", "run", "--rm",
+		"--cap-add", "NET_ADMIN",
 		"-v", dir+":/cfg:ro",
 		"--entrypoint", "/usr/local/bin/xray",
 		image, "run", "-test", "-c", "/cfg/"+base)
