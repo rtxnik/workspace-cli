@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/hysteria2"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/vless"
@@ -78,7 +79,7 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := os.WriteFile(target, data, 0o600); err != nil {
+	if err := fsutil.WriteFile(target, data, 0o600); err != nil {
 		return fmt.Errorf("write profile %s: %w", target, err)
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
@@ -80,6 +81,13 @@ func upgradeProfile(path string) (bool, error) {
 		return false, nil
 	}
 
+	// D4-06: the canonical inbound is fixed at port 12345 (the entrypoint TPROXY
+	// rule binds --on-port 12345). Normalizing a non-canonical port is correct,
+	// but must never be silent — a non-12345 port was never captured anyway.
+	if len(xc.Inbounds) > 0 && xc.Inbounds[0].Port != 0 && xc.Inbounds[0].Port != 12345 {
+		log.Printf("ws proxy upgrade-config: profile %s inbound port %d normalized to 12345 (required by the TPROXY datapath)",
+			filepath.Base(path), xc.Inbounds[0].Port)
+	}
 	// Build canonical inbounds and splice them in, keeping outbounds + routing.
 	canonical := xrayconf.AssembleConfig(proxy)
 	xc.Inbounds = canonical.Inbounds
@@ -88,7 +96,7 @@ func upgradeProfile(path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("marshal: %w", err)
 	}
-	if err := os.WriteFile(path, out, 0o600); err != nil {
+	if err := fsutil.WriteFile(path, out, 0o600); err != nil {
 		return false, fmt.Errorf("write: %w", err)
 	}
 	return true, nil

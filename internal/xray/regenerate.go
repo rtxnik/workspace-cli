@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
@@ -59,7 +60,7 @@ func RegenerateProfile(cfg config.Config, name string) error {
 	if err != nil {
 		return fmt.Errorf("marshal regenerated profile: %w", err)
 	}
-	if err := os.WriteFile(targetPath, out, 0o600); err != nil {
+	if err := fsutil.WriteFile(targetPath, out, 0o600); err != nil {
 		return fmt.Errorf("write regenerated profile: %w", err)
 	}
 	output.Success(fmt.Sprintf("Profile %q routing refreshed from active profile %q", name, active))

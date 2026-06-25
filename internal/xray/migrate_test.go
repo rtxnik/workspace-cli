@@ -204,6 +204,33 @@ func TestNoMigrateFlag(t *testing.T) {
 	}
 }
 
+// TestMigrateTightensPermsBeforeRename (D5-03): a legacy config.json seeded
+// with loose 0644 perms ends up as primary.json at 0600. Guards the perm
+// invariant across the chmod-before-rename reorder.
+func TestMigrateTightensPermsBeforeRename(t *testing.T) {
+	cfg := mkMigrateTestCfg(t)
+	if err := os.WriteFile(cfg.XrayConfig, []byte(`{"log":{"loglevel":"warning"}}`), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	migrated, err := MigrateLegacy(cfg)
+	if err != nil {
+		t.Fatalf("MigrateLegacy: %v", err)
+	}
+	if !migrated {
+		t.Fatal("want migrated=true")
+	}
+
+	primaryPath := filepath.Join(cfg.XrayProfilesDir, "primary.json")
+	info, err := os.Lstat(primaryPath)
+	if err != nil {
+		t.Fatalf("lstat primary.json: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("primary.json perm = %o, want 600", info.Mode().Perm())
+	}
+}
+
 // TestEnsureMigratedFreshInstall: no config.json at all. EnsureMigrated returns
 // nil under BOTH allowMigrate=true and allowMigrate=false (fresh install is
 // not an error in either mode — `profile add` will create config.json later).
