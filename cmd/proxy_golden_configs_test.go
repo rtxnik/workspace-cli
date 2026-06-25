@@ -154,10 +154,10 @@ func TestGoldenAndMatrixConfigsGenerate(t *testing.T) {
 			continue
 		}
 		if len(xc.Inbounds) == 0 {
-			t.Errorf("%s: no inbounds -- not a complete config", c.name)
+			t.Errorf("%s: no inbounds — not a complete config", c.name)
 		}
 		if len(xc.Outbounds) == 0 {
-			t.Errorf("%s: no outbounds -- not a complete config", c.name)
+			t.Errorf("%s: no outbounds — not a complete config", c.name)
 		}
 	}
 }

@@ -144,7 +144,7 @@ dotfiles recipe and runs:
   7-transport VLESS URI matrix (tcp-reality, tcp-http-header, ws-tls, grpc,
   httpupgrade, xhttp, and `h2`), and 2 repaired-legacy configs (a pre-fix
   base64 cert pin repaired to lowercase hex, and a pre-fix `h2` transport
-  repaired to XHTTP stream-one) — 14 configs total; valid REALITY key), using
+  repaired to XHTTP stream-one) — 14 configs total; valid REALITY key — using
   the image's own pinned xray-core (version-correct by construction):
   `make test-golden-xray`. ws emits the cert pin as lowercase hex (xray v26
   hex-decodes `tlsSettings.pinnedPeerCertSha256`), a parsed `type=h2` URI is
