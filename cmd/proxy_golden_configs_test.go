@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/vless"
+	"github.com/rtxnik/workspace-cli/internal/xray"
 	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
@@ -98,14 +100,50 @@ func collectXrayConfigs(t *testing.T) []xrayConfigCase {
 		}
 		cases = append(cases, xrayConfigCase{name: "matrix:" + m.name, json: data})
 	}
+
+	cases = append(cases, repairedLegacyConfigs(t)...)
+	return cases
+}
+
+// repairedLegacyConfigs builds configs in the pre-fix on-disk shapes (a base64
+// cert pin; a network:"h2" transport) and runs them through xray.RepairConfig.
+// Feeding the REPAIRED output to `xray -test` proves the self-heal produces a
+// config a current xray accepts -- including stored keys the generator never
+// emits.
+func repairedLegacyConfigs(t *testing.T) []xrayConfigCase {
+	t.Helper()
+	legacyHy2 := xrayconf.AssembleConfig(xrayconf.Outbound{
+		Tag: "proxy-1", Protocol: "hysteria",
+		Settings: []byte(`{"version":2,"address":"h.example","port":443}`),
+		StreamSettings: []byte(`{"network":"hysteria","security":"tls","hysteriaSettings":{"version":2,"auth":"pw"},` +
+			`"tlsSettings":{"serverName":"h.example","alpn":["h3"],"fingerprint":"chrome","pinnedPeerCertSha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}}`),
+	})
+	legacyH2 := xrayconf.AssembleConfig(xrayconf.Outbound{
+		Tag: "proxy-1", Protocol: "vless",
+		Settings: []byte(`{"vnext":[{"address":"h2.example","port":443,"users":[{"id":"88888888-8888-8888-8888-888888888888","encryption":"none","flow":""}]}]}`),
+		StreamSettings: []byte(`{"network":"h2","security":"tls","tlsSettings":{"serverName":"h2.example","fingerprint":"chrome"},` +
+			`"httpSettings":{"host":["h2.example"],"path":"/h2path"}}`),
+	})
+
+	var cases []xrayConfigCase
+	for name, xc := range map[string]*xrayconf.XrayConfig{"repaired-hy2-pin": legacyHy2, "repaired-vless-h2": legacyH2} {
+		if _, err := xray.RepairConfig(xc); err != nil {
+			t.Fatalf("RepairConfig(%s): %v", name, err)
+		}
+		data, err := json.MarshalIndent(xc, "", "  ")
+		if err != nil {
+			t.Fatalf("marshal %s: %v", name, err)
+		}
+		cases = append(cases, xrayConfigCase{name: "repaired:" + name, json: data})
+	}
 	return cases
 }
 
 func TestGoldenAndMatrixConfigsGenerate(t *testing.T) {
 	cases := collectXrayConfigs(t)
 
-	// 5 committed goldens (4 hysteria2 + 1 vless) + 7 matrix transports = 12.
-	if got, want := len(cases), 12; got != want {
+	// 5 committed goldens + 7 matrix transports + 2 repaired-legacy = 14.
+	if got, want := len(cases), 14; got != want {
 		t.Fatalf("collected %d configs, want %d", got, want)
 	}
 
@@ -116,10 +154,21 @@ func TestGoldenAndMatrixConfigsGenerate(t *testing.T) {
 			continue
 		}
 		if len(xc.Inbounds) == 0 {
-			t.Errorf("%s: no inbounds — not a complete config", c.name)
+			t.Errorf("%s: no inbounds -- not a complete config", c.name)
 		}
 		if len(xc.Outbounds) == 0 {
-			t.Errorf("%s: no outbounds — not a complete config", c.name)
+			t.Errorf("%s: no outbounds -- not a complete config", c.name)
+		}
+	}
+}
+
+func TestRepairedLegacyConfigsAreHealed(t *testing.T) {
+	for _, c := range repairedLegacyConfigs(t) {
+		if strings.Contains(string(c.json), `"network": "h2"`) {
+			t.Errorf("%s still has network h2:\n%s", c.name, c.json)
+		}
+		if strings.Contains(string(c.json), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") {
+			t.Errorf("%s still has base64 pin:\n%s", c.name, c.json)
 		}
 	}
 }
