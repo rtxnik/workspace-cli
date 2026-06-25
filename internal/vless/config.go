@@ -148,10 +148,18 @@ func buildStreamSettings(cfg VLESSConfig) ([]byte, error) {
 			"multiMode":   false,
 		}
 	case "h2":
-		ss["httpSettings"] = map[string]any{
-			"host": []string{cfg.Host},
+		// xray v26 removed the HTTP/2 transport ("migrated to XHTTP stream-one
+		// H2 & H3"), rejecting network:"h2". Emit the equivalent XHTTP
+		// stream-one config so an imported h2 URI loads on a current xray.
+		ss["network"] = "xhttp"
+		xhttp := map[string]any{
+			"mode": "stream-one",
 			"path": cfg.Path,
 		}
+		if cfg.Host != "" {
+			xhttp["host"] = cfg.Host
+		}
+		ss["xhttpSettings"] = xhttp
 	case "httpupgrade":
 		ss["httpupgradeSettings"] = map[string]any{
 			"path": cfg.Path,

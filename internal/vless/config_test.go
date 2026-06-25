@@ -142,6 +142,48 @@ func TestGenerateConfigTransports(t *testing.T) {
 	}
 }
 
+// TestGenerateConfigH2MigratesToXHTTP guards the xray v26 h2 fast-follow (see
+// workspace-meta seeds): xray v26 removed the HTTP/2 transport ("migrated to
+// XHTTP stream-one H2 & H3"), so a parsed type=h2 URI must generate an xhttp
+// stream-one config — never network:"h2" with httpSettings, which a current
+// xray rejects. The parser still yields Network:"h2" for back-compat import;
+// the migration happens at generation.
+func TestGenerateConfigH2MigratesToXHTTP(t *testing.T) {
+	cfg := VLESSConfig{
+		UUID: "11111111-1111-1111-1111-111111111111", Address: "h2.example.com", Port: 443,
+		Encryption: "none", Network: "h2",
+		Security: "tls", SNI: "h2.example.com", Fp: "chrome",
+		Host: "h2.example.com", Path: "/h2path",
+	}
+	xray, err := GenerateConfig(cfg, "proxy-1")
+	if err != nil {
+		t.Fatalf("GenerateConfig() error: %v", err)
+	}
+	var ss map[string]any
+	if err := json.Unmarshal(xray.Outbounds[0].StreamSettings, &ss); err != nil {
+		t.Fatalf("unmarshal stream settings: %v", err)
+	}
+	if ss["network"] != "xhttp" {
+		t.Errorf("network = %v, want xhttp (h2 migrated)", ss["network"])
+	}
+	if _, ok := ss["httpSettings"]; ok {
+		t.Errorf("httpSettings must not be emitted — xray v26 rejects the h2 transport")
+	}
+	xh, ok := ss["xhttpSettings"].(map[string]any)
+	if !ok {
+		t.Fatalf("xhttpSettings missing/wrong type: %v", ss["xhttpSettings"])
+	}
+	if xh["mode"] != "stream-one" {
+		t.Errorf("xhttpSettings.mode = %v, want stream-one", xh["mode"])
+	}
+	if xh["path"] != "/h2path" {
+		t.Errorf("xhttpSettings.path = %v, want /h2path", xh["path"])
+	}
+	if xh["host"] != "h2.example.com" {
+		t.Errorf("xhttpSettings.host = %v, want h2.example.com", xh["host"])
+	}
+}
+
 func TestWriteNewConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "subdir", "config.json")
