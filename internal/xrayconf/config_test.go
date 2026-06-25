@@ -47,13 +47,18 @@ func TestAssembleConfig(t *testing.T) {
 
 // TestAssembleGolden is the byte-identical guard: AssembleConfig of a fixed
 // vless outbound must marshal to the bytes in testdata/assemble_vless.golden.json.
-// Run with -update to regenerate the golden file.
+// Run with UPDATE_GOLDEN=1 to regenerate the golden file.
+//
+// The fixture uses real xray-valid values (a well-formed UUID and a valid
+// x25519 REALITY public key) because this golden is also fed to `xray -test` by
+// the H6 gate (cmd/proxy_golden_configs_test.go); placeholder ids/keys would be
+// rejected by a current xray.
 func TestAssembleGolden(t *testing.T) {
 	proxy := Outbound{
-		Tag:      "proxy-1",
-		Protocol: "vless",
-		Settings: json.RawMessage(`{"vnext":[{"address":"example.com","port":443,"users":[{"id":"test-uuid-1234","encryption":"none","flow":"xtls-rprx-vision"}]}]}`),
-		StreamSettings: json.RawMessage(`{"network":"tcp","security":"reality","realitySettings":{"serverName":"www.google.com","fingerprint":"chrome","publicKey":"pub-key-123","shortId":"ab","spiderX":"/"}}`),
+		Tag:            "proxy-1",
+		Protocol:       "vless",
+		Settings:       json.RawMessage(`{"vnext":[{"address":"example.com","port":443,"users":[{"id":"11111111-1111-1111-1111-111111111111","encryption":"none","flow":"xtls-rprx-vision"}]}]}`),
+		StreamSettings: json.RawMessage(`{"network":"tcp","security":"reality","realitySettings":{"serverName":"www.google.com","fingerprint":"chrome","publicKey":"Mfgq_bxUlJoJKJUf9iX4kMAuxww70_mYytF2AWnElzQ","shortId":"ab","spiderX":"/"}}`),
 	}
 	xc := AssembleConfig(proxy)
 

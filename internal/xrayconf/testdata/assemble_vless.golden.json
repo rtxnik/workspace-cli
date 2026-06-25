@@ -37,7 +37,7 @@
             "port": 443,
             "users": [
               {
-                "id": "test-uuid-1234",
+                "id": "11111111-1111-1111-1111-111111111111",
                 "encryption": "none",
                 "flow": "xtls-rprx-vision"
               }
@@ -51,7 +51,7 @@
         "realitySettings": {
           "serverName": "www.google.com",
           "fingerprint": "chrome",
-          "publicKey": "pub-key-123",
+          "publicKey": "Mfgq_bxUlJoJKJUf9iX4kMAuxww70_mYytF2AWnElzQ",
           "shortId": "ab",
           "spiderX": "/"
         }

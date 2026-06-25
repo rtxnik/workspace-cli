@@ -28,10 +28,10 @@ const realityPubKey = "Mfgq_bxUlJoJKJUf9iX4kMAuxww70_mYytF2AWnElzQ"
 // vlessMatrix is the VLESS URI matrix H6 validates against the pinned xray-core,
 // one URI per parser-supported transport that xray v26.2.6 accepts.
 //
-// `type=h2` is intentionally absent: xray v26 REMOVED the HTTP/2 transport
-// ("migrated to XHTTP"), so a generated h2 config is rejected. ws still parses
-// `h2` (internal/vless/parser.go) — that incompatibility is tracked as a
-// fast-follow finding (see workspace-meta seeds), not papered over here.
+// `type=h2` is included: xray v26 REMOVED the HTTP/2 transport ("migrated to
+// XHTTP stream-one H2 & H3"), so ws migrates a parsed h2 transport to an xhttp
+// stream-one config at generation (internal/vless/config.go). The vless-h2-tls
+// entry proves that migrated config loads on the pinned xray.
 var vlessMatrix = []struct{ name, uri string }{
 	{"vless-tcp-reality", "vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none&flow=xtls-rprx-vision&type=tcp&security=reality&sni=www.google.com&fp=chrome&pbk=" + realityPubKey + "&sid=ab&spx=%2F#my-node"},
 	{"vless-tcp-http-header", "vless://22222222-2222-2222-2222-222222222222@example.com:80?type=tcp&security=none&headerType=http&host=cdn.example.com&path=%2F#http-node"},
@@ -39,6 +39,7 @@ var vlessMatrix = []struct{ name, uri string }{
 	{"vless-grpc-reality", "vless://44444444-4444-4444-4444-444444444444@grpc.example.com:443?type=grpc&security=reality&sni=www.google.com&fp=chrome&pbk=" + realityPubKey + "&sid=cd&serviceName=mygrpc#grpc-node"},
 	{"vless-httpupgrade-tls", "vless://66666666-6666-6666-6666-666666666666@hu.example.com:443?type=httpupgrade&security=tls&sni=hu.example.com&fp=safari&host=hu.example.com&path=%2Fupgrade#hu-node"},
 	{"vless-xhttp-reality", "vless://77777777-7777-7777-7777-777777777777@xhttp.example.com:443?type=xhttp&security=reality&sni=www.google.com&fp=chrome&pbk=" + realityPubKey + "&sid=ef&path=%2Fxpath&mode=auto#xhttp-node"},
+	{"vless-h2-tls", "vless://88888888-8888-8888-8888-888888888888@h2.example.com:443?type=h2&security=tls&sni=h2.example.com&fp=chrome&host=h2.example.com&path=%2Fh2path#h2-node"},
 }
 
 // repoRoot derives the repository root (dir holding go.mod) from this test
@@ -50,23 +51,21 @@ func repoRoot() string {
 }
 
 // committedGoldens lists the committed golden config files that H6 feeds to
-// `xray -test`. Only goldens that ws is expected to emit VALIDLY under the
-// pinned xray-core are included; two committed goldens are deliberately omitted
-// (they remain covered by their byte-stability tests in
-// internal/hysteria2/golden_test.go and internal/xrayconf/config_test.go):
+// `xray -test`. Every committed golden is included — each emits VALIDLY under
+// the pinned xray-core and is also covered by a byte-stability test in
+// internal/hysteria2/golden_test.go or internal/xrayconf/config_test.go:
 //
-//   - pin.golden.json — its `pinnedPeerCertSha256` is emitted base64 while xray
-//     v26 hex-decodes it ("encoding/hex: invalid byte"). A real ws emission bug,
-//     tracked as a fast-follow finding (see workspace-meta seeds).
-//   - assemble_vless.golden.json — a byte fixture built from a placeholder
-//     REALITY pbk that xray rejects; vless+REALITY semantics are instead
-//     validated by vlessMatrix above (which uses a valid pbk).
+//   - pin.golden.json emits the cert pin as hex (xray v26 hex-decodes
+//     tlsSettings.pinnedPeerCertSha256).
+//   - assemble_vless.golden.json uses a valid UUID + x25519 REALITY pubkey.
 func committedGoldens() []string {
 	root := repoRoot()
 	return []string{
 		filepath.Join(root, "internal", "hysteria2", "testdata", "base.golden.json"),
 		filepath.Join(root, "internal", "hysteria2", "testdata", "obfs.golden.json"),
+		filepath.Join(root, "internal", "hysteria2", "testdata", "pin.golden.json"),
 		filepath.Join(root, "internal", "hysteria2", "testdata", "udphop.golden.json"),
+		filepath.Join(root, "internal", "xrayconf", "testdata", "assemble_vless.golden.json"),
 	}
 }
 
@@ -105,8 +104,8 @@ func collectXrayConfigs(t *testing.T) []xrayConfigCase {
 func TestGoldenAndMatrixConfigsGenerate(t *testing.T) {
 	cases := collectXrayConfigs(t)
 
-	// 3 committed goldens (xray-valid hysteria2) + 6 matrix transports = 9.
-	if got, want := len(cases), 9; got != want {
+	// 5 committed goldens (4 hysteria2 + 1 vless) + 7 matrix transports = 12.
+	if got, want := len(cases), 12; got != want {
 		t.Fatalf("collected %d configs, want %d", got, want)
 	}
 
