@@ -75,6 +75,9 @@ jobs:
       # If the WS_TEST_ENDPOINT secret is unset the gate runs in flow-only mode
       # (TPROXY preconditions + forwarding leg asserted; exit-IP comparison skipped).
       WS_TEST_URI: ${{ secrets.WS_TEST_ENDPOINT }}
+      # Deterministic tag so the gate builds it and the H6/H7 steps reuse the
+      # same image from the runner's docker daemon (no rebuild, one source of truth).
+      WS_PROXY_IMAGE: ws-proxy:gate
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -100,6 +103,26 @@ jobs:
           cp -r _dotfiles/dot_config/workspaces/profiles/proxy "$HOME/.config/workspaces/profiles/proxy"
       - name: Run red-line datapath gate (T2-T5 + T13)
         run: sudo -E WS_BIN="$PWD/ws" bash scripts/ci/datapath-gate.sh
+
+      - name: H6 — xray -test over goldens + VLESS matrix (semantic golden gate)
+        run: |
+          set -o pipefail
+          go test -tags docker_e2e ./cmd/ -run TestXrayValidatesConfigs -v 2>&1 | tee /tmp/h6.log
+          bash scripts/ci/assert-ran.sh TestXrayValidatesConfigs < /tmp/h6.log
+
+      - name: H7 — proxy profile-lifecycle integration (dev-proxy is up)
+        run: |
+          set -o pipefail
+          go test -tags integration ./internal/xray/ \
+            -run 'TestIntegration_Cycle|TestProfileLifecycleE2E|TestExistingStateDiscovery' -v 2>&1 | tee /tmp/h7.log
+          bash scripts/ci/assert-ran.sh TestIntegration_Cycle < /tmp/h7.log
+
+      - name: H7 (strict) — full-tunnel e2e (only when WS_TEST_URI is set)
+        if: ${{ env.WS_TEST_URI != '' }}
+        run: |
+          set -o pipefail
+          make test-e2e 2>&1 | tee /tmp/e2e.log
+          bash scripts/ci/assert-ran.sh TestProxyE2E < /tmp/e2e.log
 
   snapshot-gate:
     name: Release snapshot + signature/SBOM gate
