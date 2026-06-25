@@ -8,8 +8,9 @@ import (
 )
 
 // normalizePinSHA256 converts a certificate SHA-256 pin into xray-core's
-// expected form: base64 of the raw 32 sha256 bytes (tlsSettings.pinnedPeerCertSha256).
-// Accepts hysteria-style hex-with-colons ("AA:BB:.."), bare hex, or an
+// expected form: lowercase hex of the raw 32 sha256 bytes
+// (tlsSettings.pinnedPeerCertSha256, which xray v26 hex-decodes after stripping
+// ':'). Accepts hysteria-style hex-with-colons ("AA:BB:.."), bare hex, or an
 // already-base64 value. Returns "" for empty input; an error for anything
 // that is not exactly 32 bytes once decoded.
 func normalizePinSHA256(pin string) (string, error) {
@@ -22,13 +23,13 @@ func normalizePinSHA256(pin string) (string, error) {
 		if err != nil || len(b) != 32 {
 			return "", fmt.Errorf("invalid pin sha256 %q: want 32-byte hex or base64", pin)
 		}
-		return base64.StdEncoding.EncodeToString(b), nil
+		return hex.EncodeToString(b), nil
 	}
 	b, err := base64.StdEncoding.DecodeString(pin)
 	if err != nil || len(b) != 32 {
 		return "", fmt.Errorf("invalid pin sha256 %q: want 32-byte hex or base64", pin)
 	}
-	return base64.StdEncoding.EncodeToString(b), nil
+	return hex.EncodeToString(b), nil
 }
 
 func isHex64(s string) bool {
