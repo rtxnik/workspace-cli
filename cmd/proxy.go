@@ -267,6 +267,17 @@ var proxyTestCmd = &cobra.Command{
 
 		if result.Tunneled {
 			output.Success("Tunnel active — exit IPs differ")
+			// UDP/DNS leg (H10): prove the non-TCP path is tunnelled too.
+			dnsRes, _ := proxyengine.ProbeDNS(cfg)
+			switch proxyengine.ClassifyDNS(result.DirectIP, result.ProxiedIP, dnsRes.ExitIP) {
+			case proxyengine.DNSLeak:
+				output.Warn(fmt.Sprintf("UDP/DNS LEAK -- resolver saw your real IP %s (untunnelled)", dnsRes.ExitIP))
+				os.Exit(1)
+			case proxyengine.DNSInconclusive:
+				output.Info("UDP/DNS: inconclusive (no UDP/DNS egress observed)")
+			default:
+				output.Success(fmt.Sprintf("UDP/DNS tunnelled -- exit %s", dnsRes.ExitIP))
+			}
 		} else {
 			output.Warn("Tunnel NOT active — direct and proxied exit IPs are the same")
 			os.Exit(1)

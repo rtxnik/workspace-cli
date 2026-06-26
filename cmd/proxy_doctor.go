@@ -290,6 +290,10 @@ func checkDefaultRoute(cfg config.Config) CheckOutcome {
 // traffic). The UDP leg is best-effort and surfaced as a note in Detail — its
 // failure does not flip OK to false here (the probe today is TCP/HTTP-based; UDP
 // is reported as SKIP until a UDP datapath probe exists).
+// checkEgress: HARD on both the TCP exit-IP comparison (proves the tunnel
+// carries traffic) and a proven UDP/DNS leak (DNS exit IP == direct IP). An
+// inconclusive UDP/DNS probe (no UDP egress observed) is advisory (OK=true) so
+// a UDP-blocked sandbox does not block the operator.
 func checkEgress(cfg config.Config, eng proxyengine.Engine) CheckOutcome {
 	probe, err := eng.Probe(cfg)
 	if err != nil {
@@ -305,10 +309,32 @@ func checkEgress(cfg config.Config, eng proxyengine.Engine) CheckOutcome {
 			Fix:    "Exit IPs are identical — traffic is NOT tunnelling. Check the profile and logs: ws proxy logs",
 		}
 	}
-	return CheckOutcome{
-		OK: true,
-		Detail: fmt.Sprintf("TCP exit-IP %s (direct %s); UDP: SKIP (best-effort, no UDP datapath probe)",
-			probe.ProxiedIP, probe.DirectIP),
+	// TCP tunnelling proven. Now the UDP/DNS leg (H10): a DNS exit IP equal to
+	// the direct (untunnelled) IP is a PROVEN leak (HARD); inconclusive is advisory.
+	dnsRes, _ := proxyengine.ProbeDNS(cfg)
+	return dnsEgressOutcome(probe, dnsRes.ExitIP)
+}
+
+// dnsEgressOutcome maps the UDP/DNS verdict to a CheckOutcome (H10 severity-split):
+// a proven leak is HARD (OK=false); an inconclusive probe is advisory (OK=true).
+func dnsEgressOutcome(probe proxyengine.ProbeResult, dnsExit string) CheckOutcome {
+	switch proxyengine.ClassifyDNS(probe.DirectIP, probe.ProxiedIP, dnsExit) {
+	case proxyengine.DNSLeak:
+		return CheckOutcome{
+			OK:     false,
+			Detail: fmt.Sprintf("TCP exit-IP %s (direct %s); UDP/DNS exit %s == direct (untunnelled)", probe.ProxiedIP, probe.DirectIP, dnsExit),
+			Fix:    "DNS/UDP is leaking around the tunnel (resolver saw your real IP). Check the UDP capture: ws proxy doctor; logs: ws proxy logs",
+		}
+	case proxyengine.DNSInconclusive:
+		return CheckOutcome{
+			OK:     true,
+			Detail: fmt.Sprintf("TCP exit-IP %s (direct %s); UDP/DNS: inconclusive (no UDP/DNS egress observed)", probe.ProxiedIP, probe.DirectIP),
+		}
+	default: // DNSTunneled
+		return CheckOutcome{
+			OK:     true,
+			Detail: fmt.Sprintf("TCP exit-IP %s (direct %s); UDP/DNS exit %s (tunnelled)", probe.ProxiedIP, probe.DirectIP, dnsExit),
+		}
 	}
 }
 
