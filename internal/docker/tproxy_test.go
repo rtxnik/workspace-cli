@@ -216,3 +216,22 @@ func TestParseXraySelfMarksUDP(t *testing.T) {
 		t.Error("absent chain must fail")
 	}
 }
+
+func TestParseIPv6FailClosed(t *testing.T) {
+	// v6 disabled => OK regardless of the ip6tables rc.
+	if !parseIPv6FailClosed("1\n", "1\n") {
+		t.Error("disable_ipv6=1 must be fail-closed even with no FORWARD DROP")
+	}
+	// v6 active + FORWARD DROP present (rc 0) => OK.
+	if !parseIPv6FailClosed("0\n", "0\n") {
+		t.Error("active v6 with FORWARD DROP present must be fail-closed")
+	}
+	// v6 active + no FORWARD DROP (rc != 0) => FAIL (real leak path).
+	if parseIPv6FailClosed("0\n", "1\n") {
+		t.Error("active v6 without FORWARD DROP must NOT be fail-closed")
+	}
+	// Unreadable disable file (empty) is treated as active; no DROP => FAIL.
+	if parseIPv6FailClosed("", "1\n") {
+		t.Error("unknown v6 state without FORWARD DROP must NOT be fail-closed")
+	}
+}

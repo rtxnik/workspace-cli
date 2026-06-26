@@ -242,6 +242,23 @@ fi
 echo "self-UDP capture probe passed (the proxy's own UDP egress is marked into the tunnel)"
 
 # ---------------------------------------------------------------------------
+# IPv6 fail-closed assertion: stack disabled OR ip6tables FORWARD -j DROP present
+# ---------------------------------------------------------------------------
+echo "== IPv6 fail-closed: stack disabled OR ip6tables FORWARD -j DROP present =="
+v6dis="$(docker exec "${PROXY_CONTAINER}" cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || echo 0)"
+v6dis="$(printf '%s' "${v6dis}" | tr -d '[:space:]')"
+if [ "${v6dis}" = "1" ]; then
+  echo "IPv6 stack disabled (disable_ipv6=1) -- fail-closed"
+elif docker exec "${PROXY_CONTAINER}" ip6tables -C FORWARD -j DROP >/dev/null 2>&1; then
+  echo "ip6tables FORWARD -j DROP present -- fail-closed"
+else
+  echo "::error::IPv6 is NOT fail-closed (stack enabled and no FORWARD DROP) -- v6 leak path"
+  docker exec "${PROXY_CONTAINER}" ip6tables -S FORWARD || true
+  exit 1
+fi
+echo "IPv6 fail-closed assertion passed"
+
+# ---------------------------------------------------------------------------
 # T13: kill xray inside the container; doctor must detect dead socket
 # ---------------------------------------------------------------------------
 echo "== T13: killing xray inside proxy container =="

@@ -748,6 +748,9 @@ func TestProxyUp_HostConfigHasTproxySysctls(t *testing.T) {
 		"net.ipv4.conf.all.route_localnet":     "1",
 		"net.ipv4.conf.default.route_localnet": "1",
 		"net.ipv4.conf.lo.route_localnet":      "1",
+		"net.ipv6.conf.all.disable_ipv6":       "1",
+		"net.ipv6.conf.default.disable_ipv6":   "1",
+		"net.ipv6.conf.lo.disable_ipv6":        "1",
 	}
 	for k, v := range want {
 		if got := gotHost.Sysctls[k]; got != v {

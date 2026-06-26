@@ -152,6 +152,13 @@ func ProxyUp(cfg config.Config) error {
 				"net.ipv4.conf.all.route_localnet":     "1",
 				"net.ipv4.conf.default.route_localnet": "1",
 				"net.ipv4.conf.lo.route_localnet":      "1",
+				// IPv4-only proxy: disable the IPv6 stack in the container netns so
+				// there is no v6 to leak around the v4 TPROXY capture (H4 load-bearing
+				// layer; the entrypoint ip6tables DROP is the belt on top). Set here
+				// because /proc/sys is read-only inside a default container.
+				"net.ipv6.conf.all.disable_ipv6":     "1",
+				"net.ipv6.conf.default.disable_ipv6": "1",
+				"net.ipv6.conf.lo.disable_ipv6":      "1",
 			},
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		},
