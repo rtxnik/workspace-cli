@@ -286,10 +286,6 @@ func checkDefaultRoute(cfg config.Config) CheckOutcome {
 	return CheckOutcome{OK: true, Detail: fmt.Sprintf("%d container(s) route via %s", len(containers), cfg.ProxyIP)}
 }
 
-// checkEgress: HARD on the TCP exit-IP comparison (proves the tunnel carries
-// traffic). The UDP leg is best-effort and surfaced as a note in Detail — its
-// failure does not flip OK to false here (the probe today is TCP/HTTP-based; UDP
-// is reported as SKIP until a UDP datapath probe exists).
 // checkEgress: HARD on both the TCP exit-IP comparison (proves the tunnel
 // carries traffic) and a proven UDP/DNS leak (DNS exit IP == direct IP). An
 // inconclusive UDP/DNS probe (no UDP egress observed) is advisory (OK=true) so
