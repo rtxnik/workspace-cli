@@ -174,6 +174,19 @@ if [ -n "${WS_TEST_URI:-}" ]; then
   fi
   echo "doctor passed:"
   cat /tmp/doctor.json
+  # H10 Tier-2: on a REAL tunnel the DNS leg must have run and reported TUNNELLED,
+  # not silently degraded to inconclusive (which would hide a missing/broken dig).
+  # The self-egress check Detail carries the UDP/DNS clause from dnsEgressOutcome;
+  # require the "(tunnelled)" wording. This is SEED-016's "live DNS leg green".
+  echo "== H10 Tier-2: self-egress check Detail must show UDP/DNS tunnelled =="
+  "$WS" proxy doctor --json > /tmp/doctor_dns.json 2>&1 || {
+    echo "::error::ws proxy doctor failed in strict mode (H10 Tier-2)"; cat /tmp/doctor_dns.json; exit 1; }
+  dns_detail="$(jq -r '.checks[] | select(.name=="self-egress (proxy tunnel exit-IP)") | .detail' /tmp/doctor_dns.json)"
+  echo "self-egress detail: ${dns_detail}"
+  case "${dns_detail}" in
+    *"UDP/DNS exit"*"(tunnelled)"*) echo "H10 Tier-2 passed (live DNS leg ran, tunnelled)" ;;
+    *) echo "::error::DNS leg did not report tunnelled (detail='${dns_detail}') — dig probe missing/inconclusive on a healthy tunnel"; exit 1 ;;
+  esac
 else
   # Flow-only mode: freedom outbound → self-egress check will HARD-fail
   # (freedom exit-IP == direct IP, so ForwardingVerdict triggers).
@@ -240,6 +253,31 @@ if [ -z "${udp_pkts:-}" ] || [ "${udp_pkts:-0}" -lt 1 ]; then
   exit 1
 fi
 echo "self-UDP capture probe passed (the proxy's own UDP egress is marked into the tunnel)"
+
+# ---------------------------------------------------------------------------
+# H10 Tier-1: the dig probe's own UDP/53 datagram must be MARKed by XRAY_SELF.
+# Proves (a) dig is present in the image and (b) the exact tool ProbeDNS uses
+# emits a UDP/53 datagram that traverses the self-egress contour and is captured.
+# Endpoint-independent (no echo needed): we assert the MARK counter, not a reply.
+# The rule-absent case is already a HARD failure of the self-UDP probe above.
+# ---------------------------------------------------------------------------
+echo "== H10 Tier-1: dig UDP/53 self-egress must be MARKed by XRAY_SELF =="
+docker exec "${PROXY_CONTAINER}" sh -c 'command -v dig >/dev/null' \
+  || { echo "::error::dig missing from the proxy image — repin DOTFILES_REF to the dig-bearing dotfiles SHA"; exit 1; }
+docker exec "${PROXY_CONTAINER}" iptables -t mangle -Z XRAY_SELF
+# One UDP/53 query as root (NOT uid xray). +notcp keeps it pure UDP; a timeout is
+# fine — the MARK happens during OUTPUT traversal, reply reachability is irrelevant.
+docker exec "${PROXY_CONTAINER}" dig +short +notcp +timeout=3 +tries=1 \
+  @resolver1.opendns.com myip.opendns.com A >/dev/null 2>&1 || true
+dig_pkts="$(docker exec "${PROXY_CONTAINER}" iptables -t mangle -L XRAY_SELF -v -x -n \
+  | awk '$3 == "MARK" && ($4 == "udp" || $4 == "17") { print $1; exit }')"
+echo "XRAY_SELF udp MARK rule matched ${dig_pkts:-0} packet(s) after the dig probe"
+if [ -z "${dig_pkts:-}" ] || [ "${dig_pkts:-0}" -lt 1 ]; then
+  echo "::error::the dig UDP/53 self-egress datagram was NOT marked by XRAY_SELF — H10 probe would leak around the tunnel"
+  docker exec "${PROXY_CONTAINER}" iptables -t mangle -L XRAY_SELF -v -x -n || true
+  exit 1
+fi
+echo "H10 Tier-1 passed (the dig UDP/53 probe is marked into the tunnel)"
 
 # ---------------------------------------------------------------------------
 # IPv6 fail-closed assertion: stack disabled OR ip6tables FORWARD -j DROP present

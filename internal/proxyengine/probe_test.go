@@ -2,8 +2,11 @@ package proxyengine
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/rtxnik/workspace-cli/internal/config"
 )
 
 // TestProbeResultLatencyMsJSON verifies that ProbeResult marshals latencyMs as
@@ -52,5 +55,75 @@ func TestExitIPCompare(t *testing.T) {
 	}
 	if tunneled("", "") {
 		t.Errorf("both empty => not tunneled")
+	}
+}
+
+func TestClassifyDNS(t *testing.T) {
+	const direct, proxied = "203.0.113.7", "198.51.100.9"
+	cases := []struct {
+		name    string
+		dnsExit string
+		want    DNSVerdict
+	}{
+		{"inconclusive when no exit IP", "", DNSInconclusive},
+		{"leak when DNS exit equals direct", direct, DNSLeak},
+		{"tunneled when DNS exit equals proxied", proxied, DNSTunneled},
+		{"tunneled on a third non-direct IP", "192.0.2.1", DNSTunneled},
+	}
+	for _, c := range cases {
+		if got := ClassifyDNS(direct, proxied, c.dnsExit); got != c.want {
+			t.Errorf("%s: ClassifyDNS(%q,%q,%q)=%v want %v", c.name, direct, proxied, c.dnsExit, got, c.want)
+		}
+	}
+}
+
+func TestProbeDNS_InconclusiveOnExecError(t *testing.T) {
+	orig := dnsProbeExec
+	defer func() { dnsProbeExec = orig }()
+	dnsProbeExec = func(config.Config) ([]byte, error) {
+		return nil, errors.New("synthetic exec failure")
+	}
+	res, err := ProbeDNS(config.Config{})
+	if err != nil {
+		t.Fatalf("ProbeDNS must not return a hard error on exec failure: %v", err)
+	}
+	if res.ExitIP != "" {
+		t.Errorf("exec failure must yield empty ExitIP (inconclusive), got %q", res.ExitIP)
+	}
+}
+
+func TestProbeDNS_ParsesExitIP(t *testing.T) {
+	orig := dnsProbeExec
+	defer func() { dnsProbeExec = orig }()
+	dnsProbeExec = func(config.Config) ([]byte, error) {
+		return []byte("203.0.113.7\n"), nil
+	}
+	res, _ := ProbeDNS(config.Config{})
+	if res.ExitIP != "203.0.113.7" {
+		t.Errorf("ExitIP = %q, want 203.0.113.7", res.ExitIP)
+	}
+}
+
+func TestProbeDNS_RejectsNonIP(t *testing.T) {
+	orig := dnsProbeExec
+	defer func() { dnsProbeExec = orig }()
+	dnsProbeExec = func(config.Config) ([]byte, error) {
+		return []byte(";; connection timed out; no servers could be reached\n"), nil
+	}
+	res, _ := ProbeDNS(config.Config{})
+	if res.ExitIP != "" {
+		t.Errorf("non-IP dig output must be inconclusive, got %q", res.ExitIP)
+	}
+}
+
+func TestProbeDNS_SkipsCNAMEPicksFirstIP(t *testing.T) {
+	orig := dnsProbeExec
+	defer func() { dnsProbeExec = orig }()
+	dnsProbeExec = func(config.Config) ([]byte, error) {
+		return []byte("myip.opendns.com.\n198.51.100.9\n"), nil
+	}
+	res, _ := ProbeDNS(config.Config{})
+	if res.ExitIP != "198.51.100.9" {
+		t.Errorf("ExitIP = %q, want 198.51.100.9 (first valid IP line)", res.ExitIP)
 	}
 }
