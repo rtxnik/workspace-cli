@@ -92,7 +92,7 @@ func Parse(uri string) (Config, error) {
 		if raw == "" {
 			raw = q.Get("pin-sha256")
 		}
-		pin, err := normalizePinSHA256(raw)
+		pin, err := NormalizePinSHA256(raw)
 		if err != nil {
 			return Config{}, err
 		}

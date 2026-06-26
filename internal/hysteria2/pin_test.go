@@ -15,16 +15,16 @@ func TestNormalizePinSHA256(t *testing.T) {
 		"base64":    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // base64 of the same 32 zero bytes
 	}
 	for name, in := range inputs {
-		got, err := normalizePinSHA256(in)
+		got, err := NormalizePinSHA256(in)
 		if err != nil || got != wantHex {
-			t.Fatalf("%s: normalizePinSHA256(%q) = %q, err %v; want %q", name, in, got, err, wantHex)
+			t.Fatalf("%s: NormalizePinSHA256(%q) = %q, err %v; want %q", name, in, got, err, wantHex)
 		}
 	}
 
-	if _, err := normalizePinSHA256("not-a-pin"); err == nil {
+	if _, err := NormalizePinSHA256("not-a-pin"); err == nil {
 		t.Fatalf("expected error for junk input")
 	}
-	if got, _ := normalizePinSHA256(""); got != "" {
+	if got, _ := NormalizePinSHA256(""); got != "" {
 		t.Fatalf("empty must stay empty, got %q", got)
 	}
 }

@@ -30,6 +30,12 @@ ws proxy upgrade-config
 
 Rewrites the `inbounds` section of every `*.json` profile in `~/.config/xray/profiles/` to add `streamSettings.sockopt.tproxy: "tproxy"` (required for TPROXY-mode transparent proxying). Profiles that already carry the field are skipped — the command is idempotent.
 
+`ws proxy upgrade-config` also repairs already-stored profiles written by an
+older `ws`: a cert pin in base64/uppercase/colon form is re-encoded to lowercase
+hex, and an `h2` transport is migrated to XHTTP stream-one — the two shapes a
+current xray-core rejects. Run it once after upgrading `ws` if an existing
+profile fails `ws proxy doctor`'s `xray -test` check.
+
 ### Step 3 — Recreate the container (apply the upgraded active profile)
 
 ```bash
@@ -134,13 +140,16 @@ dotfiles recipe and runs:
 
 - **Red-line preconditions (T2–T5) + dead-socket detection (T13)** — `scripts/ci/datapath-gate.sh`.
 - **H6 golden validity** — `xray -test` over all five committed goldens
-  (hysteria2 `base`/`obfs`/`pin`/`udphop` and `assemble_vless`) and a generated
+  (hysteria2 `base`/`obfs`/`pin`/`udphop` and `assemble_vless`), a generated
   7-transport VLESS URI matrix (tcp-reality, tcp-http-header, ws-tls, grpc,
-  httpupgrade, xhttp, and `h2` — 12 configs total; valid REALITY key), using the
-  image's own pinned xray-core (version-correct by construction):
+  httpupgrade, xhttp, and `h2`), and 2 repaired-legacy configs (a pre-fix
+  base64 cert pin repaired to lowercase hex, and a pre-fix `h2` transport
+  repaired to XHTTP stream-one) — 14 configs total; valid REALITY key — using
+  the image's own pinned xray-core (version-correct by construction):
   `make test-golden-xray`. ws emits the cert pin as lowercase hex (xray v26
-  hex-decodes `tlsSettings.pinnedPeerCertSha256`), and a parsed `type=h2` URI is
-  migrated to an XHTTP stream-one config at generation, so both are semantically
+  hex-decodes `tlsSettings.pinnedPeerCertSha256`), a parsed `type=h2` URI is
+  migrated to an XHTTP stream-one config at generation, and `upgrade-config`
+  repairs legacy stored profiles to the same shapes — all three are semantically
   validated here.
 - **H7 profile-lifecycle integration** — `make test-integration-proxy`.
 
