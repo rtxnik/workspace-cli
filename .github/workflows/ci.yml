@@ -67,12 +67,13 @@ jobs:
     permissions:
       contents: read
     env:
-      # Full commit SHA of dotfiles main after PR rtxnik/dotfiles#17 merged
-      # (SP-5 IPv6 fail-closed entrypoint). actions/checkout requires
+      # Full commit SHA of dotfiles main after PR rtxnik/dotfiles#18 merged
+      # (adds bind9-dnsutils/dig to the proxy image for the H10 DNS leg).
+      # actions/checkout requires
       # a full 40-char SHA or a branch/tag name — a short SHA is treated as a
       # branch pattern and fails to resolve. Pin a SHA (not `main`) so the gate is
       # reproducible; bump it when the proxy recipe changes again.
-      DOTFILES_REF: "a6e3a714f008563e04e090b9c43a42de16343208"
+      DOTFILES_REF: "5efa47443ffd29aa8ec415032bedd13a07d300a2"
       # WS_TEST_URI drives strict mode (real profile + exit-IP assertion).
       # If the WS_TEST_ENDPOINT secret is unset the gate runs in flow-only mode
       # (TPROXY preconditions + forwarding leg asserted; exit-IP comparison skipped).
