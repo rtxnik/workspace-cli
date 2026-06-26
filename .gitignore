@@ -5,3 +5,6 @@ dist/
 *.out
 .DS_Store
 state/
+
+# SDD scratch output (superpowers task reports); design specs live in docs/superpowers/
+/.superpowers/
