@@ -123,6 +123,17 @@ func parseInputAcceptsMark(rules string, mark int) bool {
 	return false
 }
 
+// parseIPv6FailClosed reports whether IPv6 cannot leak around the v4 capture:
+// either the stack is disabled (disable_ipv6=1) or the ip6tables FORWARD chain
+// has a -j DROP rule. disableIPv6Out is `cat .../disable_ipv6`; ip6tablesDropRC
+// is the exit code (as text) of `ip6tables -C FORWARD -j DROP` (0 = rule present).
+func parseIPv6FailClosed(disableIPv6Out, ip6tablesDropRC string) bool {
+	if strings.TrimSpace(disableIPv6Out) == "1" {
+		return true
+	}
+	return strings.TrimSpace(ip6tablesDropRC) == "0"
+}
+
 // parseXraySelfMarksUDP reports whether the mangle XRAY_SELF chain MARKs UDP
 // (not only TCP), so the proxy's own UDP/QUIC self-egress is captured into the
 // tunnel rather than leaking around the old TCP-only REDIRECT path. Parses
@@ -306,6 +317,16 @@ func TproxyPreconditions(cfg config.Config) []Precondition {
 		Name:   "self-egress captures UDP",
 		OK:     parseXraySelfMarksUDP(string(xs)),
 		Detail: "mangle XRAY_SELF must MARK -p udp so the proxy's own UDP/QUIC egress is tunnelled",
+	})
+
+	// P9: IPv6 is fail-closed (H4) -- the stack is disabled OR ip6tables has a
+	// FORWARD -j DROP. Two gathered signals; passes on either fail-closed state.
+	dis, _ := ProxyExec(cfg, "cat", "/proc/sys/net/ipv6/conf/all/disable_ipv6")
+	dropRC, _ := ProxyExec(cfg, "sh", "-c", "ip6tables -C FORWARD -j DROP >/dev/null 2>&1; echo $?")
+	out = append(out, Precondition{
+		Name:   "IPv6 fail-closed",
+		OK:     parseIPv6FailClosed(string(dis), string(dropRC)),
+		Detail: "IPv6 must be disabled (disable_ipv6=1) or ip6tables FORWARD -j DROP must be present, else v6 leaks around the v4 capture",
 	})
 
 	return out
