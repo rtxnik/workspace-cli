@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyrecipe"
 )
 
@@ -335,12 +336,44 @@ func ProxyRebuild(cfg config.Config) error {
 	return nil
 }
 
-// ProxyRestart stops and starts the proxy container.
-func ProxyRestart(cfg config.Config) error {
+// RestartContainerNoVerify stops then starts the proxy container with no
+// post-start health gate -- today's ProxyRestart body, preserving the
+// missing/stopped idempotency. SwitchTo wires its restart step to this so it
+// keeps owning its single profile-aware liveness wait (§2.4).
+func RestartContainerNoVerify(cfg config.Config) error {
 	if err := ProxyDown(cfg); err != nil {
 		return err
 	}
 	return ProxyUp(cfg)
+}
+
+// ProxyRestart restarts the proxy container and verifies it became healthy.
+// Same container, so no backup applies; on failure it leaves the container
+// exactly where it landed (D-10: no auto-state-mutation) and returns an honest
+// error, routing a likely-broken config to 'ws proxy doctor' (matrix RS1-RS3).
+func ProxyRestart(cfg config.Config) error {
+	if err := ProxyDown(cfg); err != nil {
+		return fmt.Errorf("%w -- proxy left running, restart aborted", err)
+	}
+	if err := ProxyUp(cfg); err != nil {
+		return fmt.Errorf("restart failed: proxy is DOWN -- %w. Try 'ws proxy up'; logs: docker logs %s --tail 50", err, cfg.ProxyContainer)
+	}
+	cli, err := newClientFunc()
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), proxyHealthTimeout)
+	defer cancel()
+	ok, weak, verr := verifyHealthyFn(ctx, cli, cfg, proxyHealthTimeout)
+	if verr != nil {
+		return fmt.Errorf("proxy restarted but is unhealthy -- %w. Likely a broken xray config; run 'ws proxy doctor'", verr)
+	}
+	if weak {
+		output.Warn("proxy restarted (no healthcheck -- liveness unverified)")
+	}
+	_ = ok
+	return nil
 }
 
 // ProxyRecreate removes and recreates the proxy container on the

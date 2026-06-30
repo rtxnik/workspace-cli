@@ -975,3 +975,101 @@ func TestBindMountIsWholeDir_StillWorks(t *testing.T) {
 		t.Error("legacy case: expected ok=false")
 	}
 }
+
+// --- ProxyRestart tests ---
+
+func TestProxyRestart_HealthyNoSwapOps(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+
+	mock := &mockClient{
+		// ProxyUp sees a running container after the stop -> fix routes, no create.
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		renameFn:            func(_ context.Context, _, _ string) error { t.Error("restart must not rename"); return nil },
+		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { t.Error("restart must not disconnect"); return nil },
+		removeFn: func(_ context.Context, _ string, _ container.RemoveOptions) error {
+			t.Error("restart must not remove")
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	if err := ProxyRestart(cfg); err != nil {
+		t.Fatalf("healthy restart: %v", err)
+	}
+}
+
+func TestProxyRestart_UnhealthyHonestNoMutation(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		removeFn: func(_ context.Context, _ string, _ container.RemoveOptions) error {
+			t.Error("restart failure must not remove the container (D-10)")
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return false, false, errors.New("proxy container is unhealthy")
+	})()
+
+	err := ProxyRestart(cfg)
+	if err == nil || !strings.Contains(err.Error(), "unhealthy") || !strings.Contains(err.Error(), "ws proxy doctor") {
+		t.Fatalf("want honest unhealthy error routing to doctor, got: %v", err)
+	}
+}
+
+func TestProxyRestart_MissingContainerComesUp(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+	created := false
+	mock := &mockClient{
+		// primary absent -> ProxyDown tolerates NotFound, ProxyUp creates.
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("absent"))
+		},
+		stopFn: func(_ context.Context, _ string, _ container.StopOptions) error {
+			return errdefs.NotFound(errors.New("absent"))
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			created = true
+			return container.CreateResponse{ID: "n"}, nil
+		},
+	}
+	defer withMock(mock)()
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	if err := ProxyRestart(cfg); err != nil {
+		t.Fatalf("missing-container restart should come up: %v", err)
+	}
+	if !created {
+		t.Error("ProxyRestart on a missing container must create it")
+	}
+}
