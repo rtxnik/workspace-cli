@@ -3,11 +3,18 @@ package docker
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/errdefs"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/rtxnik/workspace-cli/internal/config"
 )
 
 func shrinkHealthTimers(t *testing.T) {
@@ -19,6 +26,42 @@ func shrinkHealthTimers(t *testing.T) {
 	t.Cleanup(func() {
 		proxyHealthTimeout, healthPollInterval, healthStartGrace = op, opi, og
 	})
+}
+
+func writeTempXrayConfig(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(p, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func swapVerify(fn func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error)) func() {
+	orig := verifyHealthyFn
+	verifyHealthyFn = fn
+	return func() { verifyHealthyFn = orig }
+}
+
+func assertSeq(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("seq mismatch:\n got=%v\nwant=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("seq[%d]=%q want %q (full got=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func indexOf(ss []string, want string) int {
+	for i, s := range ss {
+		if s == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestVerifyHealthy_Healthy(t *testing.T) {
@@ -101,5 +144,400 @@ func TestVerifyHealthy_InspectError(t *testing.T) {
 	}}
 	if _, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout); err == nil {
 		t.Fatal("want inspect error propagated")
+	}
+}
+
+func TestProxyRecreate_HappyCommitOrderAndStaticIP(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+			if id == "ws-proxy-backup" {
+				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+			}
+			// primary: exists+running for the classify inspect.
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true, Health: &types.Health{Status: "healthy"}}},
+				Config: &container.Config{}}, nil
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		stopFn: func(_ context.Context, id string, _ container.StopOptions) error {
+			seq = append(seq, "stop:"+id)
+			return nil
+		},
+		renameFn: func(_ context.Context, id, nn string) error { seq = append(seq, "rename:"+id+"->"+nn); return nil },
+		networkDisconnectFn: func(_ context.Context, _, id string, _ bool) error {
+			seq = append(seq, "disconnect:"+id)
+			return nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, nc *network.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
+			seq = append(seq, "create:"+name)
+			ep := nc.EndpointsConfig["ws-proxy"]
+			if ep == nil || ep.IPAMConfig == nil || ep.IPAMConfig.IPv4Address != "172.30.0.2" {
+				t.Errorf("create did not pin the static IP, got %#v", nc.EndpointsConfig)
+			}
+			return container.CreateResponse{ID: "new-id"}, nil
+		},
+		startFn: func(_ context.Context, id string, _ container.StartOptions) error {
+			seq = append(seq, "start:"+id)
+			return nil
+		},
+		removeFn: func(_ context.Context, id string, _ container.RemoveOptions) error {
+			seq = append(seq, "remove:"+id)
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	if err := ProxyRecreate(cfg); err != nil {
+		t.Fatalf("happy recreate: %v", err)
+	}
+	want := []string{"stop:ws-proxy", "rename:ws-proxy->ws-proxy-backup", "disconnect:ws-proxy-backup", "create:ws-proxy", "start:new-id", "remove:ws-proxy-backup"}
+	assertSeq(t, seq, want)
+}
+
+func TestProxyRecreate_PreflightBeforeDestroy(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+			if id == "ws-proxy-backup" {
+				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+			}
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, errdefs.NotFound(errors.New("no image")) // image MISSING
+		},
+		stopFn: func(_ context.Context, id string, _ container.StopOptions) error {
+			seq = append(seq, "stop")
+			return nil
+		},
+		renameFn:            func(_ context.Context, _, _ string) error { seq = append(seq, "rename"); return nil },
+		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { seq = append(seq, "disconnect"); return nil },
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			seq = append(seq, "create")
+			return container.CreateResponse{}, nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+
+	err := ProxyRecreate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "ws proxy rebuild") {
+		t.Fatalf("want image-missing preflight error, got: %v", err)
+	}
+	if len(seq) != 0 {
+		t.Fatalf("PREFLIGHT must abort before any mutation; got seq=%v", seq)
+	}
+}
+
+// TestProxyRecreate_ForeignIPAbortsBeforeDestroy is the recreate-path twin of
+// the Task-1 cold-path guard (spec §9 T8): a foreign holder of cfg.ProxyIP must
+// abort the recreate during PREFLIGHT, before any stop/rename/disconnect/create,
+// proving the own/backup exclusion does not suppress a genuine foreign holder.
+func TestProxyRecreate_ForeignIPAbortsBeforeDestroy(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+			if id == "ws-proxy-backup" {
+				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+			}
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"intruder": {Name: "intruder", IPv4Address: "172.30.0.2/24"},
+				},
+			}, nil
+		},
+		stopFn: func(_ context.Context, _ string, _ container.StopOptions) error {
+			seq = append(seq, "stop")
+			return nil
+		},
+		renameFn:            func(_ context.Context, _, _ string) error { seq = append(seq, "rename"); return nil },
+		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { seq = append(seq, "disconnect"); return nil },
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			seq = append(seq, "create")
+			return container.CreateResponse{}, nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+
+	err := ProxyRecreate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "is held by container") {
+		t.Fatalf("want foreign-IP abort on the recreate path, got: %v", err)
+	}
+	if len(seq) != 0 {
+		t.Fatalf("foreign-IP must abort before any mutation; seq=%v", seq)
+	}
+}
+
+func TestProxyRecreate_ColdCreateNoRename(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("absent")) // primary AND backup absent
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		renameFn:            func(_ context.Context, _, _ string) error { seq = append(seq, "rename"); return nil },
+		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { seq = append(seq, "disconnect"); return nil },
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			seq = append(seq, "create")
+			return container.CreateResponse{ID: "x"}, nil
+		},
+		startFn: func(_ context.Context, _ string, _ container.StartOptions) error {
+			seq = append(seq, "start")
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	if err := ProxyRecreate(cfg); err != nil {
+		t.Fatalf("cold create: %v", err)
+	}
+	for _, s := range seq {
+		if s == "rename" || s == "disconnect" {
+			t.Fatalf("cold create must not rename/disconnect; seq=%v", seq)
+		}
+	}
+}
+
+// TestProxyRecreate_WeakHealthCommitsWithBackupDropped covers §9 T10 at the
+// recreate level: a nil-HEALTHCHECK (weak) new container is a committed success
+// and the backup is still dropped.
+func TestProxyRecreate_WeakHealthCommitsWithBackupDropped(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+			if id == "ws-proxy-backup" {
+				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+			}
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		stopFn:              func(_ context.Context, _ string, _ container.StopOptions) error { return nil },
+		renameFn:            func(_ context.Context, _, _ string) error { return nil },
+		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { return nil },
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			return container.CreateResponse{ID: "n"}, nil
+		},
+		startFn: func(_ context.Context, _ string, _ container.StartOptions) error { return nil },
+		removeFn: func(_ context.Context, id string, _ container.RemoveOptions) error {
+			seq = append(seq, "remove:"+id)
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, true, nil
+	})()
+
+	if err := ProxyRecreate(cfg); err != nil {
+		t.Fatalf("weak health (no healthcheck) must commit, got: %v", err)
+	}
+	if indexOf(seq, "remove:ws-proxy-backup") < 0 {
+		t.Fatalf("weak-success COMMIT must drop the backup; seq=%v", seq)
+	}
+}
+
+// TestProxyRecreate_CommitBestEffort_RemoveBackupFails covers §9 T11: a failing
+// backup-remove during COMMIT is best-effort and still returns success.
+func TestProxyRecreate_CommitBestEffort_RemoveBackupFails(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+			if id == "ws-proxy-backup" {
+				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+			}
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		stopFn:              func(_ context.Context, _ string, _ container.StopOptions) error { return nil },
+		renameFn:            func(_ context.Context, _, _ string) error { return nil },
+		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { return nil },
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			return container.CreateResponse{ID: "n"}, nil
+		},
+		startFn: func(_ context.Context, _ string, _ container.StartOptions) error { return nil },
+		removeFn: func(_ context.Context, id string, _ container.RemoveOptions) error {
+			seq = append(seq, "remove:"+id)
+			if id == "ws-proxy-backup" {
+				return errors.New("cannot remove backup")
+			}
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	if err := ProxyRecreate(cfg); err != nil {
+		t.Fatalf("COMMIT must be best-effort: a failed backup-remove still succeeds, got: %v", err)
+	}
+	if indexOf(seq, "remove:ws-proxy-backup") < 0 {
+		t.Fatalf("COMMIT must still attempt the backup remove; seq=%v", seq)
+	}
+}
+
+func TestProxyRecreate_StaleBackupCaseA_RemovesGarbage(t *testing.T) {
+	shrinkHealthTimers(t)
+	removed := ""
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			// both primary and backup "exist".
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		removeFn: func(_ context.Context, id string, _ container.RemoveOptions) error { removed = id; return nil },
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			return container.CreateResponse{ID: "n"}, nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	if err := ProxyRecreate(cfg); err != nil {
+		t.Fatalf("case A: %v", err)
+	}
+	if removed != "ws-proxy-backup" {
+		t.Fatalf("case A should force-remove the stale backup first; removed=%q", removed)
+	}
+}
+
+func TestProxyRecreate_StaleBackupCaseB_RestoresAndReturnsSuccess(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+			if id == "ws-proxy-backup" {
+				return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: false}}, Config: &container.Config{}}, nil // backup present
+			}
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("primary gone")) // primary absent
+		},
+		networkConnectFn: func(_ context.Context, _, id string, c *network.EndpointSettings) error {
+			seq = append(seq, "connect:"+id)
+			if c.IPAMConfig == nil || c.IPAMConfig.IPv4Address != "172.30.0.2" {
+				t.Errorf("restore must re-reserve the static IP")
+			}
+			return nil
+		},
+		startFn: func(_ context.Context, id string, _ container.StartOptions) error {
+			seq = append(seq, "start:"+id)
+			return nil
+		},
+		renameFn: func(_ context.Context, id, nn string) error { seq = append(seq, "rename:"+id+"->"+nn); return nil },
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			t.Error("case B must NOT re-run the swap (DR-3)")
+			return container.CreateResponse{}, nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+
+	if err := ProxyRecreate(cfg); err != nil {
+		t.Fatalf("case B should return success after restore: %v", err)
+	}
+	assertSeq(t, seq, []string{"connect:ws-proxy-backup", "start:ws-proxy-backup", "rename:ws-proxy-backup->ws-proxy"})
+}
+
+func TestProxyRecreate_ContextBudget_NoFalseRollbackVerifyOutlivesMutateCtx(t *testing.T) {
+	// Regression for the HIGH timeout bug (spec §5): a verify that consumes
+	// wall-clock beyond the mutating-phase deadline must NOT expire the COMMIT
+	// ctx. Shrink the mutating budget; make verify sleep past it; assert COMMIT
+	// removes the backup under a NON-expired ctx, and recreate returns nil.
+	origMutate := recreateMutateTimeout
+	recreateMutateTimeout = 5 * time.Millisecond
+	t.Cleanup(func() { recreateMutateTimeout = origMutate })
+
+	var committedUnderExpiredCtx bool
+	var removedBackup bool
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+			if id == "ws-proxy-backup" {
+				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+			}
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			return container.CreateResponse{ID: "n"}, nil
+		},
+		removeFn: func(ctx context.Context, id string, _ container.RemoveOptions) error {
+			if id == "ws-proxy-backup" {
+				removedBackup = true
+				if ctx.Err() != nil {
+					committedUnderExpiredCtx = true
+				}
+			}
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		time.Sleep(40 * time.Millisecond) // outlives the 5ms mutating budget
+		return true, false, nil
+	})()
+
+	if err := ProxyRecreate(cfg); err != nil {
+		t.Fatalf("verify outliving the mutate ctx must NOT cause a false rollback; got: %v", err)
+	}
+	if !removedBackup {
+		t.Fatal("COMMIT must remove the backup on success")
+	}
+	if committedUnderExpiredCtx {
+		t.Fatal("COMMIT ran under an expired (shared) ctx -- phases are not isolated")
 	}
 }

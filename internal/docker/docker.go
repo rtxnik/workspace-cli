@@ -344,32 +344,11 @@ func ProxyRestart(cfg config.Config) error {
 }
 
 // ProxyRecreate removes and recreates the proxy container on the
-// ws-proxy bridge network. Workspace containers are unaffected —
+// ws-proxy bridge network. Workspace containers are unaffected --
 // they keep their own network namespace and resume connectivity
 // when the new proxy comes up with the same IP.
 func ProxyRecreate(cfg config.Config) error {
 	return proxyRecreate(cfg)
-}
-
-func proxyRecreate(cfg config.Config) error {
-	cli, err := newClientFunc()
-	if err != nil {
-		return fmt.Errorf("docker client: %w", err)
-	}
-	defer func() { _ = cli.Close() }()
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutWrite)
-	defer cancel()
-
-	timeout := 10
-	if err := cli.ContainerStop(ctx, cfg.ProxyContainer, container.StopOptions{Timeout: &timeout}); err != nil && !errdefs.IsNotFound(err) {
-		return fmt.Errorf("stop proxy: %w", err)
-	}
-	if err := cli.ContainerRemove(ctx, cfg.ProxyContainer, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
-		return fmt.Errorf("remove proxy: %w", err)
-	}
-
-	return ProxyUp(cfg)
 }
 
 // buildProxyArgs assembles the `docker build` arguments, gating on the recipe
