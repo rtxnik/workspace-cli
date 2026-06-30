@@ -163,3 +163,52 @@ tunnel assertion. The gate prints a loud banner when running flow-only.
 (The `WS_TEST_ENDPOINT` repository secret is exposed to the job as the
 `WS_TEST_URI` environment variable — `WS_TEST_URI: ${{ secrets.WS_TEST_ENDPOINT }}`
 in `ci.yml` — which is what `datapath-gate.sh` and the strict-mode step read.)
+
+---
+
+## Transactional recreate (`ws proxy recreate` / `ws proxy rebuild` / `ws proxy update`)
+
+`ws proxy recreate` is a Level-B transaction. The previous container is preserved
+as `<ProxyContainer>-backup` (e.g. `ws-proxy-backup`) until the new container is
+verified healthy, then the backup is dropped (COMMIT) or restored (ROLLBACK). A
+failed recreate -- missing image, broken on-disk xray config, IP conflict, or an
+unhealthy new container -- never leaves a dead proxy.
+
+Because the proxy uses a fixed static IP, only one container can hold it at a
+time, so there is a brief connectivity gap during the IP swap (disconnect backup
+-> create new on the same IP). This is expected and lasts only the create/start
+window.
+
+Read the final line to know which container is serving the proxy IP:
+
+- `recreate committed -- NEW proxy now serving <IP>` : success, new container live.
+- `... -- rolled back ...` : the previous (OLD) container was restored and is serving.
+- `... the restored proxy is also unhealthy ... run 'ws proxy doctor'` : the on-disk
+  xray config is likely broken; both old and new fail health. Fix the config, then
+  retry.
+- `CRITICAL: ... the proxy is DOWN.` : automatic rollback also failed. Run the
+  printed `Manual recovery` commands in order (only the still-required steps are
+  printed), for example:
+
+      docker rm -f ws-proxy
+      docker network connect --ip <IP> ws-proxy ws-proxy-backup
+      docker start ws-proxy-backup
+      docker rename ws-proxy-backup ws-proxy
+
+If a recreate was interrupted (e.g. the machine rebooted mid-swap), the next
+`ws proxy recreate` self-heals: a leftover backup with no primary is restored
+("recovered an interrupted recreate: restored OLD proxy from the backup"); a
+leftover backup alongside a present primary is treated as garbage and removed.
+
+### CI-only datapath acceptance (NOT verified by the unit suite)
+
+The IP-reservation precondition cannot be exercised without a real Docker daemon
+and is therefore verified only by the privileged CI `datapath` gate plus an owner
+host check, never by the unit tests:
+
+- `NetworkDisconnect` actually frees the static `cfg.ProxyIP`, and a subsequent
+  `NetworkConnect` with the same `IPAMConfig.IPv4Address` re-reserves it.
+- A deliberately-broken-config recreate leaves the previous proxy still serving
+  `cfg.ProxyIP` (rollback proven end-to-end on real containers).
+- The daemon does not auto-resurrect a force-removed `UnlessStopped` container
+  mid-rollback.

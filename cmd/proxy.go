@@ -217,6 +217,9 @@ var proxyRebuildCmd = &cobra.Command{
 				return nil
 			}},
 			output.Step{Name: "Waiting for health check", Fn: func() error {
+				// Redundant after the transactional ProxyRecreate (which verifies
+				// health internally) but benign; kept for the non-recreate cold
+				// path. Removing it is an optional follow-up (spec §10).
 				return docker.WaitForHealth(cfg, 60*time.Second)
 			}},
 			output.Step{Name: "Cleaning old images", Fn: func() error {
@@ -346,12 +349,14 @@ var proxyUpdateCmd = &cobra.Command{
 			output.Die(err.Error())
 		}
 
-		// Recreate proxy container to use the new image.
-		output.Info("Restarting proxy...")
-		if err := docker.ProxyRecreate(cfg); err != nil {
-			output.Warn(err.Error())
+		// Recreate proxy container to use the new image. A failed recreate now
+		// rolls back to the previous proxy (transactional), so surface that the
+		// previous version is still serving rather than a bare warning.
+		output.Info("Recreating proxy with the new image...")
+		if m, warn := recreateUpdateOutcome(docker.ProxyRecreate(cfg)); warn {
+			output.Warn(m)
 		} else {
-			output.Success("Proxy restarted with new version")
+			output.Success(m)
 		}
 	},
 }
@@ -478,4 +483,15 @@ func init() {
 	proxyCmd.AddCommand(proxyUpgradeConfigCmd)
 	proxyCmd.AddCommand(profileCmd)
 	rootCmd.AddCommand(proxyCmd)
+}
+
+// recreateUpdateOutcome renders the operator-facing line after a transactional
+// update recreate. A failed recreate now rolls back to the previous proxy, so a
+// non-nil err means the previous version is still serving -- a warning, not a
+// hard failure.
+func recreateUpdateOutcome(err error) (msg string, isWarn bool) {
+	if err != nil {
+		return fmt.Sprintf("update rolled back -- still running previous version: %s", err), true
+	}
+	return "Proxy restarted with new version", false
 }

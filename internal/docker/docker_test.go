@@ -20,16 +20,19 @@ import (
 
 // mockClient implements DockerClient for testing.
 type mockClient struct {
-	inspectFn       func(ctx context.Context, id string) (types.ContainerJSON, error)
-	createFn        func(ctx context.Context, cfg *container.Config, host *container.HostConfig, net *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error)
-	startFn         func(ctx context.Context, id string, opts container.StartOptions) error
-	stopFn          func(ctx context.Context, id string, opts container.StopOptions) error
-	removeFn        func(ctx context.Context, id string, opts container.RemoveOptions) error
-	logsFn          func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error)
-	networkInspFn   func(ctx context.Context, id string, opts network.InspectOptions) (network.Inspect, error)
-	networkCreateFn func(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error)
-	imageInspFn     func(ctx context.Context, id string) (types.ImageInspect, []byte, error)
-	pingFn          func(ctx context.Context) (types.Ping, error)
+	inspectFn           func(ctx context.Context, id string) (types.ContainerJSON, error)
+	createFn            func(ctx context.Context, cfg *container.Config, host *container.HostConfig, net *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error)
+	startFn             func(ctx context.Context, id string, opts container.StartOptions) error
+	stopFn              func(ctx context.Context, id string, opts container.StopOptions) error
+	removeFn            func(ctx context.Context, id string, opts container.RemoveOptions) error
+	logsFn              func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error)
+	networkInspFn       func(ctx context.Context, id string, opts network.InspectOptions) (network.Inspect, error)
+	networkCreateFn     func(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error)
+	renameFn            func(ctx context.Context, id, newName string) error
+	networkConnectFn    func(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error
+	networkDisconnectFn func(ctx context.Context, networkID, containerID string, force bool) error
+	imageInspFn         func(ctx context.Context, id string) (types.ImageInspect, []byte, error)
+	pingFn              func(ctx context.Context) (types.Ping, error)
 }
 
 func (m *mockClient) ContainerInspect(ctx context.Context, id string) (types.ContainerJSON, error) {
@@ -86,6 +89,27 @@ func (m *mockClient) NetworkCreate(ctx context.Context, name string, opts networ
 		return m.networkCreateFn(ctx, name, opts)
 	}
 	return network.CreateResponse{}, nil
+}
+
+func (m *mockClient) ContainerRename(ctx context.Context, id, newName string) error {
+	if m.renameFn != nil {
+		return m.renameFn(ctx, id, newName)
+	}
+	return nil
+}
+
+func (m *mockClient) NetworkConnect(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error {
+	if m.networkConnectFn != nil {
+		return m.networkConnectFn(ctx, networkID, containerID, config)
+	}
+	return nil
+}
+
+func (m *mockClient) NetworkDisconnect(ctx context.Context, networkID, containerID string, force bool) error {
+	if m.networkDisconnectFn != nil {
+		return m.networkDisconnectFn(ctx, networkID, containerID, force)
+	}
+	return nil
 }
 
 func (m *mockClient) ImageInspectWithRaw(ctx context.Context, id string) (types.ImageInspect, []byte, error) {
@@ -762,6 +786,91 @@ func TestProxyUp_HostConfigHasTproxySysctls(t *testing.T) {
 	}
 }
 
+// TestProxyUp_ForeignIPAbortsBeforeCreate proves the additive P6 guard: a cold
+// ProxyUp must refuse to create when cfg.ProxyIP is already held by a foreign
+// container, with the friendly message, and must NOT call ContainerCreate.
+// This is the red->green DRIVER for the guard.
+func TestProxyUp_ForeignIPAbortsBeforeCreate(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+
+	created := false
+	mock := &mockClient{
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil // image present
+		},
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"intruder": {Name: "intruder", IPv4Address: "172.30.0.2/24"},
+				},
+			}, nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			created = true
+			return container.CreateResponse{ID: "test-id"}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	err := ProxyUp(cfg)
+	if err == nil {
+		t.Fatal("expected foreign-IP abort error")
+	}
+	if !strings.Contains(err.Error(), `is held by container "intruder"`) {
+		t.Errorf("expected foreign-IP message naming intruder, got: %v", err)
+	}
+	if created {
+		t.Error("ContainerCreate must NOT be called when the IP is foreign-held")
+	}
+}
+
+// TestProxyUp_OwnAndBackupEndpointsNotForeign proves the guard excludes the
+// proxy's own endpoint and the recreate backup, so a stale endpoint under
+// cfg.ProxyContainer or backupName never false-positives. NOTE: this asserts the
+// pre-existing "create succeeds" behavior, so it is a NON-REGRESSION GUARD, not a
+// red->green driver -- it is already green before the guard exists and must stay
+// green after.
+func TestProxyUp_OwnAndBackupEndpointsNotForeign(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+
+	created := false
+	mock := &mockClient{
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"a": {Name: cfg.ProxyContainer, IPv4Address: "172.30.0.2/24"},
+					"b": {Name: cfg.ProxyContainer + "-backup", IPv4Address: "172.30.0.2/24"},
+				},
+			}, nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			created = true
+			return container.CreateResponse{ID: "test-id"}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	if err := ProxyUp(cfg); err != nil {
+		t.Fatalf("expected own/backup endpoints to be excluded, got: %v", err)
+	}
+	if !created {
+		t.Error("ContainerCreate should run when the IP is held only by the proxy's own/backup endpoint")
+	}
+}
+
 // --- ImageLabels tests ---
 
 func TestImageLabels_ParsesRawConfigLabels(t *testing.T) {
@@ -864,5 +973,142 @@ func TestBindMountIsWholeDir_StillWorks(t *testing.T) {
 	}
 	if ok {
 		t.Error("legacy case: expected ok=false")
+	}
+}
+
+// --- ProxyRestart tests ---
+
+func TestProxyRestart_HealthyNoSwapOps(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+
+	mock := &mockClient{
+		// ProxyUp sees a running container after the stop -> fix routes, no create.
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		renameFn:            func(_ context.Context, _, _ string) error { t.Error("restart must not rename"); return nil },
+		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { t.Error("restart must not disconnect"); return nil },
+		removeFn: func(_ context.Context, _ string, _ container.RemoveOptions) error {
+			t.Error("restart must not remove")
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	if err := ProxyRestart(cfg); err != nil {
+		t.Fatalf("healthy restart: %v", err)
+	}
+}
+
+func TestProxyRestart_UnhealthyHonestNoMutation(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		removeFn: func(_ context.Context, _ string, _ container.RemoveOptions) error {
+			t.Error("restart failure must not remove the container (D-10)")
+			return nil
+		},
+	}
+	defer withMock(mock)()
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return false, false, errors.New("proxy container is unhealthy")
+	})()
+
+	err := ProxyRestart(cfg)
+	if err == nil || !strings.Contains(err.Error(), "unhealthy") || !strings.Contains(err.Error(), "ws proxy doctor") {
+		t.Fatalf("want honest unhealthy error routing to doctor, got: %v", err)
+	}
+}
+
+func TestProxyRestart_MissingContainerComesUp(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+	created := false
+	mock := &mockClient{
+		// primary absent -> ProxyDown tolerates NotFound, ProxyUp creates.
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("absent"))
+		},
+		stopFn: func(_ context.Context, _ string, _ container.StopOptions) error {
+			return errdefs.NotFound(errors.New("absent"))
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			created = true
+			return container.CreateResponse{ID: "n"}, nil
+		},
+	}
+	defer withMock(mock)()
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	if err := ProxyRestart(cfg); err != nil {
+		t.Fatalf("missing-container restart should come up: %v", err)
+	}
+	if !created {
+		t.Error("ProxyRestart on a missing container must create it")
+	}
+}
+
+// TestProxyRestart_StartFails_ProxyIsDown covers RS2: ProxyUp's start step fails
+// after the stop, leaving the proxy DOWN. ProxyRestart must return a non-nil error
+// that contains the contract word "DOWN".
+func TestProxyRestart_StartFails_ProxyIsDown(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+	mock := &mockClient{
+		// primary absent -> ProxyDown tolerates NotFound, ProxyUp takes cold-create path.
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("absent"))
+		},
+		stopFn: func(_ context.Context, _ string, _ container.StopOptions) error {
+			return errdefs.NotFound(errors.New("absent"))
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil // image present -> preflight passes
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			return container.CreateResponse{ID: "new-id"}, nil
+		},
+		startFn: func(_ context.Context, _ string, _ container.StartOptions) error {
+			return errors.New("cannot start container") // RS2: start fails
+		},
+	}
+	defer withMock(mock)()
+
+	err := ProxyRestart(cfg)
+	if err == nil {
+		t.Fatal("RS2: want error when start fails during ProxyRestart")
+	}
+	if !strings.Contains(err.Error(), "DOWN") {
+		t.Fatalf("RS2: error must contain the contract word DOWN; got: %v", err)
 	}
 }

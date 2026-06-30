@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyrecipe"
 )
 
@@ -111,18 +112,51 @@ func ProxyUp(cfg config.Config) error {
 		return nil
 	}
 
+	if err := proxyCreatePreflight(ctx, cli, cfg); err != nil {
+		return err
+	}
+	return proxyCreateAndStart(ctx, cli, cfg)
+}
+
+// proxyCreatePreflight runs the pre-mutation validation shared by ProxyUp's
+// cold path and the recreate orchestrator: image present, on-disk xray config
+// present, proxy network ensured, and (additive, P6) cfg.ProxyIP not held by a
+// foreign container. The foreign-IP check excludes the proxy's own endpoint and
+// the recreate backup so it never false-positives during a recreate preflight.
+func proxyCreatePreflight(ctx context.Context, cli DockerClient, cfg config.Config) error {
 	if !imageExists(ctx, cli, cfg.ProxyImage) {
 		return fmt.Errorf("proxy image %q not found, run 'ws proxy rebuild' first", cfg.ProxyImage)
 	}
-
 	if _, err := os.Stat(cfg.XrayConfig); os.IsNotExist(err) {
 		return fmt.Errorf("xray config not found at %s, run 'ws proxy init' first", cfg.XrayConfig)
 	}
-
 	if err := ensureProxyNetwork(cli, ctx, cfg); err != nil {
 		return fmt.Errorf("create proxy network: %w", err)
 	}
+	if info, err := cli.NetworkInspect(ctx, cfg.ProxyNetwork, network.InspectOptions{}); err == nil {
+		for _, ep := range info.Containers {
+			if ep.Name == cfg.ProxyContainer || ep.Name == backupName(cfg) {
+				continue
+			}
+			epIP := ep.IPv4Address
+			if i := strings.IndexByte(epIP, '/'); i >= 0 {
+				epIP = epIP[:i]
+			}
+			if epIP == cfg.ProxyIP {
+				return fmt.Errorf("IP %s is held by container %q, not the proxy -- free it then retry", cfg.ProxyIP, ep.Name)
+			}
+		}
+	}
+	return nil
+}
 
+// proxyCreateAndStart creates and starts the proxy container with the canonical
+// HostConfig (TPROXY sysctls + NET_ADMIN + whole-dir bind + UnlessStopped) and
+// the static IPAMConfig endpoint. Extracted verbatim from ProxyUp's create
+// block; the start error is now wrapped "start container:" so the recreate
+// orchestrator can distinguish a start failure (behavior-preserving for ProxyUp,
+// whose only test asserts the HostConfig, not the start error string).
+func proxyCreateAndStart(ctx context.Context, cli DockerClient, cfg config.Config) error {
 	resp, err := cli.ContainerCreate(ctx,
 		&container.Config{
 			Image: cfg.ProxyImage,
@@ -176,8 +210,10 @@ func ProxyUp(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("create container: %w", err)
 	}
-
-	return cli.ContainerStart(ctx, resp.ID, container.StartOptions{})
+	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("start container: %w", err)
+	}
+	return nil
 }
 
 // ProxyDown stops the proxy container. Workspace containers on the
@@ -300,41 +336,52 @@ func ProxyRebuild(cfg config.Config) error {
 	return nil
 }
 
-// ProxyRestart stops and starts the proxy container.
-func ProxyRestart(cfg config.Config) error {
+// RestartContainerNoVerify stops then starts the proxy container with no
+// post-start health gate -- today's ProxyRestart body, preserving the
+// missing/stopped idempotency. SwitchTo wires its restart step to this so it
+// keeps owning its single profile-aware liveness wait (§2.4).
+func RestartContainerNoVerify(cfg config.Config) error {
 	if err := ProxyDown(cfg); err != nil {
 		return err
 	}
 	return ProxyUp(cfg)
 }
 
-// ProxyRecreate removes and recreates the proxy container on the
-// ws-proxy bridge network. Workspace containers are unaffected —
-// they keep their own network namespace and resume connectivity
-// when the new proxy comes up with the same IP.
-func ProxyRecreate(cfg config.Config) error {
-	return proxyRecreate(cfg)
-}
-
-func proxyRecreate(cfg config.Config) error {
+// ProxyRestart restarts the proxy container and verifies it became healthy.
+// Same container, so no backup applies; on failure it leaves the container
+// exactly where it landed (D-10: no auto-state-mutation) and returns an honest
+// error, routing a likely-broken config to 'ws proxy doctor' (matrix RS1-RS3).
+func ProxyRestart(cfg config.Config) error {
+	if err := ProxyDown(cfg); err != nil {
+		return fmt.Errorf("%w -- proxy left running, restart aborted", err)
+	}
+	if err := ProxyUp(cfg); err != nil {
+		return fmt.Errorf("restart failed: proxy is DOWN -- %w. Try 'ws proxy up'; logs: docker logs %s --tail 50", err, cfg.ProxyContainer)
+	}
 	cli, err := newClientFunc()
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutWrite)
+	ctx, cancel := context.WithTimeout(context.Background(), proxyHealthTimeout)
 	defer cancel()
-
-	timeout := 10
-	if err := cli.ContainerStop(ctx, cfg.ProxyContainer, container.StopOptions{Timeout: &timeout}); err != nil && !errdefs.IsNotFound(err) {
-		return fmt.Errorf("stop proxy: %w", err)
+	ok, weak, verr := verifyHealthyFn(ctx, cli, cfg, proxyHealthTimeout)
+	if verr != nil {
+		return fmt.Errorf("proxy restarted but is unhealthy -- %w. Likely a broken xray config; run 'ws proxy doctor'", verr)
 	}
-	if err := cli.ContainerRemove(ctx, cfg.ProxyContainer, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
-		return fmt.Errorf("remove proxy: %w", err)
+	if weak {
+		output.Warn("proxy restarted (no healthcheck -- liveness unverified)")
 	}
+	_ = ok
+	return nil
+}
 
-	return ProxyUp(cfg)
+// ProxyRecreate removes and recreates the proxy container on the
+// ws-proxy bridge network. Workspace containers are unaffected --
+// they keep their own network namespace and resume connectivity
+// when the new proxy comes up with the same IP.
+func ProxyRecreate(cfg config.Config) error {
+	return proxyRecreate(cfg)
 }
 
 // buildProxyArgs assembles the `docker build` arguments, gating on the recipe

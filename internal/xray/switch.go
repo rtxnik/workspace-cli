@@ -22,7 +22,7 @@ const xrayRestartLivenessTimeout = 15 * time.Second
 // per-test seam swapping is more ergonomic than a mock object.
 var (
 	validateProfileFn     = realValidateProfile
-	restartProxyFn        = docker.ProxyRestart
+	restartProxyFn        = docker.RestartContainerNoVerify
 	waitForHealthFn       = docker.WaitForHealth
 	bindMountIsWholeDirFn = docker.BindMountIsWholeDir
 )
