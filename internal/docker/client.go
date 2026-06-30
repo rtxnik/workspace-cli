@@ -20,6 +20,9 @@ type DockerClient interface {
 	ContainerLogs(ctx context.Context, containerID string, opts container.LogsOptions) (io.ReadCloser, error)
 	NetworkInspect(ctx context.Context, networkID string, opts network.InspectOptions) (network.Inspect, error)
 	NetworkCreate(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error)
+	ContainerRename(ctx context.Context, containerID, newContainerName string) error
+	NetworkConnect(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error
+	NetworkDisconnect(ctx context.Context, networkID, containerID string, force bool) error
 	ImageInspectWithRaw(ctx context.Context, imageID string) (types.ImageInspect, []byte, error)
 	Ping(ctx context.Context) (types.Ping, error)
 	Close() error

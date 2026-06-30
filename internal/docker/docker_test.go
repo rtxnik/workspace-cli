@@ -20,16 +20,19 @@ import (
 
 // mockClient implements DockerClient for testing.
 type mockClient struct {
-	inspectFn       func(ctx context.Context, id string) (types.ContainerJSON, error)
-	createFn        func(ctx context.Context, cfg *container.Config, host *container.HostConfig, net *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error)
-	startFn         func(ctx context.Context, id string, opts container.StartOptions) error
-	stopFn          func(ctx context.Context, id string, opts container.StopOptions) error
-	removeFn        func(ctx context.Context, id string, opts container.RemoveOptions) error
-	logsFn          func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error)
-	networkInspFn   func(ctx context.Context, id string, opts network.InspectOptions) (network.Inspect, error)
-	networkCreateFn func(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error)
-	imageInspFn     func(ctx context.Context, id string) (types.ImageInspect, []byte, error)
-	pingFn          func(ctx context.Context) (types.Ping, error)
+	inspectFn           func(ctx context.Context, id string) (types.ContainerJSON, error)
+	createFn            func(ctx context.Context, cfg *container.Config, host *container.HostConfig, net *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error)
+	startFn             func(ctx context.Context, id string, opts container.StartOptions) error
+	stopFn              func(ctx context.Context, id string, opts container.StopOptions) error
+	removeFn            func(ctx context.Context, id string, opts container.RemoveOptions) error
+	logsFn              func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error)
+	networkInspFn       func(ctx context.Context, id string, opts network.InspectOptions) (network.Inspect, error)
+	networkCreateFn     func(ctx context.Context, name string, opts network.CreateOptions) (network.CreateResponse, error)
+	renameFn            func(ctx context.Context, id, newName string) error
+	networkConnectFn    func(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error
+	networkDisconnectFn func(ctx context.Context, networkID, containerID string, force bool) error
+	imageInspFn         func(ctx context.Context, id string) (types.ImageInspect, []byte, error)
+	pingFn              func(ctx context.Context) (types.Ping, error)
 }
 
 func (m *mockClient) ContainerInspect(ctx context.Context, id string) (types.ContainerJSON, error) {
@@ -86,6 +89,27 @@ func (m *mockClient) NetworkCreate(ctx context.Context, name string, opts networ
 		return m.networkCreateFn(ctx, name, opts)
 	}
 	return network.CreateResponse{}, nil
+}
+
+func (m *mockClient) ContainerRename(ctx context.Context, id, newName string) error {
+	if m.renameFn != nil {
+		return m.renameFn(ctx, id, newName)
+	}
+	return nil
+}
+
+func (m *mockClient) NetworkConnect(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error {
+	if m.networkConnectFn != nil {
+		return m.networkConnectFn(ctx, networkID, containerID, config)
+	}
+	return nil
+}
+
+func (m *mockClient) NetworkDisconnect(ctx context.Context, networkID, containerID string, force bool) error {
+	if m.networkDisconnectFn != nil {
+		return m.networkDisconnectFn(ctx, networkID, containerID, force)
+	}
+	return nil
 }
 
 func (m *mockClient) ImageInspectWithRaw(ctx context.Context, id string) (types.ImageInspect, []byte, error) {
