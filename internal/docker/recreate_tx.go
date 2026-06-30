@@ -2,7 +2,9 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -228,24 +230,83 @@ func triageStaleBackup(ctx context.Context, cli DockerClient, cfg config.Config,
 	return nil
 }
 
-// rollbackToBackup restores the backup to cfg.ProxyContainer after a failed
-// recreate and returns the (honest, wrapped) original error. Task 4 hardens this
-// with state-aware double-fault reporting and the RV (restored-but-unhealthy)
-// path; this initial version restores in the §2.3 order.
+type rollbackState struct {
+	newExists       bool // broken NEW may still hold the name/IP
+	backupConnected bool
+	backupRunning   bool
+	backupRenamed   bool
+}
+
+// rollbackToBackup restores the backup to cfg.ProxyContainer (§2.3) and returns
+// the honest, wrapped original error. It tracks real progress in rollbackState
+// so that a double fault (any sub-step failing) yields a CRITICAL message built
+// from the actual situation, enumerating only the remaining manual recovery
+// commands. If the restore succeeds but the restored backup is itself unhealthy
+// (shared broken on-disk config), it returns the honest RV error.
 func rollbackToBackup(cli DockerClient, cfg config.Config, origErr error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), recreateMutateTimeout)
 	defer cancel()
 
+	st := rollbackState{newExists: true}
+
+	// 1+2: remove the broken NEW first (frees IP+endpoint before reattaching).
 	stopTimeout := 10
 	_ = cli.ContainerStop(ctx, cfg.ProxyContainer, container.StopOptions{Timeout: &stopTimeout})
-	_ = cli.ContainerRemove(ctx, cfg.ProxyContainer, container.RemoveOptions{Force: true}) // frees IP first
+	if err := cli.ContainerRemove(ctx, cfg.ProxyContainer, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		return criticalRollback(cfg, st, origErr, fmt.Errorf("remove broken new proxy: %w", err))
+	}
+	st.newExists = false
+
+	// 3: re-reserve the IP for the backup.
 	if err := cli.NetworkConnect(ctx, cfg.ProxyNetwork, backupName(cfg), &network.EndpointSettings{
 		IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: cfg.ProxyIP},
 	}); err != nil {
-		return fmt.Errorf("%w (rollback also failed: reconnect backup: %v)", origErr, err)
+		return criticalRollback(cfg, st, origErr, fmt.Errorf("reconnect backup to network: %w", err))
 	}
-	_ = cli.ContainerStart(ctx, backupName(cfg), container.StartOptions{})
-	_ = cli.ContainerRename(ctx, backupName(cfg), cfg.ProxyContainer)
+	st.backupConnected = true
+
+	// 4: start the backup.
+	if err := cli.ContainerStart(ctx, backupName(cfg), container.StartOptions{}); err != nil {
+		return criticalRollback(cfg, st, origErr, fmt.Errorf("start backup: %w", err))
+	}
+	st.backupRunning = true
+
+	// 5: rename backup -> primary so status/health reads resolve.
+	if err := cli.ContainerRename(ctx, backupName(cfg), cfg.ProxyContainer); err != nil {
+		return criticalRollback(cfg, st, origErr, fmt.Errorf("rename backup to primary: %w", err))
+	}
+	st.backupRenamed = true
+
+	// 6: best-effort verify of the restored backup + fix routes.
+	vctx, vcancel := context.WithTimeout(context.Background(), proxyHealthTimeout)
+	defer vcancel()
+	ok, _, verr := verifyHealthyFn(vctx, cli, cfg, proxyHealthTimeout)
 	_, _ = ProxyFixRoutes(cfg)
+	if verr != nil || !ok {
+		return fmt.Errorf("recreate failed AND the restored proxy is also unhealthy -- on-disk xray config is likely broken; run 'ws proxy doctor'. Original failure: %w", origErr)
+	}
 	return origErr
+}
+
+// criticalRollback builds a CRITICAL multi-line error from the rollback state,
+// printing only the manual-recovery commands still required and never a
+// command that would now fail (e.g. no 'network connect --ip' once connected).
+func criticalRollback(cfg config.Config, st rollbackState, origErr, faultErr error) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "CRITICAL: recreate failed and automatic rollback also failed -- the proxy is DOWN.\n")
+	fmt.Fprintf(&b, "Original failure: %v\nRollback fault: %v\n", origErr, faultErr)
+	b.WriteString("Manual recovery (run the remaining steps):\n")
+	if st.newExists {
+		fmt.Fprintf(&b, "  docker rm -f %s\n", cfg.ProxyContainer)
+	}
+	if !st.backupConnected {
+		fmt.Fprintf(&b, "  docker network connect --ip %s %s %s\n", cfg.ProxyIP, cfg.ProxyNetwork, backupName(cfg))
+	}
+	if !st.backupRunning {
+		fmt.Fprintf(&b, "  docker start %s\n", backupName(cfg))
+	}
+	if !st.backupRenamed {
+		fmt.Fprintf(&b, "  docker rename %s %s\n", backupName(cfg), cfg.ProxyContainer)
+	}
+	return errors.New(b.String())
 }

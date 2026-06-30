@@ -488,6 +488,281 @@ func TestProxyRecreate_StaleBackupCaseB_RestoresAndReturnsSuccess(t *testing.T) 
 	assertSeq(t, seq, []string{"connect:ws-proxy-backup", "start:ws-proxy-backup", "rename:ws-proxy-backup->ws-proxy"})
 }
 
+// recreateForwardMock: classify shows primary present + no backup, image present,
+// xray config present; forward swap (stop/rename/disconnect) all succeed.
+func recreateForwardMock(t *testing.T, seq *[]string) *mockClient {
+	t.Helper()
+	return &mockClient{
+		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+			if id == "ws-proxy-backup" {
+				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+			}
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		stopFn: func(_ context.Context, id string, _ container.StopOptions) error {
+			*seq = append(*seq, "stop:"+id)
+			return nil
+		},
+		renameFn:            func(_ context.Context, id, nn string) error { *seq = append(*seq, "rename:"+id+"->"+nn); return nil },
+		networkDisconnectFn: func(_ context.Context, _, id string, _ bool) error { *seq = append(*seq, "disconnect:"+id); return nil },
+	}
+}
+
+// REGRESSION GUARD: already green against Task-3's basic rollback (which restores
+// in §2.3 order); kept here as the canonical clean create-fails rollback trace.
+func TestProxyRecreate_CreateFails_RollsBackInOrder(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := recreateForwardMock(t, &seq)
+	mock.createFn = func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+		return container.CreateResponse{}, errors.New("daemon refused create")
+	}
+	mock.removeFn = func(_ context.Context, id string, _ container.RemoveOptions) error {
+		seq = append(seq, "remove:"+id)
+		return nil
+	}
+	mock.networkConnectFn = func(_ context.Context, _, id string, c *network.EndpointSettings) error {
+		seq = append(seq, "connect:"+id)
+		if c.IPAMConfig == nil || c.IPAMConfig.IPv4Address != "172.30.0.2" {
+			t.Errorf("rollback must re-reserve the static IP")
+		}
+		return nil
+	}
+	mock.startFn = func(_ context.Context, id string, _ container.StartOptions) error {
+		if id == "ws-proxy-backup" {
+			seq = append(seq, "start-backup")
+		}
+		return nil
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	// restored-backup re-verify (Task-4 hardened rollback step 6) is healthy.
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	err := ProxyRecreate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("want rolled-back error, got: %v", err)
+	}
+	// broken NEW removed before reconnecting the backup to the same IP.
+	idxRemove, idxConnect := indexOf(seq, "remove:ws-proxy"), indexOf(seq, "connect:ws-proxy-backup")
+	if idxRemove < 0 || idxConnect < 0 || idxRemove > idxConnect {
+		t.Fatalf("rollback must remove broken NEW before reconnecting backup; seq=%v", seq)
+	}
+	if indexOf(seq, "rename:ws-proxy-backup->ws-proxy") < 0 {
+		t.Fatalf("rollback must rename backup->primary; seq=%v", seq)
+	}
+}
+
+// DRIVER (§9 T5): a START failure (NEW created but not started) must roll back,
+// removing the created-but-dead NEW before reconnecting the backup. Folded
+// create+start means this exercises a distinct error path from create-fails.
+func TestProxyRecreate_StartNewFails_RollsBack(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := recreateForwardMock(t, &seq)
+	mock.createFn = func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+		seq = append(seq, "create:new")
+		return container.CreateResponse{ID: "new-id"}, nil
+	}
+	mock.startFn = func(_ context.Context, id string, _ container.StartOptions) error {
+		if id == "new-id" {
+			return errors.New("new container will not start")
+		}
+		if id == "ws-proxy-backup" {
+			seq = append(seq, "start-backup")
+		}
+		return nil
+	}
+	mock.removeFn = func(_ context.Context, id string, _ container.RemoveOptions) error {
+		seq = append(seq, "remove:"+id)
+		return nil
+	}
+	mock.networkConnectFn = func(_ context.Context, _, id string, c *network.EndpointSettings) error {
+		seq = append(seq, "connect:"+id)
+		if c.IPAMConfig == nil || c.IPAMConfig.IPv4Address != "172.30.0.2" {
+			t.Errorf("rollback must re-reserve the static IP")
+		}
+		return nil
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return true, false, nil
+	})()
+
+	err := ProxyRecreate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("want rolled-back on start failure, got: %v", err)
+	}
+	idxRemove, idxConnect := indexOf(seq, "remove:ws-proxy"), indexOf(seq, "connect:ws-proxy-backup")
+	if idxRemove < 0 || idxConnect < 0 || idxRemove > idxConnect {
+		t.Fatalf("rollback must remove the created-but-dead NEW before reconnecting backup; seq=%v", seq)
+	}
+}
+
+// DRIVER (§9 T10 not-running branch): a NEW that exits before becoming healthy
+// must roll back to the backup.
+func TestProxyRecreate_NewExited_RollsBack(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := recreateForwardMock(t, &seq)
+	mock.createFn = func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+		return container.CreateResponse{ID: "n"}, nil
+	}
+	mock.removeFn = func(_ context.Context, id string, _ container.RemoveOptions) error {
+		seq = append(seq, "remove:"+id)
+		return nil
+	}
+	mock.networkConnectFn = func(_ context.Context, _, id string, _ *network.EndpointSettings) error {
+		seq = append(seq, "connect:"+id)
+		return nil
+	}
+	mock.startFn = func(_ context.Context, id string, _ container.StartOptions) error {
+		if id == "ws-proxy-backup" {
+			seq = append(seq, "start-backup")
+		}
+		return nil
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	// NEW verify reports an exited container; restored-backup re-verify is healthy.
+	calls := 0
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		calls++
+		if calls == 1 {
+			return false, false, errors.New("proxy container exited before becoming healthy")
+		}
+		return true, false, nil
+	})()
+
+	err := ProxyRecreate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("an exited NEW must roll back, got: %v", err)
+	}
+	if indexOf(seq, "rename:ws-proxy-backup->ws-proxy") < 0 {
+		t.Fatalf("rollback must restore the backup; seq=%v", seq)
+	}
+}
+
+// DRIVER: an unhealthy NEW rolls back to a HEALTHY backup -- the clean-rollback
+// path (distinct from the RV path below). A call-counting verify seam makes the
+// NEW verify unhealthy while the restored-backup re-verify is healthy.
+func TestProxyRecreate_Unhealthy_RollsBackToHealthyBackup(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := recreateForwardMock(t, &seq)
+	mock.createFn = func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+		return container.CreateResponse{ID: "n"}, nil
+	}
+	mock.removeFn = func(_ context.Context, id string, _ container.RemoveOptions) error {
+		seq = append(seq, "remove:"+id)
+		return nil
+	}
+	mock.networkConnectFn = func(_ context.Context, _, id string, _ *network.EndpointSettings) error {
+		seq = append(seq, "connect:"+id)
+		return nil
+	}
+	mock.startFn = func(_ context.Context, id string, _ container.StartOptions) error {
+		if id == "ws-proxy-backup" {
+			seq = append(seq, "start-backup")
+		}
+		return nil
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	calls := 0
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		calls++
+		if calls == 1 {
+			return false, false, errors.New("proxy container is unhealthy") // NEW unhealthy
+		}
+		return true, false, nil // restored backup healthy
+	})()
+
+	err := ProxyRecreate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") || !strings.Contains(err.Error(), "unhealthy") {
+		t.Fatalf("want clean rollback to a healthy backup, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "restored proxy is also unhealthy") {
+		t.Fatalf("restored backup was healthy; this must be the clean rollback path, got: %v", err)
+	}
+	if indexOf(seq, "rename:ws-proxy-backup->ws-proxy") < 0 {
+		t.Fatalf("rollback must restore the backup; seq=%v", seq)
+	}
+}
+
+// DRIVER: any rollback sub-step fault yields CRITICAL naming only the remaining
+// manual recovery commands (and NOT a command that would now fail).
+func TestProxyRecreate_DoubleFault_CriticalNamesState(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := recreateForwardMock(t, &seq)
+	mock.createFn = func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+		return container.CreateResponse{}, errors.New("create boom")
+	}
+	mock.removeFn = func(_ context.Context, _ string, _ container.RemoveOptions) error { return nil }
+	mock.networkConnectFn = func(_ context.Context, _, _ string, _ *network.EndpointSettings) error { return nil }
+	mock.startFn = func(_ context.Context, id string, _ container.StartOptions) error {
+		if id == "ws-proxy-backup" {
+			return errors.New("backup will not start") // rollback sub-step fault
+		}
+		return nil
+	}
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+
+	err := ProxyRecreate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "CRITICAL") {
+		t.Fatalf("want CRITICAL double-fault, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "docker start ws-proxy-backup") {
+		t.Fatalf("CRITICAL must emit the remaining manual recovery for the un-started backup; got: %v", err)
+	}
+	if strings.Contains(err.Error(), "network connect --ip") {
+		t.Fatalf("must NOT print 'network connect --ip' when the backup is already connected; got: %v", err)
+	}
+}
+
+// DRIVER: restore succeeds but the restored backup is itself unhealthy (shared
+// broken on-disk config) -> honest RV routing to 'ws proxy doctor'.
+func TestProxyRecreate_RestoredBackupAlsoUnhealthy_HonestRV(t *testing.T) {
+	shrinkHealthTimers(t)
+	var seq []string
+	mock := recreateForwardMock(t, &seq)
+	mock.createFn = func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+		return container.CreateResponse{}, errors.New("create boom")
+	}
+	mock.removeFn = func(_ context.Context, _ string, _ container.RemoveOptions) error { return nil }
+	mock.networkConnectFn = func(_ context.Context, _, _ string, _ *network.EndpointSettings) error { return nil }
+	mock.startFn = func(_ context.Context, _ string, _ container.StartOptions) error { return nil }
+	defer withMock(mock)()
+	cfg := testCfg()
+	cfg.XrayConfig = writeTempXrayConfig(t)
+	// both NEW verify and restored-backup re-verify are unhealthy.
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+		return false, false, errors.New("proxy container is unhealthy")
+	})()
+
+	err := ProxyRecreate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "restored proxy is also unhealthy") {
+		t.Fatalf("want honest RV message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ws proxy doctor") {
+		t.Fatalf("RV must route to 'ws proxy doctor'; got: %v", err)
+	}
+}
+
 func TestProxyRecreate_ContextBudget_NoFalseRollbackVerifyOutlivesMutateCtx(t *testing.T) {
 	// Regression for the HIGH timeout bug (spec §5): a verify that consumes
 	// wall-clock beyond the mutating-phase deadline must NOT expire the COMMIT
