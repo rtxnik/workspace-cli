@@ -1073,3 +1073,42 @@ func TestProxyRestart_MissingContainerComesUp(t *testing.T) {
 		t.Error("ProxyRestart on a missing container must create it")
 	}
 }
+
+// TestProxyRestart_StartFails_ProxyIsDown covers RS2: ProxyUp's start step fails
+// after the stop, leaving the proxy DOWN. ProxyRestart must return a non-nil error
+// that contains the contract word "DOWN".
+func TestProxyRestart_StartFails_ProxyIsDown(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+	mock := &mockClient{
+		// primary absent -> ProxyDown tolerates NotFound, ProxyUp takes cold-create path.
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("absent"))
+		},
+		stopFn: func(_ context.Context, _ string, _ container.StopOptions) error {
+			return errdefs.NotFound(errors.New("absent"))
+		},
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil // image present -> preflight passes
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			return container.CreateResponse{ID: "new-id"}, nil
+		},
+		startFn: func(_ context.Context, _ string, _ container.StartOptions) error {
+			return errors.New("cannot start container") // RS2: start fails
+		},
+	}
+	defer withMock(mock)()
+
+	err := ProxyRestart(cfg)
+	if err == nil {
+		t.Fatal("RS2: want error when start fails during ProxyRestart")
+	}
+	if !strings.Contains(err.Error(), "DOWN") {
+		t.Fatalf("RS2: error must contain the contract word DOWN; got: %v", err)
+	}
+}

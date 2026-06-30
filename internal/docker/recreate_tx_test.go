@@ -420,7 +420,7 @@ func TestProxyRecreate_CommitBestEffort_RemoveBackupFails(t *testing.T) {
 
 func TestProxyRecreate_StaleBackupCaseA_RemovesGarbage(t *testing.T) {
 	shrinkHealthTimers(t)
-	removed := ""
+	var seq []string
 	mock := &mockClient{
 		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
 			// both primary and backup "exist".
@@ -430,9 +430,13 @@ func TestProxyRecreate_StaleBackupCaseA_RemovesGarbage(t *testing.T) {
 		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
 			return types.ImageInspect{}, nil, nil
 		},
-		removeFn: func(_ context.Context, id string, _ container.RemoveOptions) error { removed = id; return nil },
-		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
-			return container.CreateResponse{ID: "n"}, nil
+		removeFn: func(_ context.Context, id string, _ container.RemoveOptions) error {
+			seq = append(seq, "remove:"+id)
+			return nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
+			seq = append(seq, "create:"+name)
+			return container.CreateResponse{ID: "new-id"}, nil
 		},
 	}
 	defer withMock(mock)()
@@ -445,8 +449,17 @@ func TestProxyRecreate_StaleBackupCaseA_RemovesGarbage(t *testing.T) {
 	if err := ProxyRecreate(cfg); err != nil {
 		t.Fatalf("case A: %v", err)
 	}
-	if removed != "ws-proxy-backup" {
-		t.Fatalf("case A should force-remove the stale backup first; removed=%q", removed)
+	// The Case-A triage force-remove of the stale backup must happen BEFORE the
+	// swap creates the new container. Without the triage remove the first
+	// "remove:ws-proxy-backup" would be in COMMIT (after "create:ws-proxy"), so
+	// this ordering assertion would fail if the triage remove were deleted.
+	idxRemove := indexOf(seq, "remove:ws-proxy-backup")
+	idxCreate := indexOf(seq, "create:ws-proxy")
+	if idxRemove < 0 || idxCreate < 0 {
+		t.Fatalf("case A: expected both a backup remove and a create in seq; got %v", seq)
+	}
+	if idxRemove >= idxCreate {
+		t.Fatalf("case A: triage backup remove (idx=%d) must precede the create (idx=%d); seq=%v", idxRemove, idxCreate, seq)
 	}
 }
 
@@ -731,6 +744,9 @@ func TestProxyRecreate_DoubleFault_CriticalNamesState(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "network connect --ip") {
 		t.Fatalf("must NOT print 'network connect --ip' when the backup is already connected; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "DOWN") {
+		t.Fatalf("CRITICAL message must contain the contract word DOWN; got: %v", err)
 	}
 }
 
