@@ -762,6 +762,91 @@ func TestProxyUp_HostConfigHasTproxySysctls(t *testing.T) {
 	}
 }
 
+// TestProxyUp_ForeignIPAbortsBeforeCreate proves the additive P6 guard: a cold
+// ProxyUp must refuse to create when cfg.ProxyIP is already held by a foreign
+// container, with the friendly message, and must NOT call ContainerCreate.
+// This is the red->green DRIVER for the guard.
+func TestProxyUp_ForeignIPAbortsBeforeCreate(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+
+	created := false
+	mock := &mockClient{
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil // image present
+		},
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"intruder": {Name: "intruder", IPv4Address: "172.30.0.2/24"},
+				},
+			}, nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			created = true
+			return container.CreateResponse{ID: "test-id"}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	err := ProxyUp(cfg)
+	if err == nil {
+		t.Fatal("expected foreign-IP abort error")
+	}
+	if !strings.Contains(err.Error(), `is held by container "intruder"`) {
+		t.Errorf("expected foreign-IP message naming intruder, got: %v", err)
+	}
+	if created {
+		t.Error("ContainerCreate must NOT be called when the IP is foreign-held")
+	}
+}
+
+// TestProxyUp_OwnAndBackupEndpointsNotForeign proves the guard excludes the
+// proxy's own endpoint and the recreate backup, so a stale endpoint under
+// cfg.ProxyContainer or backupName never false-positives. NOTE: this asserts the
+// pre-existing "create succeeds" behavior, so it is a NON-REGRESSION GUARD, not a
+// red->green driver -- it is already green before the guard exists and must stay
+// green after.
+func TestProxyUp_OwnAndBackupEndpointsNotForeign(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(tmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testCfg()
+	cfg.XrayConfig = tmp
+
+	created := false
+	mock := &mockClient{
+		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+			return types.ImageInspect{}, nil, nil
+		},
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"a": {Name: cfg.ProxyContainer, IPv4Address: "172.30.0.2/24"},
+					"b": {Name: cfg.ProxyContainer + "-backup", IPv4Address: "172.30.0.2/24"},
+				},
+			}, nil
+		},
+		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
+			created = true
+			return container.CreateResponse{ID: "test-id"}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	if err := ProxyUp(cfg); err != nil {
+		t.Fatalf("expected own/backup endpoints to be excluded, got: %v", err)
+	}
+	if !created {
+		t.Error("ContainerCreate should run when the IP is held only by the proxy's own/backup endpoint")
+	}
+}
+
 // --- ImageLabels tests ---
 
 func TestImageLabels_ParsesRawConfigLabels(t *testing.T) {

@@ -111,18 +111,51 @@ func ProxyUp(cfg config.Config) error {
 		return nil
 	}
 
+	if err := proxyCreatePreflight(ctx, cli, cfg); err != nil {
+		return err
+	}
+	return proxyCreateAndStart(ctx, cli, cfg)
+}
+
+// proxyCreatePreflight runs the pre-mutation validation shared by ProxyUp's
+// cold path and the recreate orchestrator: image present, on-disk xray config
+// present, proxy network ensured, and (additive, P6) cfg.ProxyIP not held by a
+// foreign container. The foreign-IP check excludes the proxy's own endpoint and
+// the recreate backup so it never false-positives during a recreate preflight.
+func proxyCreatePreflight(ctx context.Context, cli DockerClient, cfg config.Config) error {
 	if !imageExists(ctx, cli, cfg.ProxyImage) {
 		return fmt.Errorf("proxy image %q not found, run 'ws proxy rebuild' first", cfg.ProxyImage)
 	}
-
 	if _, err := os.Stat(cfg.XrayConfig); os.IsNotExist(err) {
 		return fmt.Errorf("xray config not found at %s, run 'ws proxy init' first", cfg.XrayConfig)
 	}
-
 	if err := ensureProxyNetwork(cli, ctx, cfg); err != nil {
 		return fmt.Errorf("create proxy network: %w", err)
 	}
+	if info, err := cli.NetworkInspect(ctx, cfg.ProxyNetwork, network.InspectOptions{}); err == nil {
+		for _, ep := range info.Containers {
+			if ep.Name == cfg.ProxyContainer || ep.Name == backupName(cfg) {
+				continue
+			}
+			epIP := ep.IPv4Address
+			if i := strings.IndexByte(epIP, '/'); i >= 0 {
+				epIP = epIP[:i]
+			}
+			if epIP == cfg.ProxyIP {
+				return fmt.Errorf("IP %s is held by container %q, not the proxy -- free it then retry", cfg.ProxyIP, ep.Name)
+			}
+		}
+	}
+	return nil
+}
 
+// proxyCreateAndStart creates and starts the proxy container with the canonical
+// HostConfig (TPROXY sysctls + NET_ADMIN + whole-dir bind + UnlessStopped) and
+// the static IPAMConfig endpoint. Extracted verbatim from ProxyUp's create
+// block; the start error is now wrapped "start container:" so the recreate
+// orchestrator can distinguish a start failure (behavior-preserving for ProxyUp,
+// whose only test asserts the HostConfig, not the start error string).
+func proxyCreateAndStart(ctx context.Context, cli DockerClient, cfg config.Config) error {
 	resp, err := cli.ContainerCreate(ctx,
 		&container.Config{
 			Image: cfg.ProxyImage,
@@ -176,8 +209,10 @@ func ProxyUp(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("create container: %w", err)
 	}
-
-	return cli.ContainerStart(ctx, resp.ID, container.StartOptions{})
+	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("start container: %w", err)
+	}
+	return nil
 }
 
 // ProxyDown stops the proxy container. Workspace containers on the
