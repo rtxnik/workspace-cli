@@ -166,6 +166,49 @@ in `ci.yml` — which is what `datapath-gate.sh` and the strict-mode step read.)
 
 ---
 
+## Bump proxy base image digest (D6-06)
+
+The proxy base image is pinned by **manifest-list (index) digest** in
+`dotfiles: dot_config/workspaces/profiles/proxy/Dockerfile`
+(`FROM ubuntu:24.04@sha256:…`). Pinning gives reproducible, tamper-evident builds
+but does not auto-follow upstream Ubuntu security patches — refresh it manually.
+
+The datapath gate builds the staged dotfiles recipe **directly** (`docker build`),
+so bumping the digest is only exercised end-to-end when `DOTFILES_REF` points at
+the dotfiles commit that carries the new digest. Keep two refs equal to that
+commit: `.github/workflows/ci.yml` `DOTFILES_REF` **and** the ws-embedded pin
+`internal/proxyrecipe/recipe.lock -> dotfiles_ref`.
+
+To refresh:
+
+1. Resolve the current `ubuntu:24.04` index digest (no docker needed):
+
+   ```sh
+   TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull" | jq -r .token)
+   curl -sI -H "Authorization: Bearer $TOKEN" \
+     -H "Accept: application/vnd.oci.image.index.v1+json" \
+     -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+     "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04" \
+     | grep -i docker-content-digest
+   ```
+
+2. Update the digest in dotfiles `proxy/Dockerfile`; open and merge that PR — note
+   the merged dotfiles commit `X`.
+3. In workspace-cli, against a checkout of dotfiles at `X`:
+
+   ```sh
+   make pin-recipe RECIPE_DIR=<dotfiles@X>/dot_config/workspaces/profiles/proxy DOTFILES_REF=X
+   ```
+
+   then set `DOTFILES_REF: "X"` in `.github/workflows/ci.yml`; open and merge.
+
+`make pin-recipe` re-hashes the **whole** recipe (Dockerfile *and* entrypoint.sh),
+so the regenerated `recipe.lock` reflects every recipe change since the last pin,
+not just the digest. The two-PR order (dotfiles first, then workspace-cli) applies
+to every bump: the pin and the gate ref must point at a **merged** dotfiles commit.
+
+---
+
 ## Transactional recreate (`ws proxy recreate` / `ws proxy rebuild` / `ws proxy update`)
 
 `ws proxy recreate` is a Level-B transaction. The previous container is preserved
