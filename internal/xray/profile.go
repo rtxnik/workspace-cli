@@ -115,10 +115,11 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 
 // writeProfileValidated commits data to target behind an `xray -test` gate (D5-01).
 //
-// When the proxy is reachable with the whole-dir bind (verifyProxyReadyFn ==
-// nil), data is staged to a sibling .tmp file, validated inside the container,
-// and only atomically renamed over target on success — so a config xray rejects
-// never lands under the final name and never clobbers an existing good profile.
+// When the proxy is reachable with the whole-dir bind (verifyProxyReadyFn
+// returns nil), data is staged to a sibling .tmp file, validated inside the
+// container, and only atomically renamed over target on success — so a config
+// xray rejects never lands under the final name and never clobbers an existing
+// good profile.
 // When the proxy is unreachable, validation is inconclusive: emit a loud
 // advisory and write unvalidated (the gate at `ws proxy profile use` still
 // hard-validates before anything goes live).
@@ -150,7 +151,7 @@ func writeProfileValidated(cfg config.Config, name, target string, data []byte) 
 	containerPath := "/etc/xray/profiles/" + filepath.Base(stage)
 	if err := validateAtPathFn(cfg, containerPath); err != nil {
 		_ = os.Remove(stage)
-		return fmt.Errorf("generated config for %q rejected by xray -test (existing profile left unchanged): %w", name, err)
+		return fmt.Errorf("generated config for %q rejected by xray -test (the on-disk profile was not modified): %w", name, err)
 	}
 	if err := os.Rename(stage, target); err != nil {
 		_ = os.Remove(stage)

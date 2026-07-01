@@ -578,6 +578,10 @@ func TestProfileAdd_RejectNoFileOnNewAdd(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "brandnew.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a rejected new profile must not be written; stat err=%v", err)
 	}
+	leftovers, _ := filepath.Glob(filepath.Join(cfg.XrayProfilesDir, ".brandnew.add-validating.*.tmp"))
+	if len(leftovers) != 0 {
+		t.Errorf("staging file(s) not cleaned up: %v", leftovers)
+	}
 }
 
 // D5-01: when the proxy is unreachable, validation is inconclusive — write the
