@@ -116,13 +116,24 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 // writeProfileValidated commits data to target behind an `xray -test` gate (D5-01).
 //
 // When the proxy is reachable with the whole-dir bind (verifyProxyReadyFn
-// returns nil), data is staged to a sibling .tmp file, validated inside the
+// returns nil), data is staged to a hidden .json file, validated inside the
 // container, and only atomically renamed over target on success — so a config
 // xray rejects never lands under the final name and never clobbers an existing
 // good profile.
 // When the proxy is unreachable, validation is inconclusive: emit a loud
 // advisory and write unvalidated (the gate at `ws proxy profile use` still
 // hard-validates before anything goes live).
+//
+// The stage lives at the bind ROOT (filepath.Dir(cfg.XrayConfig) →
+// /etc/xray/), NOT under profiles/, for two reasons that must both hold:
+//   - it MUST end in .json, because `xray -test` infers the config format from
+//     the file extension (a .tmp stage fails with "Failed to get format",
+//     independent of the config's validity — that would make the gate a no-op);
+//   - it MUST stay out of the profiles/*.json glob so a half-committed profile
+//     is never visible to ListProfiles.
+//
+// A dotfile-named .json at the bind root satisfies both: it is visible to the
+// container yet never scanned (ListProfiles/upgrade only read profiles/).
 func writeProfileValidated(cfg config.Config, name, target string, data []byte) error {
 	if err := verifyProxyReadyFn(cfg); err != nil {
 		output.Warn(fmt.Sprintf(
@@ -134,21 +145,23 @@ func writeProfileValidated(cfg config.Config, name, target string, data []byte) 
 		return nil
 	}
 
+	stageDir := filepath.Dir(cfg.XrayConfig) // whole-dir bind root -> /etc/xray
+
 	// Best-effort sweep of stale staging files for THIS name left by a prior
 	// crashed add (nanos-unique names never collide; single-user CLI).
-	if debris, gerr := filepath.Glob(filepath.Join(cfg.XrayProfilesDir, "."+name+".add-validating.*.tmp")); gerr == nil {
+	if debris, gerr := filepath.Glob(filepath.Join(stageDir, "."+name+".add-validating.*.json")); gerr == nil {
 		for _, f := range debris {
 			_ = os.Remove(f)
 		}
 	}
 
-	stage := filepath.Join(cfg.XrayProfilesDir,
-		"."+name+".add-validating."+strconv.FormatInt(time.Now().UnixNano(), 10)+".tmp")
+	stage := filepath.Join(stageDir,
+		"."+name+".add-validating."+strconv.FormatInt(time.Now().UnixNano(), 10)+".json")
 	if err := fsutil.WriteFile(stage, data, 0o600); err != nil {
 		return fmt.Errorf("stage profile for validation: %w", err)
 	}
 
-	containerPath := "/etc/xray/profiles/" + filepath.Base(stage)
+	containerPath := "/etc/xray/" + filepath.Base(stage)
 	if err := validateAtPathFn(cfg, containerPath); err != nil {
 		_ = os.Remove(stage)
 		return fmt.Errorf("generated config for %q rejected by xray -test (the on-disk profile was not modified): %w", name, err)

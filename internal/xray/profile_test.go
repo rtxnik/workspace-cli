@@ -512,12 +512,12 @@ func TestProfileAdd_ValidatesAndCommitsOnPass(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "committed.json")); err != nil {
 		t.Fatalf("expected committed profile: %v", err)
 	}
-	if !strings.HasPrefix(gotContainerPath, "/etc/xray/profiles/.committed.add-validating.") ||
-		!strings.HasSuffix(gotContainerPath, ".tmp") {
+	if !strings.HasPrefix(gotContainerPath, "/etc/xray/.committed.add-validating.") ||
+		!strings.HasSuffix(gotContainerPath, ".json") {
 		t.Errorf("unexpected in-container validation path: %q", gotContainerPath)
 	}
-	// No staging debris.
-	leftovers, _ := filepath.Glob(filepath.Join(cfg.XrayProfilesDir, ".committed.add-validating.*.tmp"))
+	// No staging debris (stage lives at the bind root, not under profiles/).
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.XrayConfig), ".committed.add-validating.*.json"))
 	if len(leftovers) != 0 {
 		t.Errorf("staging file(s) not cleaned up: %v", leftovers)
 	}
@@ -557,7 +557,7 @@ func TestProfileAdd_ForceRejectPreservesExisting(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("force-add whose validation failed must NOT modify the existing profile")
 	}
-	leftovers, _ := filepath.Glob(filepath.Join(cfg.XrayProfilesDir, ".primary.add-validating.*.tmp"))
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.XrayConfig), ".primary.add-validating.*.json"))
 	if len(leftovers) != 0 {
 		t.Errorf("staging file(s) not cleaned up: %v", leftovers)
 	}
@@ -578,7 +578,7 @@ func TestProfileAdd_RejectNoFileOnNewAdd(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "brandnew.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a rejected new profile must not be written; stat err=%v", err)
 	}
-	leftovers, _ := filepath.Glob(filepath.Join(cfg.XrayProfilesDir, ".brandnew.add-validating.*.tmp"))
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.XrayConfig), ".brandnew.add-validating.*.json"))
 	if len(leftovers) != 0 {
 		t.Errorf("staging file(s) not cleaned up: %v", leftovers)
 	}
@@ -606,17 +606,22 @@ func TestProfileAdd_OfflineWritesUnvalidated(t *testing.T) {
 	}
 }
 
-// D5-01: the staging .tmp file is invisible to ListProfiles' *.json glob.
-// Observed at validation time, when the staging file is on disk.
+// D5-01: the hidden .json staging file at the bind root is invisible to
+// ListProfiles' profiles/*.json glob. Observed at validation time, when the
+// staging file is on disk.
 func TestProfileAdd_StagingInvisibleToList(t *testing.T) {
 	cfg := mkTestCfg(t)
 	origVerify, origValidate := verifyProxyReadyFn, validateAtPathFn
 	defer func() { verifyProxyReadyFn, validateAtPathFn = origVerify, origValidate }()
 
 	var duringValidation []ProfileSummary
+	var stagePresent bool
 	verifyProxyReadyFn = func(config.Config) error { return nil }
 	validateAtPathFn = func(config.Config, string) error {
-		duringValidation, _ = ListProfiles(cfg) // staging .tmp exists right now
+		// The staging .json is on disk at the bind root right now.
+		staged, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.XrayConfig), ".stg.add-validating.*.json"))
+		stagePresent = len(staged) == 1
+		duringValidation, _ = ListProfiles(cfg)
 		return nil
 	}
 
@@ -624,8 +629,11 @@ func TestProfileAdd_StagingInvisibleToList(t *testing.T) {
 	if err := AddProfile(cfg, "stg", uri, false); err != nil {
 		t.Fatalf("AddProfile: %v", err)
 	}
+	if !stagePresent {
+		t.Fatal("expected exactly one staging .json at the bind root during validation")
+	}
 	for _, p := range duringValidation {
-		if strings.Contains(p.Name, "add-validating") || strings.HasSuffix(p.Name, ".tmp") {
+		if strings.Contains(p.Name, "add-validating") {
 			t.Errorf("staging file leaked into ListProfiles: %q", p.Name)
 		}
 	}

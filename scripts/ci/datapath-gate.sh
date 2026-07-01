@@ -316,12 +316,16 @@ docker exec "${PROXY_CONTAINER}" xray run -test -config /etc/xray/profiles/d501p
   || { echo "::error::D5-01 positive: committed profile did NOT pass xray -test — validate-on-add committed a bad config"; exit 1; }
 echo "D5-01 positive passed: force-add committed a profile that passes xray -test"
 
-# (N) the CLI's validation command must actually reject a broken config. Use an
-# unknown outbound protocol: xray-core rejects it at -test on every version, so
-# this is robust against xray bumps. Staged as .tmp so ListProfiles ignores it.
-broken="$HOME/.config/xray/profiles/.d501-broken-fixture.tmp"
+# (N) the CLI's validation command must actually reject a broken config for the
+# right reason (bad CONTENT, not bad format). Use an unknown outbound protocol:
+# xray-core rejects it at -test on every version, so this is robust against xray
+# bumps. The fixture MUST end in .json — xray infers the config format from the
+# extension, so a non-.json file is rejected for "failed to get format" and the
+# check would pass for the wrong reason. Placed at the bind root (not profiles/)
+# so ListProfiles never globs it.
+broken="$HOME/.config/xray/.d501-broken-fixture.json"
 printf '%s' '{"outbounds":[{"protocol":"definitely-not-a-real-protocol","settings":{}}]}' > "$broken"
-if docker exec "${PROXY_CONTAINER}" xray run -test -config /etc/xray/profiles/.d501-broken-fixture.tmp >/dev/null 2>&1; then
+if docker exec "${PROXY_CONTAINER}" xray run -test -config /etc/xray/.d501-broken-fixture.json >/dev/null 2>&1; then
   echo "::error::D5-01 negative: xray run -test ACCEPTED a broken config — the validate-on-add gate would be a no-op on this image"
   rm -f "$broken"
   exit 1
