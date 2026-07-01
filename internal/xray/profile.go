@@ -7,15 +7,46 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/hysteria2"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/vless"
 	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
+
+// D5-01 test seams: production wires these to the real Docker-backed
+// implementations; tests override them for hermetic runs.
+//
+//   - verifyProxyReadyFn reports whether the proxy container is reachable AND
+//     uses the whole-dir bind, so a host-staged file is visible to `xray -test`
+//     inside the container. A nil return => validation can run (hard gate); a
+//     non-nil return => inconclusive (advisory).
+//   - validateAtPathFn runs `xray -test` against an in-container config path.
+var (
+	verifyProxyReadyFn = docker.VerifyProxyReadyForReload
+	validateAtPathFn   = realValidateProfileAtPath
+)
+
+// realValidateProfileAtPath runs `xray run -test -config <containerPath>` inside
+// the proxy container; a non-zero exit returns an error wrapping xray's stderr.
+//
+// This intentionally duplicates the 3-line exec of switch.go's
+// realValidateProfile rather than sharing it: switch.go owns the
+// TestManualRecoveryOnFailedSwitch tripwire and the codebase prefers a tiny
+// duplication over perturbing that file (cf. SwitchToSymlinkOnly, switch.go).
+func realValidateProfileAtPath(cfg config.Config, containerPath string) error {
+	out, err := docker.ProxyExec(cfg, "xray", "run", "-test", "-config", containerPath)
+	if err != nil {
+		return fmt.Errorf("xray -test failed: %w (output: %s)", err, string(out))
+	}
+	return nil
+}
 
 // ProfileSummary is the row shape used by `list` output (table + JSON).
 // UUIDMasked is always masked here (D-13) — list never emits raw UUIDs.
@@ -79,8 +110,51 @@ func AddProfile(cfg config.Config, name, uri string, force bool) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := fsutil.WriteFile(target, data, 0o600); err != nil {
-		return fmt.Errorf("write profile %s: %w", target, err)
+	return writeProfileValidated(cfg, name, target, data)
+}
+
+// writeProfileValidated commits data to target behind an `xray -test` gate (D5-01).
+//
+// When the proxy is reachable with the whole-dir bind (verifyProxyReadyFn ==
+// nil), data is staged to a sibling .tmp file, validated inside the container,
+// and only atomically renamed over target on success — so a config xray rejects
+// never lands under the final name and never clobbers an existing good profile.
+// When the proxy is unreachable, validation is inconclusive: emit a loud
+// advisory and write unvalidated (the gate at `ws proxy profile use` still
+// hard-validates before anything goes live).
+func writeProfileValidated(cfg config.Config, name, target string, data []byte) error {
+	if err := verifyProxyReadyFn(cfg); err != nil {
+		output.Warn(fmt.Sprintf(
+			"could not validate %q with xray -test (%v); wrote it UNVALIDATED — "+
+				"it will be validated on `ws proxy profile use %s`", name, err, name))
+		if werr := fsutil.WriteFile(target, data, 0o600); werr != nil {
+			return fmt.Errorf("write profile %s: %w", target, werr)
+		}
+		return nil
+	}
+
+	// Best-effort sweep of stale staging files for THIS name left by a prior
+	// crashed add (nanos-unique names never collide; single-user CLI).
+	if debris, gerr := filepath.Glob(filepath.Join(cfg.XrayProfilesDir, "."+name+".add-validating.*.tmp")); gerr == nil {
+		for _, f := range debris {
+			_ = os.Remove(f)
+		}
+	}
+
+	stage := filepath.Join(cfg.XrayProfilesDir,
+		"."+name+".add-validating."+strconv.FormatInt(time.Now().UnixNano(), 10)+".tmp")
+	if err := fsutil.WriteFile(stage, data, 0o600); err != nil {
+		return fmt.Errorf("stage profile for validation: %w", err)
+	}
+
+	containerPath := "/etc/xray/profiles/" + filepath.Base(stage)
+	if err := validateAtPathFn(cfg, containerPath); err != nil {
+		_ = os.Remove(stage)
+		return fmt.Errorf("generated config for %q rejected by xray -test (existing profile left unchanged): %w", name, err)
+	}
+	if err := os.Rename(stage, target); err != nil {
+		_ = os.Remove(stage)
+		return fmt.Errorf("commit validated profile %s: %w", target, err)
 	}
 	return nil
 }
