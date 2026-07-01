@@ -1,8 +1,8 @@
 {
   "datapath_mode": "tproxy",
-  "dotfiles_ref": "38c4accb4c9c09f2d5f82510e898fd7d6bcde51f",
+  "dotfiles_ref": "4df462dbb87816c9a51c3d389d39247022bac092",
   "files": {
-    "Dockerfile": "c924aa94231b272d51f942207d1e88a3e8fde3cca035825795ba331956780ece",
-    "entrypoint.sh": "f3e99a5d4c7cbee600520ccea11cf52e0beec425bf46888f670c74cacf5e32bb"
+    "Dockerfile": "8b672a74303747a90f19e1f4ea4e3212336e6d25153d96a822e544e7da0a06cf",
+    "entrypoint.sh": "f66f3a1c8bd256fb72f5deb74067fd086306270f9843cac0a1bc080a9fa6c97c"
   }
 }

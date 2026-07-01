@@ -67,13 +67,18 @@ jobs:
     permissions:
       contents: read
     env:
-      # Full commit SHA of dotfiles main after PR rtxnik/dotfiles#18 merged
-      # (adds bind9-dnsutils/dig to the proxy image for the H10 DNS leg).
+      # Full commit SHA of dotfiles main after PR rtxnik/dotfiles#20 merged
+      # (pins the proxy base image FROM to a manifest-list digest; D6-06 — #20
+      # moved the tag note off the FROM line so `docker build` parses it). The
+      # recipe at this SHA also carries the H4 entrypoint + H10 dig changes.
+      # This ref MUST equal the ws-embedded proxy recipe pin
+      # (internal/proxyrecipe/recipe.lock -> dotfiles_ref): the datapath gate
+      # builds the staged recipe directly and its comment relies on that equality.
       # actions/checkout requires
       # a full 40-char SHA or a branch/tag name — a short SHA is treated as a
       # branch pattern and fails to resolve. Pin a SHA (not `main`) so the gate is
       # reproducible; bump it when the proxy recipe changes again.
-      DOTFILES_REF: "5efa47443ffd29aa8ec415032bedd13a07d300a2"
+      DOTFILES_REF: "4df462dbb87816c9a51c3d389d39247022bac092"
       # WS_TEST_URI drives strict mode (real profile + exit-IP assertion).
       # If the WS_TEST_ENDPOINT secret is unset the gate runs in flow-only mode
       # (TPROXY preconditions + forwarding leg asserted; exit-IP comparison skipped).
