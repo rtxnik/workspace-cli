@@ -297,6 +297,39 @@ fi
 echo "IPv6 fail-closed assertion passed"
 
 # ---------------------------------------------------------------------------
+# D5-01: `ws proxy profile add` validates the generated config with xray -test
+# before committing. Two live assertions against the built-image xray:
+#   (P) a good force-add succeeds AND the committed file passes xray -test;
+#   (N) the exact `xray run -test` command the CLI relies on genuinely REJECTS
+#       a broken config on this image (guards against the gate degrading to a
+#       no-op if an xray flag ever changes). The reject-and-preserve ORDERING is
+#       covered deterministically by the seam-mocked unit tests.
+# Requires the proxy running with the whole-dir bind — true here, before T13.
+# ---------------------------------------------------------------------------
+echo "== D5-01: validate-on-add (positive commit + negative reject) =="
+
+# (P) a good force-add commits a config real xray accepts.
+d501_uri="vless://11111111-2222-3333-4444-555555555555@example.com:443?type=tcp&security=tls&sni=example.com#d501"
+"$WS" proxy profile add --force d501probe "$d501_uri" \
+  || { echo "::error::D5-01 positive: 'ws proxy profile add --force' failed for a valid VLESS URI"; exit 1; }
+docker exec "${PROXY_CONTAINER}" xray run -test -config /etc/xray/profiles/d501probe.json >/dev/null 2>&1 \
+  || { echo "::error::D5-01 positive: committed profile did NOT pass xray -test — validate-on-add committed a bad config"; exit 1; }
+echo "D5-01 positive passed: force-add committed a profile that passes xray -test"
+
+# (N) the CLI's validation command must actually reject a broken config. Use an
+# unknown outbound protocol: xray-core rejects it at -test on every version, so
+# this is robust against xray bumps. Staged as .tmp so ListProfiles ignores it.
+broken="$HOME/.config/xray/profiles/.d501-broken-fixture.tmp"
+printf '%s' '{"outbounds":[{"protocol":"definitely-not-a-real-protocol","settings":{}}]}' > "$broken"
+if docker exec "${PROXY_CONTAINER}" xray run -test -config /etc/xray/profiles/.d501-broken-fixture.tmp >/dev/null 2>&1; then
+  echo "::error::D5-01 negative: xray run -test ACCEPTED a broken config — the validate-on-add gate would be a no-op on this image"
+  rm -f "$broken"
+  exit 1
+fi
+rm -f "$broken"
+echo "D5-01 negative passed: xray -test rejects a broken config (validation is real)"
+
+# ---------------------------------------------------------------------------
 # T13: kill xray inside the container; doctor must detect dead socket
 # ---------------------------------------------------------------------------
 echo "== T13: killing xray inside proxy container =="
