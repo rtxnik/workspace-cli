@@ -372,14 +372,20 @@ var proxyFixRoutesCmd = &cobra.Command{
 			output.Die("Proxy is not running. Start it first: ws proxy up")
 		}
 
-		fixed, err := docker.ProxyFixRoutes(cfg)
+		rep, err := docker.ProxyFixRoutes(cfg)
 		if err != nil {
 			output.Die(err.Error())
 		}
-		if fixed == 0 {
+		switch {
+		case rep.Attempted == 0:
 			output.Info("No workspace containers found on proxy network")
-		} else {
-			output.Success(fmt.Sprintf("Fixed routes in %d container(s)", fixed))
+		case rep.Fixed == rep.Attempted:
+			output.Success(fmt.Sprintf("Fixed routes in %d container(s)", rep.Fixed))
+		default:
+			for _, f := range rep.Failures {
+				output.Warn(f)
+			}
+			output.Die(fmt.Sprintf("Fixed routes in %d of %d container(s)", rep.Fixed, rep.Attempted))
 		}
 	},
 }
