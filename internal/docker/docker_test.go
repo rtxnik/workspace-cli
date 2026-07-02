@@ -784,6 +784,13 @@ func TestProxyUp_HostConfigHasTproxySysctls(t *testing.T) {
 	if len(gotHost.CapAdd) != 1 || gotHost.CapAdd[0] != "NET_ADMIN" {
 		t.Errorf("CapAdd = %v, want [NET_ADMIN]", gotHost.CapAdd)
 	}
+
+	// The xray config dir must be the ONLY bind: whole-dir form, read-only,
+	// so a compromised container cannot rewrite host config (H8/D3-04).
+	wantBind := filepath.Dir(cfg.XrayConfig) + ":/etc/xray/:ro"
+	if len(gotHost.Binds) != 1 || gotHost.Binds[0] != wantBind {
+		t.Errorf("Binds = %v, want [%s]", gotHost.Binds, wantBind)
+	}
 }
 
 // TestProxyUp_ForeignIPAbortsBeforeCreate proves the additive P6 guard: a cold
