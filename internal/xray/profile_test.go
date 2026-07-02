@@ -13,6 +13,18 @@ import (
 	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
 
+// TestMain defaults the D5-01 add-time validation seams to a hermetic
+// online+pass mode for the whole package test run, so no test touches real
+// Docker via AddProfile. Individual tests override with defer-restore.
+// Integration tests (//go:build integration) drive real Docker through the
+// docker package directly, not these seams, so stubbing here is harmless to
+// their assertions.
+func TestMain(m *testing.M) {
+	verifyProxyReadyFn = func(config.Config) error { return nil }
+	validateAtPathFn = func(config.Config, string) error { return nil }
+	os.Exit(m.Run())
+}
+
 // mkTestCfg returns a config.Config rooted in t.TempDir() with profiles dir
 // pre-created and XrayConfig pointing at a not-yet-existing symlink path.
 func mkTestCfg(t *testing.T) config.Config {
@@ -479,5 +491,150 @@ func TestAddProfilePerms(t *testing.T) {
 	}
 	if di.Mode().Perm() != 0o700 {
 		t.Errorf("dir perm = %o, want 700", di.Mode().Perm())
+	}
+}
+
+// D5-01: a good force-add stages, validates, and commits under the final name;
+// the in-container validation path is the sibling .tmp staging file.
+func TestProfileAdd_ValidatesAndCommitsOnPass(t *testing.T) {
+	cfg := mkTestCfg(t)
+	origVerify, origValidate := verifyProxyReadyFn, validateAtPathFn
+	defer func() { verifyProxyReadyFn, validateAtPathFn = origVerify, origValidate }()
+
+	var gotContainerPath string
+	verifyProxyReadyFn = func(config.Config) error { return nil }
+	validateAtPathFn = func(_ config.Config, p string) error { gotContainerPath = p; return nil }
+
+	uri := "vless://12345678-1234-1234-1234-123456789012@example.com:443?type=tcp&security=tls&sni=example.com#ok"
+	if err := AddProfile(cfg, "committed", uri, false); err != nil {
+		t.Fatalf("AddProfile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "committed.json")); err != nil {
+		t.Fatalf("expected committed profile: %v", err)
+	}
+	if !strings.HasPrefix(gotContainerPath, "/etc/xray/.committed.add-validating.") ||
+		!strings.HasSuffix(gotContainerPath, ".json") {
+		t.Errorf("unexpected in-container validation path: %q", gotContainerPath)
+	}
+	// No staging debris (stage lives at the bind root, not under profiles/).
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.XrayConfig), ".committed.add-validating.*.json"))
+	if len(leftovers) != 0 {
+		t.Errorf("staging file(s) not cleaned up: %v", leftovers)
+	}
+}
+
+// D5-01 core invariant: a --force add whose validation FAILS must leave the
+// pre-existing profile byte-for-byte unchanged (no clobber) and remove staging.
+func TestProfileAdd_ForceRejectPreservesExisting(t *testing.T) {
+	cfg := mkTestCfg(t)
+
+	goodURI := "vless://12345678-1234-1234-1234-123456789012@example.com:443?type=tcp&security=tls&sni=example.com#good"
+	if err := AddProfile(cfg, "primary", goodURI, false); err != nil {
+		t.Fatalf("seed AddProfile: %v", err)
+	}
+	target := filepath.Join(cfg.XrayProfilesDir, "primary.json")
+	before, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read seeded profile: %v", err)
+	}
+
+	origVerify, origValidate := verifyProxyReadyFn, validateAtPathFn
+	defer func() { verifyProxyReadyFn, validateAtPathFn = origVerify, origValidate }()
+	verifyProxyReadyFn = func(config.Config) error { return nil } // online
+	validateAtPathFn = func(config.Config, string) error { return errors.New("xray: bad config") }
+
+	otherURI := "vless://12345678-1234-1234-1234-123456789012@example.com:8443?type=tcp&security=tls&sni=example.com#other"
+	if err := AddProfile(cfg, "primary", otherURI, true); err == nil {
+		t.Fatal("expected --force AddProfile to fail when xray -test rejects the config")
+	} else if !strings.Contains(err.Error(), "xray -test") {
+		t.Errorf("expected xray -test rejection in error; got %v", err)
+	}
+
+	after, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read profile after failed force-add: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("force-add whose validation failed must NOT modify the existing profile")
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.XrayConfig), ".primary.add-validating.*.json"))
+	if len(leftovers) != 0 {
+		t.Errorf("staging file(s) not cleaned up: %v", leftovers)
+	}
+}
+
+// D5-01: a NEW add whose validation FAILS must not create the profile file.
+func TestProfileAdd_RejectNoFileOnNewAdd(t *testing.T) {
+	cfg := mkTestCfg(t)
+	origVerify, origValidate := verifyProxyReadyFn, validateAtPathFn
+	defer func() { verifyProxyReadyFn, validateAtPathFn = origVerify, origValidate }()
+	verifyProxyReadyFn = func(config.Config) error { return nil }
+	validateAtPathFn = func(config.Config, string) error { return errors.New("xray: bad config") }
+
+	uri := "vless://12345678-1234-1234-1234-123456789012@example.com:443?type=tcp&security=tls&sni=example.com#new"
+	if err := AddProfile(cfg, "brandnew", uri, false); err == nil {
+		t.Fatal("expected new AddProfile to fail when xray -test rejects the config")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "brandnew.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a rejected new profile must not be written; stat err=%v", err)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.XrayConfig), ".brandnew.add-validating.*.json"))
+	if len(leftovers) != 0 {
+		t.Errorf("staging file(s) not cleaned up: %v", leftovers)
+	}
+}
+
+// D5-01: when the proxy is unreachable, validation is inconclusive — write the
+// profile unvalidated (advisory) and do NOT call the validator.
+func TestProfileAdd_OfflineWritesUnvalidated(t *testing.T) {
+	cfg := mkTestCfg(t)
+	origVerify, origValidate := verifyProxyReadyFn, validateAtPathFn
+	defer func() { verifyProxyReadyFn, validateAtPathFn = origVerify, origValidate }()
+	verifyProxyReadyFn = func(config.Config) error { return errors.New("proxy not running") }
+	validateCalled := false
+	validateAtPathFn = func(config.Config, string) error { validateCalled = true; return nil }
+
+	uri := "vless://12345678-1234-1234-1234-123456789012@example.com:443?type=tcp&security=tls&sni=example.com#off"
+	if err := AddProfile(cfg, "offline", uri, false); err != nil {
+		t.Fatalf("offline AddProfile should still write: %v", err)
+	}
+	if validateCalled {
+		t.Error("validateAtPathFn must NOT be called when the proxy is unreachable")
+	}
+	if _, err := os.Stat(filepath.Join(cfg.XrayProfilesDir, "offline.json")); err != nil {
+		t.Errorf("offline add must write the profile unvalidated; stat err=%v", err)
+	}
+}
+
+// D5-01: the hidden .json staging file at the bind root is invisible to
+// ListProfiles' profiles/*.json glob. Observed at validation time, when the
+// staging file is on disk.
+func TestProfileAdd_StagingInvisibleToList(t *testing.T) {
+	cfg := mkTestCfg(t)
+	origVerify, origValidate := verifyProxyReadyFn, validateAtPathFn
+	defer func() { verifyProxyReadyFn, validateAtPathFn = origVerify, origValidate }()
+
+	var duringValidation []ProfileSummary
+	var stagePresent bool
+	verifyProxyReadyFn = func(config.Config) error { return nil }
+	validateAtPathFn = func(config.Config, string) error {
+		// The staging .json is on disk at the bind root right now.
+		staged, _ := filepath.Glob(filepath.Join(filepath.Dir(cfg.XrayConfig), ".stg.add-validating.*.json"))
+		stagePresent = len(staged) == 1
+		duringValidation, _ = ListProfiles(cfg)
+		return nil
+	}
+
+	uri := "vless://12345678-1234-1234-1234-123456789012@example.com:443?type=tcp&security=tls&sni=example.com#stg"
+	if err := AddProfile(cfg, "stg", uri, false); err != nil {
+		t.Fatalf("AddProfile: %v", err)
+	}
+	if !stagePresent {
+		t.Fatal("expected exactly one staging .json at the bind root during validation")
+	}
+	for _, p := range duringValidation {
+		if strings.Contains(p.Name, "add-validating") {
+			t.Errorf("staging file leaked into ListProfiles: %q", p.Name)
+		}
 	}
 }
