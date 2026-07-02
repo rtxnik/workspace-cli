@@ -429,14 +429,28 @@ func BuildProxyImage(cfg config.Config, version string, allowDrift bool) error {
 	return cmd.Run()
 }
 
+// FixRoutesReport describes the outcome of a best-effort route-fix pass.
+type FixRoutesReport struct {
+	Fixed     int      // containers whose default route was replaced
+	Attempted int      // containers on the proxy network (excluding the proxy itself)
+	Failures  []string // "name: error" for each container whose exec failed
+}
+
+// fixRouteExecFn runs the route-replace command for a single container.
+// Extracted as a var so tests can stub it without shelling out.
+var fixRouteExecFn = func(containerName, proxyIP string) error {
+	return exec.Command("docker", "exec", containerName,
+		"ip", "route", "replace", "default", "via", proxyIP).Run()
+}
+
 // ProxyFixRoutes sets the default route to the proxy IP in all workspace
 // containers connected to the proxy network. This is needed after a system
 // reboot because Docker restarts containers without running devcontainer
 // lifecycle hooks (postStartCommand), so the route override is lost.
-func ProxyFixRoutes(cfg config.Config) (int, error) {
+func ProxyFixRoutes(cfg config.Config) (FixRoutesReport, error) {
 	cli, err := newClientFunc()
 	if err != nil {
-		return 0, fmt.Errorf("docker client: %w", err)
+		return FixRoutesReport{}, fmt.Errorf("docker client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
 
@@ -445,22 +459,22 @@ func ProxyFixRoutes(cfg config.Config) (int, error) {
 
 	info, err := cli.NetworkInspect(ctx, cfg.ProxyNetwork, network.InspectOptions{})
 	if err != nil {
-		return 0, fmt.Errorf("inspect network: %w", err)
+		return FixRoutesReport{}, fmt.Errorf("inspect network: %w", err)
 	}
 
-	var fixed int
+	var rep FixRoutesReport
 	for _, ep := range info.Containers {
 		if ep.Name == cfg.ProxyContainer {
 			continue
 		}
-		cmd := exec.Command("docker", "exec", ep.Name,
-			"ip", "route", "replace", "default", "via", cfg.ProxyIP)
-		if err := cmd.Run(); err != nil {
+		rep.Attempted++
+		if err := fixRouteExecFn(ep.Name, cfg.ProxyIP); err != nil {
+			rep.Failures = append(rep.Failures, fmt.Sprintf("%s: %v", ep.Name, err))
 			continue
 		}
-		fixed++
+		rep.Fixed++
 	}
-	return fixed, nil
+	return rep, nil
 }
 
 // ProxyConnectedContainers returns names of running containers on the

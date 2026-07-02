@@ -345,6 +345,194 @@ func TestProxyConnectedContainers(t *testing.T) {
 	}
 }
 
+// --- ProxyFixRoutes tests ---
+
+// withFixRouteExec overrides fixRouteExecFn, recording every container name
+// it was invoked with, and restores the original on the returned func.
+func withFixRouteExec(fn func(containerName, proxyIP string) error) (restore func(), calls *[]string) {
+	orig := fixRouteExecFn
+	var recorded []string
+	fixRouteExecFn = func(containerName, proxyIP string) error {
+		recorded = append(recorded, containerName)
+		return fn(containerName, proxyIP)
+	}
+	return func() { fixRouteExecFn = orig }, &recorded
+}
+
+func TestProxyFixRoutes_AllSucceed(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"abc": {Name: "ws-proxy"},
+					"def": {Name: "my-workspace"},
+					"ghi": {Name: "another-ws"},
+				},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	restore, calls := withFixRouteExec(func(_, _ string) error { return nil })
+	defer restore()
+
+	rep, err := ProxyFixRoutes(testCfg())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep.Fixed != 2 {
+		t.Errorf("expected Fixed=2, got %d", rep.Fixed)
+	}
+	if rep.Attempted != 2 {
+		t.Errorf("expected Attempted=2, got %d", rep.Attempted)
+	}
+	if len(rep.Failures) != 0 {
+		t.Errorf("expected no failures, got %v", rep.Failures)
+	}
+	if len(*calls) != 2 {
+		t.Errorf("expected 2 exec calls, got %v", *calls)
+	}
+	for _, name := range *calls {
+		if name == "ws-proxy" {
+			t.Error("proxy container itself must never be exec'd")
+		}
+	}
+}
+
+func TestProxyFixRoutes_OneFails(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"abc": {Name: "ws-proxy"},
+					"def": {Name: "my-workspace"},
+					"ghi": {Name: "another-ws"},
+				},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	failName := "my-workspace"
+	restore, calls := withFixRouteExec(func(containerName, _ string) error {
+		if containerName == failName {
+			return errors.New("exit status 1")
+		}
+		return nil
+	})
+	defer restore()
+
+	rep, err := ProxyFixRoutes(testCfg())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep.Fixed != 1 {
+		t.Errorf("expected Fixed=1, got %d", rep.Fixed)
+	}
+	if rep.Attempted != 2 {
+		t.Errorf("expected Attempted=2, got %d", rep.Attempted)
+	}
+	if len(rep.Failures) != 1 {
+		t.Fatalf("expected 1 failure, got %v", rep.Failures)
+	}
+	want := failName + ": exit status 1"
+	if rep.Failures[0] != want {
+		t.Errorf("expected failure %q, got %q", want, rep.Failures[0])
+	}
+	// Both non-proxy containers must have been attempted despite the failure.
+	if len(*calls) != 2 {
+		t.Errorf("expected loop to process both containers, got calls=%v", *calls)
+	}
+}
+
+func TestProxyFixRoutes_AllFail(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"abc": {Name: "ws-proxy"},
+					"def": {Name: "my-workspace"},
+					"ghi": {Name: "another-ws"},
+				},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	restore, calls := withFixRouteExec(func(_, _ string) error { return errors.New("boom") })
+	defer restore()
+
+	rep, err := ProxyFixRoutes(testCfg())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep.Fixed != 0 {
+		t.Errorf("expected Fixed=0, got %d", rep.Fixed)
+	}
+	if rep.Attempted != 2 {
+		t.Errorf("expected Attempted=2, got %d", rep.Attempted)
+	}
+	if len(rep.Failures) != 2 {
+		t.Errorf("expected 2 failures, got %v", rep.Failures)
+	}
+	if len(*calls) != 2 {
+		t.Errorf("expected 2 exec calls, got %v", *calls)
+	}
+}
+
+func TestProxyFixRoutes_NoWorkspaceContainers(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{
+				Containers: map[string]network.EndpointResource{
+					"abc": {Name: "ws-proxy"},
+				},
+			}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	restore, calls := withFixRouteExec(func(_, _ string) error {
+		t.Fatal("exec must not be called when only the proxy is on the network")
+		return nil
+	})
+	defer restore()
+
+	rep, err := ProxyFixRoutes(testCfg())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep.Fixed != 0 {
+		t.Errorf("expected Fixed=0, got %d", rep.Fixed)
+	}
+	if rep.Attempted != 0 {
+		t.Errorf("expected Attempted=0, got %d", rep.Attempted)
+	}
+	if len(rep.Failures) != 0 {
+		t.Errorf("expected no failures, got %v", rep.Failures)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected no exec calls, got %v", *calls)
+	}
+}
+
+func TestProxyFixRoutes_NetworkInspectError(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{}, errors.New("network inspect failed")
+		},
+	}
+	defer withMock(mock)()
+
+	rep, err := ProxyFixRoutes(testCfg())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if rep.Fixed != 0 || rep.Attempted != 0 || len(rep.Failures) != 0 {
+		t.Errorf("expected zero report on error, got %+v", rep)
+	}
+}
+
 // --- WaitForHealth tests ---
 
 func TestWaitForHealth_Healthy(t *testing.T) {
