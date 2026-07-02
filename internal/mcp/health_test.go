@@ -437,4 +437,3 @@ func TestVaultHealthScoreNeverNegativeUnderAllSentinels(t *testing.T) {
 		t.Errorf("expected 0 (lower clamp; every pre-deduction sub-metric is 0); got %d", score)
 	}
 }
-

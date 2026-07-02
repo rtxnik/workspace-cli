@@ -485,8 +485,8 @@ func applyMutations(cmd *cobra.Command, checks []*doctorCheck) {
 
 func newVaultDoctorCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:         "doctor",
-		Short:       "Diagnose MCP subprocess + token + xrepo contract health (read-only by default)",
+		Use:   "doctor",
+		Short: "Diagnose MCP subprocess + token + xrepo contract health (read-only by default)",
 		Long: "Runs 5 read-only diagnostic checks per CONTEXT D-12: orphan MCP subprocesses, " +
 			"stale lock files, VAULT_AI_TOKEN presence, MCP fd-pass handshake, xrepo contract parity. " +
 			"Exit 0 (all green) / 1 (≥1 yellow) / 2 (≥1 red). " +

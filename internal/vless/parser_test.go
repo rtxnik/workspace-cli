@@ -27,7 +27,7 @@ func TestParse(t *testing.T) {
 			want: VLESSConfig{
 				UUID: "22222222-2222-2222-2222-222222222222", Address: "example.com", Port: 80,
 				Encryption: "none",
-				Network: "tcp", Security: "none", Fp: "chrome",
+				Network:    "tcp", Security: "none", Fp: "chrome",
 				HeaderType: "http", Host: "cdn.example.com", Path: "/",
 				Remark: "http-node",
 			},
@@ -38,7 +38,7 @@ func TestParse(t *testing.T) {
 			want: VLESSConfig{
 				UUID: "33333333-3333-3333-3333-333333333333", Address: "ws.example.com", Port: 443,
 				Encryption: "none",
-				Network: "ws", Security: "tls",
+				Network:    "ws", Security: "tls",
 				SNI: "ws.example.com", Fp: "firefox",
 				Host: "ws.example.com", Path: "/vless-ws",
 				Remark: "ws-tls",
@@ -50,11 +50,11 @@ func TestParse(t *testing.T) {
 			want: VLESSConfig{
 				UUID: "44444444-4444-4444-4444-444444444444", Address: "grpc.example.com", Port: 443,
 				Encryption: "none",
-				Network: "grpc", Security: "reality",
+				Network:    "grpc", Security: "reality",
 				SNI: "www.google.com", Fp: "chrome",
 				PublicKey: "grpc-pub", ShortID: "cd",
 				ServiceName: "mygrpc",
-				Remark: "grpc-node",
+				Remark:      "grpc-node",
 			},
 		},
 		{
@@ -63,7 +63,7 @@ func TestParse(t *testing.T) {
 			want: VLESSConfig{
 				UUID: "55555555-5555-5555-5555-555555555555", Address: "h2.example.com", Port: 443,
 				Encryption: "none",
-				Network: "h2", Security: "tls",
+				Network:    "h2", Security: "tls",
 				SNI: "h2.example.com", Fp: "chrome",
 				Host: "h2.example.com", Path: "/h2path",
 				Remark: "h2-node",
@@ -75,7 +75,7 @@ func TestParse(t *testing.T) {
 			want: VLESSConfig{
 				UUID: "66666666-6666-6666-6666-666666666666", Address: "hu.example.com", Port: 443,
 				Encryption: "none",
-				Network: "httpupgrade", Security: "tls",
+				Network:    "httpupgrade", Security: "tls",
 				SNI: "hu.example.com", Fp: "safari",
 				Host: "hu.example.com", Path: "/upgrade",
 				Remark: "hu-node",
@@ -87,7 +87,7 @@ func TestParse(t *testing.T) {
 			want: VLESSConfig{
 				UUID: "77777777-7777-7777-7777-777777777777", Address: "xhttp.example.com", Port: 443,
 				Encryption: "none",
-				Network: "xhttp", Security: "reality",
+				Network:    "xhttp", Security: "reality",
 				SNI: "www.google.com", Fp: "chrome",
 				PublicKey: "xhttp-pub", ShortID: "ef",
 				Path: "/xpath", Mode: "auto",
@@ -100,7 +100,7 @@ func TestParse(t *testing.T) {
 			want: VLESSConfig{
 				UUID: "88888888-8888-8888-8888-888888888888", Address: "min.example.com", Port: 443,
 				Encryption: "none",
-				Network: "tcp", Security: "none", Fp: "chrome",
+				Network:    "tcp", Security: "none", Fp: "chrome",
 				Remark: "minimal",
 			},
 		},
