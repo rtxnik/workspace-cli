@@ -85,8 +85,8 @@ func Parse(uri string) (VLESSConfig, error) {
 		Fp:       q.Get("fp"),
 
 		PublicKey: q.Get("pbk"),
-		ShortID:  q.Get("sid"),
-		SpiderX:  q.Get("spx"),
+		ShortID:   q.Get("sid"),
+		SpiderX:   q.Get("spx"),
 
 		Path:        q.Get("path"),
 		Host:        q.Get("host"),

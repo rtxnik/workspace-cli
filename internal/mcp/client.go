@@ -76,7 +76,7 @@ type Client struct {
 	c         *mcpclient.Client
 	cmd       *exec.Cmd
 	tokenPipe *os.File // path-A: closed on Close; never nil after successful NewClient
-	repoRoot  string  // Phase 21 21c HARD-14: surfaced via RepoRoot() for sentinel reads in health.go
+	repoRoot  string   // Phase 21 21c HARD-14: surfaced via RepoRoot() for sentinel reads in health.go
 }
 
 // RepoRoot returns the vault-ai filesystem root resolved at NewClient time

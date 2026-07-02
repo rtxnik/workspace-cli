@@ -577,9 +577,9 @@ func TestVaultDoctorIntegration(t *testing.T) {
 // TestVaultDoctorReadOnlyByDefault unit test. Even on a real system with real
 // orphan PIDs / stale lock files (if any), invoking doctor with NO mutation
 // flags MUST NOT change any state. We verify this by:
-//   1. Capturing pgrep + state-dir snapshots before invocation
-//   2. Invoking doctor (no flags)
-//   3. Asserting both snapshots are byte-identical post-invocation
+//  1. Capturing pgrep + state-dir snapshots before invocation
+//  2. Invoking doctor (no flags)
+//  3. Asserting both snapshots are byte-identical post-invocation
 func TestVaultDoctorReadOnlyIntegration(t *testing.T) {
 	_ = requireUvAndVaultAIForCmd(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

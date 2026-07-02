@@ -8,9 +8,9 @@ import (
 
 func TestProfile(t *testing.T) {
 	tests := []struct {
-		name    string
-		files   []string
-		want    string
+		name  string
+		files []string
+		want  string
 	}{
 		{
 			name:  "go project",
