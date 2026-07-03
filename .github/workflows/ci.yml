@@ -109,6 +109,8 @@ jobs:
         run: |
           mkdir -p "$HOME/.config/workspaces/profiles"
           cp -r _dotfiles/dot_config/workspaces/profiles/proxy "$HOME/.config/workspaces/profiles/proxy"
+      - name: Verify staged proxy recipe against embedded pin
+        run: WS_STAGED_PROFILES_DIR="$HOME/.config/workspaces/profiles" go test ./internal/proxyrecipe -run TestVerifyStagedRecipe -v
       - name: Run red-line datapath gate (T2-T5 + T13)
         run: sudo -E WS_BIN="$PWD/ws" bash scripts/ci/datapath-gate.sh
 
