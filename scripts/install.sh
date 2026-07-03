@@ -21,7 +21,7 @@ set -eu
 
 # --- embedded release-signing public key -----------------------------------
 # The owner replaces this placeholder after generating the minisign keypair.
-RELEASE_PUBKEY="RWQ...PLACEHOLDER..."
+RELEASE_PUBKEY="RWS9SKDBxXVQRL27p1aOVmdoSffl83dqJqKtnwDO6IqEMpdoRf+AMDGL"
 
 REPO="rtxnik/workspace-cli"
 PREFIX="${PREFIX:-/usr/local}"
