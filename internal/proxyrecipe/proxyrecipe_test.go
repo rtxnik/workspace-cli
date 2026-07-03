@@ -110,3 +110,25 @@ func TestLoad_EmbeddedPinParses(t *testing.T) {
 		t.Error("pin must list entrypoint.sh")
 	}
 }
+
+// TestVerifyStagedRecipe is a CI integration check: it runs Verify against the
+// profiles dir staged by the datapath job's "Stage proxy recipe where ws
+// expects it" step and requires the staged recipe to match the embedded pin.
+// It is a no-op unless WS_STAGED_PROFILES_DIR is set, so it never runs in
+// local unit-test runs.
+func TestVerifyStagedRecipe(t *testing.T) {
+	dir := os.Getenv("WS_STAGED_PROFILES_DIR")
+	if dir == "" {
+		t.Skip("WS_STAGED_PROFILES_DIR not set")
+	}
+
+	res, err := Verify(dir)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !res.OK {
+		t.Logf("missing: %v", res.Missing)
+		t.Logf("mismatches: %v", res.Mismatches)
+		t.Fatalf("staged recipe drifted from embedded pin: %s", res.DriftSummary())
+	}
+}
