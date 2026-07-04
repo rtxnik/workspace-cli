@@ -1,0 +1,22 @@
+name: setup-yq
+description: Install a SHA-pinned mikefarah yq v4 (single definition; vendored byte-identical across repos, drift-checked).
+inputs:
+  version:
+    description: yq release tag
+    default: v4.53.2
+  sha256:
+    description: sha256 of yq_linux_amd64 for the pinned version
+    default: d56bf5c6819e8e696340c312bd70f849dc1678a7cda9c2ad63eebd906371d56b
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        YQ_VERSION: ${{ inputs.version }}
+        YQ_SHA256: ${{ inputs.sha256 }}
+      run: |
+        set -euo pipefail
+        curl -sSfL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /tmp/yq
+        echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+        sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+        yq --version | grep -q mikefarah

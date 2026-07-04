@@ -1,0 +1,31 @@
+name: workflow-security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: workflow-security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+      - name: Install yq (mikefarah v4, SHA-pinned)
+        uses: ./.github/actions/setup-yq
+      - name: Validate workflow security (A5)
+        run: bash scripts/ci/validate-workflow-security.sh
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
+      - name: zizmor (workflow-security depth — second hard gate)
+        run: uvx zizmor@1.25.2 --offline --persona regular .github/workflows/ .github/actions/
