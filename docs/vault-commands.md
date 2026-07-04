@@ -104,6 +104,8 @@ Eleven sub-commands form the CLI surface (10 per ADR-int-03 + 1 diagnostic predi
 
 **Purpose.** Hybrid-search top-K results from shell. Wraps MCP `search_notes` tool (v1.3.0). (CLI-02; Phase 18 Plan 18-03.)
 
+**Args.** `<query>` (positional, required — one or more terms, joined).
+
 **Flags.** `--limit N` / `-n N` — maximum results to return (default 10, range 1-100); `--json`.
 
 ### ws vault triage-run
