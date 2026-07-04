@@ -20,7 +20,7 @@
 set -eu
 
 # --- embedded release-signing public key -----------------------------------
-# The owner replaces this placeholder after generating the minisign keypair.
+# Minisign public key used to verify release signatures (see SECURITY.md).
 RELEASE_PUBKEY="RWS9SKDBxXVQRL27p1aOVmdoSffl83dqJqKtnwDO6IqEMpdoRf+AMDGL"
 
 REPO="rtxnik/workspace-cli"
