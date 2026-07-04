@@ -9,12 +9,14 @@ source_adr: vault-ai/docs/adr/adr-int-03-ws-vault-cli.md
 
 # ws vault — Vault-AI CLI Reference
 
-CLI facade over the vault-ai MCP server per [ADR-int-03](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md). Provides shell-native access to the 27-tool MCP contract via 11 sub-commands with GNU-style flag parsing, Unix exit codes, and fd-3 token authentication. Invokes the stdio MCP transport per [ADR-ai-01](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md).
+> **Note.** The backend this CLI talks to (vault-ai) is a private repository; these commands are not usable without access to that backend. This document is the CLI-side contract reference. File paths pointing into vault-ai and workflow-kit below are plain-text traceability references into those private/retired repositories, not links.
+
+CLI facade over the vault-ai MCP server per ADR-int-03 (`vault-ai/docs/adr/adr-int-03-ws-vault-cli.md`). Provides shell-native access to the 27-tool MCP contract via 11 sub-commands with GNU-style flag parsing, Unix exit codes, and fd-3 token authentication. Invokes the stdio MCP transport per ADR-ai-01 (`vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md`).
 
 ## Status
 
 - **Spec status:** `accepted` — Phase 18 (CLI-01..14) shipped 2026-05-18; all 10 sub-commands implemented under `workspace-cli/cmd/vault*.go`; the Go binary delivers the surface end-to-end via `internal/mcp/` Go MCP stdio client.
-- **ADR status:** [ADR-int-03](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md) `accepted`; §v2.2 Amendment body (D-int03-v2.2-A) records the 6 deltas landed Phase 18 (command-surface realignment + mark3labs/mcp-go pin + fd-3 token transport + gen-go-types.py codegen + XREPO-01 walker 4-surface + doctor read-only discipline).
+- **ADR status:** ADR-int-03 (`vault-ai/docs/adr/adr-int-03-ws-vault-cli.md`) `accepted`; §v2.2 Amendment body (D-int03-v2.2-A) records the 6 deltas landed Phase 18 (command-surface realignment + mark3labs/mcp-go pin + fd-3 token transport + gen-go-types.py codegen + XREPO-01 walker 4-surface + doctor read-only discipline).
 - **Ships:** v2.2 (Phase 18 closure 2026-05-18). Go implementation under `workspace-cli/cmd/vault*.go` + `workspace-cli/internal/mcp/`.
 
 The command list below realigns to the v2.2 implemented surface per `.planning/REQUIREMENTS.md` CLI-01..10. The v2.0 design-only list (`triage / export / push-drive / health / reindex / validate / coverage / restore / init / stats`) is superseded per ADR-int-03 §v2.2 Amendment §1.
@@ -25,13 +27,13 @@ Every vault-ai surface with a contract dependency on the MCP 27-tool lockfile st
 
 | Surface | File | Field |
 |---------|------|-------|
-| MCP tools source-of-truth | [`vault-ai/_tooling/mcp/contract/tools.json`](../../vault-ai/_tooling/mcp/contract/tools.json) | top-level `contract_version` |
-| MCP registration | [`workflow-kit/.claude/settings.local.json`](../../workflow-kit/.claude/settings.local.json) | `mcp.servers.vault-ai.contract_version` |
+| MCP tools source-of-truth | `vault-ai/_tooling/mcp/contract/tools.json` | top-level `contract_version` |
+| MCP registration | `workflow-kit/.claude/settings.local.json` | `mcp.servers.vault-ai.contract_version` |
 | CLI spec | this document | frontmatter `mcp_contract_version` |
 
-vault-ai's [`_tooling/lint/check-xrepo-contract.sh`](../../vault-ai/_tooling/lint/check-xrepo-contract.sh) asserts byte-identical string-parity across all three surfaces (XREPO-01 drift detection per vault-ai Phase 10 D-23). Any bump to one file requires coordinated bumps to the other two in the same coordinated GO-label PR per [ADR-int-04](../../vault-ai/docs/adr/adr-int-04-adr-merge-blocker.md) — pre-commit + Phase 13 CI reject mismatch at merge time. Semver semantics follow semver.org: PATCH for additive flags, MINOR for new tools, additive error codes, or additive optional fields, MAJOR for tool removals, error-code removals, or contract re-shapes.
+`vault-ai/_tooling/lint/check-xrepo-contract.sh` asserts byte-identical string-parity across all three surfaces (XREPO-01 drift detection per vault-ai Phase 10 D-23). Any bump to one file requires coordinated bumps to the other two in the same coordinated GO-label PR per ADR-int-04 (`vault-ai/docs/adr/adr-int-04-adr-merge-blocker.md`) — pre-commit + Phase 13 CI reject mismatch at merge time. Semver semantics follow semver.org: PATCH for additive flags, MINOR for new tools, additive error codes, or additive optional fields, MAJOR for tool removals, error-code removals, or contract re-shapes.
 
-**Bump 1.0.0 → 1.1.0** (vault-ai Phase 10, 2026-05-02): additive minor. Two error codes added (`MISSING_DEPENDENCY`, `NOT_IMPLEMENTED`); `tools[].cost_service` optional field added; no removals; backward compatible. See [`vault-ai/_tooling/mcp/contract/CHANGELOG.md`](../../vault-ai/_tooling/mcp/contract/CHANGELOG.md) and [ADR-ai-01 §Amendment History](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md) for the full record.
+**Bump 1.0.0 → 1.1.0** (vault-ai Phase 10, 2026-05-02): additive minor. Two error codes added (`MISSING_DEPENDENCY`, `NOT_IMPLEMENTED`); `tools[].cost_service` optional field added; no removals; backward compatible. See `vault-ai/_tooling/mcp/contract/CHANGELOG.md` and ADR-ai-01 §Amendment History (`vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md`) for the full record.
 
 **Bump 1.1.0 → 1.2.0** (vault-ai Phase 17, 2026-05-08): additive minor. One error code added (`DEDUP_BLOCKED`, the 11th envelope code) plus three additive optional input flags on `create_note` (`dedup_strategy`, `dedup_threshold`, `dedup_force`) wiring the runtime dedup gate; no removals; backward compatible per semver MINOR semantics. Rationale: Phase 17 ships a content-hash + cosine-similarity dedup engine that fires at `create_note` time and emits `DEDUP_BLOCKED` when a near-duplicate already exists, plus a 6th audit stream (`dedup`) registered in `verify_audit_chain.py` STREAMS for forensic replay. See ADR-flow-05 §v2.2 amendment ("Dedup gate at note ingress") and vault-ai Phase 17 SUMMARY for the full record (forward-pointer once `17-02-SUMMARY.md` lands).
 
@@ -47,7 +49,7 @@ vault-ai's [`_tooling/lint/check-xrepo-contract.sh`](../../vault-ai/_tooling/lin
 
 ## Added in v1.4.0
 
-`get_daily_summary` (MCP-only) — returns a 7-field JSON envelope (today's note count, refinement candidates with low sufficiency, inbox-stalled count >24h, dedup-override count, drift-warn flags) for the operator's daily 5-minute review ritual per ADR-flow-04 §Daily ritual. No `ws vault` subcommand was added for this tool (CORPUS-06 + CORPUS-CLI-01 preserve the ADR-int-03 10-command CLI cap); operators invoke it via the MCP client directly. The companion operator workflow doc lands at [`vault-ai/docs/DAILY-REVIEW.md`](../../vault-ai/docs/DAILY-REVIEW.md) in Plan 20-04 (forward-pointer; the file is published in Wave 4 of Phase 20).
+`get_daily_summary` (MCP-only) — returns a 7-field JSON envelope (today's note count, refinement candidates with low sufficiency, inbox-stalled count >24h, dedup-override count, drift-warn flags) for the operator's daily 5-minute review ritual per ADR-flow-04 §Daily ritual. No `ws vault` subcommand was added for this tool (CORPUS-06 + CORPUS-CLI-01 preserve the ADR-int-03 10-command CLI cap); operators invoke it via the MCP client directly. The companion operator workflow doc lands at `vault-ai/docs/DAILY-REVIEW.md` in Plan 20-04 (forward-pointer; the file is published in Wave 4 of Phase 20).
 
 ## Exit codes
 
@@ -68,24 +70,21 @@ Codes 8-127 are reserved for future sub-command-specific semantics. Codes ≥128
 
 ## Auth
 
-Single authentication secret: `VAULT_AI_TOKEN` (256-bit bearer per [ADR-ai-06](../../vault-ai/docs/adr/adr-ai-06-mcp-auth.md)).
+Single authentication secret: `VAULT_AI_TOKEN` (256-bit bearer per ADR-ai-06 (`vault-ai/docs/adr/adr-ai-06-mcp-auth.md`)).
 
-**Provisioning.** `~/.config/vault-ai/mcp-token.age` is age-encrypted with multi-recipient recipients (primary + escrow, per [ADR-sec-02](../../vault-ai/docs/adr/adr-sec-02-secrets-stack.md)). Chezmoi decrypts at `chezmoi apply` time to `~/.config/vault-ai/mcp-token`; shell init (`~/.zshrc` or `~/.bashrc`) sources it into `VAULT_AI_TOKEN` env var. The CLI reads the env var at invocation.
+**Provisioning.** `~/.config/vault-ai/mcp-token.age` is age-encrypted with multi-recipient recipients (primary + escrow, per ADR-sec-02 (`vault-ai/docs/adr/adr-sec-02-secrets-stack.md`)). Chezmoi decrypts at `chezmoi apply` time to `~/.config/vault-ai/mcp-token`; shell init (`~/.zshrc` or `~/.bashrc`) sources it into `VAULT_AI_TOKEN` env var. The CLI reads the env var at invocation.
 
 **Unset token → exit 4.** If the CLI cannot read `VAULT_AI_TOKEN` from env it exits 4 with a pointer to the shell-init provisioning docs (no fallback to interactive prompt — scripts must fail fast).
 
 **Rotation.** Quarterly per ADR-sec-02 rotation procedure; zero CLI changes required (env read is opaque to CLI version).
 
-**iOS exception.** iOS hosts carry no `VAULT_AI_TOKEN` (per Phase 6 D-20 and Plan 05 iOS chezmoi template). `ws vault` is not invoked on iOS — capture-only + push-to-desktop workflow per [ADR-flow-01](../../vault-ai/docs/adr/adr-flow-01-mobile-capture.md) (Phase 5 forward-ref).
+**iOS exception.** iOS hosts carry no `VAULT_AI_TOKEN` (per Phase 6 D-20 and Plan 05 iOS chezmoi template). `ws vault` is not invoked on iOS — capture-only + push-to-desktop workflow per ADR-flow-01 (`vault-ai/docs/adr/adr-flow-01-mobile-capture.md`) (Phase 5 forward-ref).
 
 ## Common flags
 
-Every sub-command accepts:
-
-- `--help` — print sub-command documentation + flag descriptions + sample invocation. Exits 0.
-- `--version` — print the CLI binary version + `mcp_contract_version` string from this document's frontmatter. Exits 0.
-- `--json` — emit stdout as newline-delimited JSON (NDJSON) for programmatic consumers. Overrides any command-specific output format.
-- `--quiet` — suppress non-error stderr output (useful for cron jobs).
+- `--help` — every sub-command's Cobra-generated help: documentation + flag descriptions + sample invocation. Exits 0.
+- `ws --version` (root command) — print the CLI binary version. Exits 0.
+- `--json` — a persistent flag registered on the root command, inherited by every sub-command; where a sub-command implements it, output switches to structured JSON (`doctor` emits NDJSON, one record per line; the rest emit a single JSON object). See each sub-command's Flags line for whether `--json` has any effect there.
 
 Sub-command-specific flags are documented in each sub-command section below.
 
@@ -105,57 +104,59 @@ Eleven sub-commands form the CLI surface (10 per ADR-int-03 + 1 diagnostic predi
 
 **Purpose.** Hybrid-search top-K results from shell. Wraps MCP `search_notes` tool (v1.3.0). (CLI-02; Phase 18 Plan 18-03.)
 
-**Flags.** `--k N` (default 10); `--type X`; `--zone Y`; `--json`.
+**Flags.** `--limit N` / `-n N` — maximum results to return (default 10, range 1-100); `--json`.
 
 ### ws vault triage-run
 
-**Purpose.** Trigger a triage pass over the inbox (or specified path). Wraps MCP `triage_run` tool (24th tool; Phase 16). (CLI-03; Phase 18 Plan 18-04.)
+**Purpose.** Trigger a triage pass over the inbox. Wraps MCP `triage_run` tool (24th tool; Phase 16). (CLI-03; Phase 18 Plan 18-04.)
 
-**Flags.** `--inbox <path>`; `--dry-run` (proposed routing without writing); `--limit N`.
+**Flags.** `--session-id <id>` — operator-supplied correlation id (auto-generated when omitted); `--limit N` — max inbox notes this session (server default 50, range 1-500); `--dry-run` — propose-only, no writes; `--no-batch` — force per-op operator confirmation; `--json`.
 
 ### ws vault validate
 
-**Purpose.** Run schema validators on a single note or the whole vault. Wraps MCP `validate_note` tool. (CLI-04; Phase 18 Plan 18-03.)
+**Purpose.** Run schema validators on a single note. Wraps MCP `validate_note` tool. (CLI-04; Phase 18 Plan 18-03.)
 
-**Flags.** `--path <file>`; `--type X`; `--zone Y`. Exits 0 green / non-zero on findings.
+**Args.** `<note-id>` (positional, required — exactly one).
+
+**Flags.** `--json`. Exits 0 green / non-zero on findings.
 
 ### ws vault reindex
 
-**Purpose.** Rebuild the Qdrant index for the given collection (or all). Shells out to `vault-ai/_tooling/mcp/scripts/embed_index.py` subcommand `index` per CONTEXT D-27 §OQ-3 Amendment. (CLI-05; Phase 18 Plan 18-04.)
+**Purpose.** Rebuild the Qdrant index, scoped to explicit paths or `--changed-only`; omit both to reindex everything. Shells out to `vault-ai/_tooling/mcp/scripts/embed_index.py` subcommand `index` per CONTEXT D-27 §OQ-3 Amendment. (CLI-05; Phase 18 Plan 18-04.)
 
-**Flags.** `--collection <name>` (default: recipe-pinned); `--full` (drop + reinit).
+**Flags.** `--changed-only` — scope to files changed per `git diff HEAD --name-only`; positional `[paths...]` to scope explicitly.
 
 ### ws vault backup-verify
 
 **Purpose.** Run the diff-aware DR backup-verify routine; reads latest `_tooling/logs/backup-verify-{ISO-week}.jsonl` log per Phase 21c HARD-09. Graceful Phase 21c-not-shipped fallback (informative skip rather than error). (CLI-06; Phase 18 Plan 18-04.)
 
-**Flags.** `--strict` (exit non-zero on stale logs).
+**Flags.** None. Staleness (>14 days) already exits non-zero (4) unconditionally; the `--json` persistent flag is inherited but has no effect — this leaf's output is always a fixed green/rot line on stdout/stderr.
 
 ### ws vault ingest
 
 **Purpose.** Ingest a single markdown file via `create_note` MCP tool with dedup gate check (Phase 17). (CLI-07; Phase 18 Plan 18-04.)
 
-**Flags.** `<file>` (positional); `--dedup-force` (paired with `--yes` per CONTEXT D-24); `--zone <target>`; `--type X`.
+**Flags.** `<file>` (positional); `--dedup-force` — override a dedup block (requires `--reason`); `--reason "<text>"` — operator override reason, audited verbatim (REQUIRED with `--dedup-force`); `--yes` — skip the operator confirmation prompt; `--json`. Note `type`/`zone` are read from the ingested file's YAML frontmatter (hard error if missing), not from flags.
 
-**Safety rail.** `--dedup-force` requires `--yes` (operator-confirmed bypass per Phase 17 dedup override audit pattern); single-flag use rejected at exit 4.
+**Safety rail.** `--dedup-force` without `--reason` is rejected; the confirmation prompt fires unless `--yes` is set. On a dedup block the command returns exit 6 with envelope details on stderr.
 
 ### ws vault get-coverage-report
 
 **Purpose.** Print the coverage-linter report per ADR-obs-02. Wraps MCP `get_coverage_report` tool. (CLI-08; Phase 18 Plan 18-03.)
 
-**Flags.** `--json` (structured); `--out PATH` (write to file).
+**Flags.** `--json` — emit the raw envelope data as-is; default is the same JSON indented for readability. No `--out` flag; output always goes to stdout.
 
 ### ws vault vault-health-score
 
 **Purpose.** Print the live composite health score (0-100) per ADR-obs-05 weights. Composed Go-side via `internal/mcp/health.go ComputeVaultHealthScore` (OQ-1 path-B per CONTEXT D-21 Amendment). (CLI-09; Phase 18 Plan 18-03.)
 
-**Flags.** `--json` (structured envelope with per-signal breakdown).
+**Flags.** None. The `--json` persistent flag is inherited but has no effect — output is always the bare integer score on stdout (machine-parseable by design; no structured/per-signal breakdown mode exists).
 
 ### ws vault doctor
 
 **Purpose.** Self-diagnose common failures: orphan MCP subprocess, stale lock files, missing token, broken token-fd-pass, qdrant container liveness. **Read-only by default** per memory `feedback_no_auto_state_mutation`. (CLI-10; Phase 18 Plan 18-05.)
 
-**Flags.** `--kill-orphans` (opt-in mutation; requires `--yes`); `--clear-stale-locks` (opt-in mutation; requires `--yes`). Without flags, doctor diagnoses + prints remediation; doctor does not heal silently. Enforced by `TestVaultDoctorReadOnlyByDefault` tripwire.
+**Flags.** `--kill-orphans` (opt-in mutation; requires `--yes`); `--clear-stale-locks` (opt-in mutation; requires `--yes`); `--yes` (skip confirmation for the two mutation flags); `--json` (NDJSON, one check record per line). Without mutation flags, doctor diagnoses + prints remediation; doctor does not heal silently. Enforced by `TestVaultDoctorReadOnlyByDefault` tripwire.
 
 **Sample.**
 ```
@@ -179,9 +180,9 @@ ws vault predict-bulk-load 40 --json    # JSON output
 
 ## See also
 
-- [ADR-int-03 — ws vault CLI Contract](../../vault-ai/docs/adr/adr-int-03-ws-vault-cli.md) — ADR-level lockfile for this spec
-- [ADR-ai-01 — MCP Dual-Mode](../../vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md) — the MCP contract this CLI wraps
-- [ADR-ai-06 — MCP Auth](../../vault-ai/docs/adr/adr-ai-06-mcp-auth.md) — VAULT_AI_TOKEN provisioning
-- [ADR-sec-02 — Secrets Stack](../../vault-ai/docs/adr/adr-sec-02-secrets-stack.md) — chezmoi+age multi-recipient auth provisioning
-- [`vault-ai/_tooling/mcp/contract/tools.json`](../../vault-ai/_tooling/mcp/contract/tools.json) — 27-tool MCP contract (v1.5.0; +`predict_bulk_load` per Phase 23)
-- [`workflow-kit/.claude/settings.local.json`](../../workflow-kit/.claude/settings.local.json) — MCP registration surface
+- ADR-int-03 — ws vault CLI Contract (`vault-ai/docs/adr/adr-int-03-ws-vault-cli.md`) — ADR-level lockfile for this spec
+- ADR-ai-01 — MCP Dual-Mode (`vault-ai/docs/adr/adr-ai-01-mcp-dual-mode.md`) — the MCP contract this CLI wraps
+- ADR-ai-06 — MCP Auth (`vault-ai/docs/adr/adr-ai-06-mcp-auth.md`) — VAULT_AI_TOKEN provisioning
+- ADR-sec-02 — Secrets Stack (`vault-ai/docs/adr/adr-sec-02-secrets-stack.md`) — chezmoi+age multi-recipient auth provisioning
+- `vault-ai/_tooling/mcp/contract/tools.json` — 27-tool MCP contract (v1.5.0; +`predict_bulk_load` per Phase 23)
+- `workflow-kit/.claude/settings.local.json` — MCP registration surface
