@@ -3,7 +3,6 @@ package vless
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
@@ -24,45 +23,6 @@ func WriteNewConfig(path string, cfg VLESSConfig) error {
 		return err
 	}
 	return xrayconf.WriteConfig(path, xray)
-}
-
-// AddNode adds a new VLESS outbound to an existing xray config.
-func AddNode(path string, cfg VLESSConfig) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-
-	var xray xrayconf.XrayConfig
-	if err := json.Unmarshal(data, &xray); err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-
-	// Determine next proxy tag number.
-	nextNum := 1
-	for _, ob := range xray.Outbounds {
-		if ob.Protocol == "vless" {
-			nextNum++
-		}
-	}
-	tag := fmt.Sprintf("proxy-%d", nextNum)
-
-	outbound, err := buildOutbound(cfg, tag)
-	if err != nil {
-		return err
-	}
-
-	// Insert before the "direct" outbound.
-	var newOutbounds []xrayconf.Outbound
-	for _, ob := range xray.Outbounds {
-		if ob.Tag == "direct" {
-			newOutbounds = append(newOutbounds, outbound)
-		}
-		newOutbounds = append(newOutbounds, ob)
-	}
-	xray.Outbounds = newOutbounds
-
-	return xrayconf.WriteConfig(path, &xray)
 }
 
 func buildOutbound(cfg VLESSConfig, tag string) (xrayconf.Outbound, error) {
