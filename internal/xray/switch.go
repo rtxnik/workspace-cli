@@ -4,13 +4,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/output"
 )
+
+// symlinkTempSeq makes AtomicSymlink temp names unique per call. A plain
+// timestamp collides when concurrent writers to the same linkPath read the
+// same nanosecond; the monotonic counter breaks that tie deterministically.
+var symlinkTempSeq atomic.Uint64
 
 // xrayRestartLivenessTimeout is the deadline for post-restart liveness check
 // per RESEARCH §6 and D-10. 15s = practical middle ground given Dockerfile
@@ -37,7 +42,7 @@ var (
 func AtomicSymlink(target, linkPath string) error {
 	dir := filepath.Dir(linkPath)
 	base := filepath.Base(linkPath)
-	tmp := filepath.Join(dir, "."+base+".tmp."+strconv.FormatInt(time.Now().UnixNano(), 10))
+	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp.%d.%d", base, time.Now().UnixNano(), symlinkTempSeq.Add(1)))
 	if err := os.Symlink(target, tmp); err != nil {
 		return fmt.Errorf("create temp symlink: %w", err)
 	}

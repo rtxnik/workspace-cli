@@ -76,6 +76,49 @@ func TestAtomicSwapSymlink(t *testing.T) {
 	wg.Wait()
 }
 
+// TestAtomicSymlinkConcurrentTempUnique stresses the temp-name uniqueness
+// guarantee: many writers released simultaneously against the SAME linkPath
+// must never collide on the intermediate temp symlink. A timestamp-only temp
+// name lets two writers that read the same nanosecond generate the same path,
+// so the second os.Symlink fails EEXIST. The per-call atomic counter must make
+// every temp name unique regardless of clock resolution.
+func TestAtomicSymlinkConcurrentTempUnique(t *testing.T) {
+	root := t.TempDir()
+	linkPath := filepath.Join(root, "config.json")
+	if err := os.Symlink(filepath.Join("profiles", "primary.json"), linkPath); err != nil {
+		t.Fatalf("seed symlink: %v", err)
+	}
+
+	const writers = 500
+	var wg sync.WaitGroup
+	release := make(chan struct{})
+	errs := make(chan error, writers)
+	target := filepath.Join("profiles", "backup.json")
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-release // barrier: fire all writers together to maximize collision pressure
+			if err := AtomicSymlink(target, linkPath); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	close(release)
+	wg.Wait()
+	close(errs)
+
+	collisions := 0
+	var sample error
+	for err := range errs {
+		collisions++
+		sample = err
+	}
+	if collisions > 0 {
+		t.Fatalf("%d/%d concurrent AtomicSymlink calls collided on the temp name; sample: %v", collisions, writers, sample)
+	}
+}
+
 // TestValidationGate asserts ValidateProfile produces an error wrapping the
 // profile name when the underlying ProxyExec call fails (e.g. dev-proxy is
 // absent). Live docker integration belongs to Plan 22-06.
