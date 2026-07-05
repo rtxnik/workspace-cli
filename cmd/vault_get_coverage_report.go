@@ -9,7 +9,7 @@ package cmd
 //   - --json (root persistent flag): emits the envelope.Data JSON to stdout
 //   - default (human): pretty-prints the envelope.Data JSON indented to stdout
 //
-// The tool itself has no input args (input: {} in tools.json v1.3.0).
+// The tool itself has no input args (input: {} in tools.json v1.5.0).
 
 import (
 	"context"

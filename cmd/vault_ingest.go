@@ -16,7 +16,7 @@ package cmd
 //
 // NOTE on contract-field naming (Rule 1 deviation tracked in SUMMARY):
 //   The plan draft <interfaces> proposed args.DedupForce + args.DedupOverrideReason,
-//   but the live tools.json v1.3.0 (and the generated CreateNoteArgs struct in
+//   but the live tools.json v1.5.0 (and the generated CreateNoteArgs struct in
 //   internal/mcp/types.go) names them ConfirmDedupOverride + Reason. The
 //   user-facing flag stays --dedup-force (Phase 17 / D-24 operator vocabulary)
 //   but the contract field set is ConfirmDedupOverride+Reason at call time.

@@ -26,7 +26,7 @@ import (
 // NewClient when a required runtime dependency is absent — most commonly
 // VAULT_AI_TOKEN unset in the operator's shell environment. Cobra leaves
 // can errors.Is(err, ErrMissingDependency) and surface exit 4 per CONTEXT
-// D-18 + workspace-cli/docs/vault-commands.md v1.3.0.
+// D-18 + workspace-cli/docs/vault-commands.md v1.5.0.
 var ErrMissingDependency = errors.New("missing dependency")
 
 // errMissingDepWrap wraps a context message around ErrMissingDependency so

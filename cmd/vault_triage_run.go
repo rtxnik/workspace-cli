@@ -6,7 +6,7 @@ package cmd
 // MUTATING leaf with a --dry-run safety toggle (propose-only; no writes).
 // Operator-override surface (`triage_override`) is deferred to v2.3 per D-23.
 //
-// Flag mapping is 1:1 with tools.json v1.3.0 triage_run input schema
+// Flag mapping is 1:1 with tools.json v1.5.0 triage_run input schema
 // (verified at Plan 18-04 RED via `jq '.tools[]|select(.name=="triage_run").input'`):
 //   --session-id <str>  → session_id
 //   --limit <int>       → limit (1..500; default 50 on server side)
