@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -165,7 +164,7 @@ const (
 // Package var so tests can inject a fake (mirrors newClientFunc). The DockerClient
 // SDK interface has no exec method, so in-container commands shell out to docker.
 var execInContainer = func(name string, args ...string) ([]byte, error) {
-	out, err := exec.Command("docker", append([]string{"exec", name}, args...)...).CombinedOutput()
+	out, err := runWithTimeout(timeoutRead, "docker", append([]string{"exec", name}, args...)...)
 	if err != nil {
 		return out, fmt.Errorf("docker exec %s %v: %w (output: %s)", name, args, err, out)
 	}

@@ -28,6 +28,24 @@ const (
 	timeoutStop  = 15 * time.Second
 )
 
+// runWithTimeout runs name+args under a hard deadline and returns combined
+// stdout+stderr. Centralizes the context.WithTimeout + exec.CommandContext
+// plumbing for the package's docker shell-outs so a wedged daemon/container
+// cannot hang the caller. Binary-agnostic, so it is unit-testable without
+// docker (see timeout_test.go, which drives it with `sleep`).
+func runWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// PruneImages removes dangling images (`docker image prune -f`) under a hard
+// deadline so a wedged daemon cannot hang the caller. Best-effort by nature.
+func PruneImages() error {
+	_, err := runWithTimeout(timeoutRead, "docker", "image", "prune", "-f")
+	return err
+}
+
 // Status holds proxy container status info.
 type Status struct {
 	Running bool
@@ -329,9 +347,8 @@ func ProxyRebuild(cfg config.Config) error {
 		}
 	}
 
-	// Clean up dangling old image (best-effort).
-	pruneCmd := exec.Command("docker", "image", "prune", "-f")
-	_ = pruneCmd.Run()
+	// Clean up dangling old image (best-effort, bounded).
+	_ = PruneImages()
 
 	return nil
 }
@@ -413,6 +430,10 @@ func buildProxyArgs(cfg config.Config, version string, res proxyrecipe.Result, a
 // recipe against the embedded content pin (C5): a drifted recipe is refused
 // unless allowDrift is set (in which case the image is stamped "unverified").
 // If version is non-empty it is passed as the XRAY_VERSION build arg.
+//
+// The build streams progress to the terminal and can legitimately take minutes;
+// it is intentionally left unbounded (a deadline would kill a valid long build
+// mid-run). Ctrl-C interrupts it if it truly wedges.
 func BuildProxyImage(cfg config.Config, version string, allowDrift bool) error {
 	res, err := proxyrecipe.Verify(cfg.ProfilesDir)
 	if err != nil {
@@ -439,8 +460,9 @@ type FixRoutesReport struct {
 // fixRouteExecFn runs the route-replace command for a single container.
 // Extracted as a var so tests can stub it without shelling out.
 var fixRouteExecFn = func(containerName, proxyIP string) error {
-	return exec.Command("docker", "exec", containerName,
-		"ip", "route", "replace", "default", "via", proxyIP).Run()
+	_, err := runWithTimeout(timeoutRead, "docker", "exec", containerName,
+		"ip", "route", "replace", "default", "via", proxyIP)
+	return err
 }
 
 // ProxyFixRoutes sets the default route to the proxy IP in all workspace
@@ -611,7 +633,7 @@ func WaitForHealth(cfg config.Config, timeout time.Duration) error {
 // validation before symlink swap (CONTEXT.md D-09).
 func ProxyExec(cfg config.Config, args ...string) ([]byte, error) {
 	cmdArgs := append([]string{"exec", cfg.ProxyContainer}, args...)
-	out, err := exec.Command("docker", cmdArgs...).CombinedOutput()
+	out, err := runWithTimeout(timeoutRead, "docker", cmdArgs...)
 	if err != nil {
 		return out, fmt.Errorf("docker exec %s %v: %w (output: %s)", cfg.ProxyContainer, args, err, string(out))
 	}
