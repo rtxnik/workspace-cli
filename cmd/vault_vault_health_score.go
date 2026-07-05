@@ -19,7 +19,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
@@ -38,18 +37,9 @@ var vaultHealthScoreComputeFn = runVaultHealthScoreCompute
 // runVaultHealthScoreCompute is the production runner: spawn client,
 // invoke composition, return the score.
 func runVaultHealthScoreCompute(ctx context.Context, root *cobra.Command) (int, error) {
-	cl, err := mcp.NewClient(ctx, mcp.Options{
-		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
-		Version:         root.Version,
+	return withVaultClient(ctx, root.Version, func(ctx context.Context, cl *mcp.Client) (int, error) {
+		return mcp.ComputeVaultHealthScore(ctx, cl)
 	})
-	if err != nil {
-		return 0, fmt.Errorf("spawn MCP client: %w", err)
-	}
-	stop := mcp.InstallSignalForward(cl)
-	defer stop()
-	defer func() { _ = cl.Close(ctx) }()
-
-	return mcp.ComputeVaultHealthScore(ctx, cl)
 }
 
 func newVaultVaultHealthScoreCmd() *cobra.Command {
