@@ -4,7 +4,7 @@ package cmd
 //
 // Wraps the MCP `search_notes` tool per CONTEXT D-22 (NOT `search_hybrid`
 // — REQUIREMENTS CLI-02 wording auto-fix per Rule-1 reconciliation;
-// `search_notes` IS the hybrid-search tool in tools.json v1.3.0). Routes
+// `search_notes` IS the hybrid-search tool in tools.json v1.5.0). Routes
 // through internal/mcp.Client single chokepoint (D-05).
 //
 // Output:

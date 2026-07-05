@@ -9,7 +9,7 @@ package cmd
 // Per CONTEXT D-21 §OQ-1+OQ-3 Amendment: the score is composed Go-side
 // via internal/mcp.ComputeVaultHealthScore from existing MCP tools
 // (get_coverage_report + get_orphans). The MCP `vault_health` tool is
-// NOT in tools.json v1.3.0; composition preserves D-17 no-bump invariant.
+// NOT in tools.json v1.5.0; composition preserves D-17 no-bump invariant.
 //
 // Exit codes per CONTEXT D-28 + ADR-obs-05 bands:
 //   0  if score ≥ 70 (green; v2.1 ship-target)
