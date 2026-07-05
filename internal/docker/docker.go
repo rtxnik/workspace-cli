@@ -430,6 +430,10 @@ func buildProxyArgs(cfg config.Config, version string, res proxyrecipe.Result, a
 // recipe against the embedded content pin (C5): a drifted recipe is refused
 // unless allowDrift is set (in which case the image is stamped "unverified").
 // If version is non-empty it is passed as the XRAY_VERSION build arg.
+//
+// The build streams progress to the terminal and can legitimately take minutes;
+// it is intentionally left unbounded (a deadline would kill a valid long build
+// mid-run). Ctrl-C interrupts it if it truly wedges.
 func BuildProxyImage(cfg config.Config, version string, allowDrift bool) error {
 	res, err := proxyrecipe.Verify(cfg.ProfilesDir)
 	if err != nil {
