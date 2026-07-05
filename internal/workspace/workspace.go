@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,7 +107,9 @@ func List(cfg config.Config) ([]Info, error) {
 // devpodStatuses queries devpod for workspace statuses.
 func devpodStatuses() map[string]string {
 	result := make(map[string]string)
-	out, err := exec.Command("devpod", "list", "--output", "json").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutProbe)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, devpodBin, "list", "--output", "json").Output()
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			output.Warn("devpod not found in PATH, workspace statuses unavailable")
@@ -123,7 +126,9 @@ func devpodStatuses() map[string]string {
 		return result
 	}
 	for _, item := range items {
-		out, err := exec.Command("devpod", "status", item.ID).CombinedOutput()
+		sctx, scancel := context.WithTimeout(context.Background(), timeoutProbe)
+		out, err := exec.CommandContext(sctx, devpodBin, "status", item.ID).CombinedOutput()
+		scancel()
 		if err != nil {
 			continue
 		}
