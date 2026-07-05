@@ -119,6 +119,11 @@ func parseDockerfileBase(path string) string {
 			}
 		}
 	}
+	// A scan error (e.g. an over-long line) leaves the base image unknown,
+	// same as a not-found FROM.
+	if err := scanner.Err(); err != nil {
+		return ""
+	}
 	return ""
 }
 
@@ -151,6 +156,11 @@ func parseMiseTools(path string) string {
 				tools = append(tools, strings.TrimSpace(parts[0]))
 			}
 		}
+	}
+	// On a scan error, do not present a silently truncated tool list;
+	// report unknown instead.
+	if err := scanner.Err(); err != nil {
+		return ""
 	}
 	return strings.Join(tools, ", ")
 }

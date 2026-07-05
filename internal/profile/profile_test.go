@@ -3,6 +3,7 @@ package profile
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +32,11 @@ func TestParseDockerfileBase(t *testing.T) {
 			name:     "comment before FROM",
 			content:  "# base image\nFROM alpine:3.19\n",
 			expected: "alpine:3.19",
+		},
+		{
+			name:     "over-long line before FROM yields empty",
+			content:  strings.Repeat("x", 100000) + "\nFROM alpine:3.19\n",
+			expected: "",
 		},
 	}
 
@@ -103,6 +109,11 @@ func TestParseMiseTools(t *testing.T) {
 		{
 			name:     "no tools section",
 			content:  "[settings]\nlegacy_version_file = true\n",
+			expected: "",
+		},
+		{
+			name:     "scan error suppresses partial list",
+			content:  "[tools]\ngo = \"latest\"\n" + strings.Repeat("x", 100000) + "\nnode = \"lts\"\n",
 			expected: "",
 		},
 	}
