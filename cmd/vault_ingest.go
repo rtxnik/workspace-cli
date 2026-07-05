@@ -206,10 +206,7 @@ func newVaultIngestCmd() *cobra.Command {
 						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s details: %s\n", env.Error.Code, string(env.Error.Details))
 					}
 				}
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("ingest: %s: %s", env.Error.Code, env.Error.Message),
-				}
+				return vaultErrExit("ingest", env.Error)
 			}
 
 			jsonFlag, _ := cmd.Flags().GetBool("json")
