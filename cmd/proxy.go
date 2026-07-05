@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -223,7 +222,7 @@ var proxyRebuildCmd = &cobra.Command{
 				return docker.WaitForHealth(cfg, 60*time.Second)
 			}},
 			output.Step{Name: "Cleaning old images", Fn: func() error {
-				return exec.Command("docker", "image", "prune", "-f").Run()
+				return docker.PruneImages()
 			}},
 		)
 		if err := runner.Run(); err != nil {
