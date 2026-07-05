@@ -97,8 +97,6 @@ ws proxy profile regenerate <name>    # Copy routing rules from active into <nam
 ws proxy profile rm <name>            # Remove a profile (refuses active)
 ```
 
-`ws proxy init --add` is deprecated; use `ws proxy profile add` instead.
-
 #### Hysteria2 URI parameters
 
 ```

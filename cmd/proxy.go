@@ -393,22 +393,9 @@ var proxyInitCmd = &cobra.Command{
 	Use:   "init <proxy-uri>",
 	Short: "Generate xray config from a VLESS or Hysteria2 URI",
 	Args:  cobra.ExactArgs(1),
-	PreRun: func(cmd *cobra.Command, args []string) {
-		// D-02 / PROXY-PROFILE-08 / RESEARCH §11: Cobra's built-in Deprecated
-		// field routes to stdout (Cobra v1.10.1 source), which breaks any
-		// stdout-parsing automation around `ws proxy init`. Manual stderr
-		// banner instead. Fires ONLY when --add is set; legacy default path
-		// (init without --add) is NOT deprecated.
-		addFlag, _ := cmd.Flags().GetBool("add")
-		if !addFlag {
-			return
-		}
-		fmt.Fprintln(os.Stderr, "WARNING: 'ws proxy init --add' is deprecated; use 'ws proxy profile add <name> <vless-uri>' instead. Removal scheduled for the next workspace-cli minor release.")
-	},
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		uri := args[0]
-		add, _ := cmd.Flags().GetBool("add")
 
 		switch {
 		case strings.HasPrefix(uri, "vless://"):
@@ -416,22 +403,12 @@ var proxyInitCmd = &cobra.Command{
 			if err != nil {
 				output.Die(err.Error())
 			}
-			if add {
-				if err := vless.AddNode(cfg.XrayConfig, parsed); err != nil {
-					output.Die(err.Error())
-				}
-				output.Success(fmt.Sprintf("Added node %q to config", parsed.Remark))
-			} else {
-				if err := vless.WriteNewConfig(cfg.XrayConfig, parsed); err != nil {
-					output.Die(err.Error())
-				}
-				output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))
+			if err := vless.WriteNewConfig(cfg.XrayConfig, parsed); err != nil {
+				output.Die(err.Error())
 			}
+			output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))
 			output.Detail(fmt.Sprintf("Transport: %s, Security: %s", parsed.Network, parsed.Security))
 		case strings.HasPrefix(uri, "hysteria2://"), strings.HasPrefix(uri, "hy2://"):
-			if add {
-				output.Die("hysteria2 multi-node (--add) is not supported; use 'ws proxy profile add <name> <uri>'")
-			}
 			parsed, err := hysteria2.Parse(uri)
 			if err != nil {
 				output.Die(err.Error())
@@ -467,7 +444,6 @@ func warnProxyConnected(cfg config.Config) {
 
 func init() {
 	proxyUpCmd.Flags().Bool("no-wait", false, "Skip health check wait after starting")
-	proxyInitCmd.Flags().Bool("add", false, "Add node to existing config instead of creating new")
 	proxyDownCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 	proxyRebuildCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 	proxyRebuildCmd.Flags().Bool("allow-drift", false, "Build even if the proxy recipe differs from the pinned known-good recipe")
