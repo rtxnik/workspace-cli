@@ -73,21 +73,7 @@ func newVaultSearchCmd() *cobra.Command {
 				Query: query,
 				Limit: limit,
 			})
-			if err != nil {
-				return fmt.Errorf("search: %w", err)
-			}
-			if env == nil {
-				return fmt.Errorf("search: nil envelope")
-			}
-			if env.Error != nil {
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("search: %s: %s", env.Error.Code, env.Error.Message),
-				}
-			}
-
-			jsonFlag, _ := cmd.Flags().GetBool("json")
-			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
+			return vaultRenderResult(cmd, "search", env, err)
 		},
 	}
 	cmd.Flags().IntP("limit", "n", 10, "Maximum number of results to return (1-100)")

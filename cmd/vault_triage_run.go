@@ -75,21 +75,7 @@ func newVaultTriageRunCmd() *cobra.Command {
 			}
 
 			env, err := vaultTriageRunCallFn(ctx, cmd.Root(), targs)
-			if err != nil {
-				return fmt.Errorf("triage-run: %w", err)
-			}
-			if env == nil {
-				return fmt.Errorf("triage-run: nil envelope")
-			}
-			if env.Error != nil {
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("triage-run: %s: %s", env.Error.Code, env.Error.Message),
-				}
-			}
-
-			jsonFlag, _ := cmd.Flags().GetBool("json")
-			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
+			return vaultRenderResult(cmd, "triage-run", env, err)
 		},
 	}
 	cmd.Flags().String("session-id", "", "Operator-supplied session correlation id (auto-generated when omitted)")
