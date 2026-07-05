@@ -49,6 +49,36 @@ func TestParseDockerfileBase(t *testing.T) {
 	}
 }
 
+func TestIsBuiltin(t *testing.T) {
+	tests := []struct {
+		name     string
+		profile  string
+		expected bool
+	}{
+		{name: "default is builtin", profile: "default", expected: true},
+		{name: "devops is builtin", profile: "devops", expected: true},
+		{name: "go is builtin", profile: "go", expected: true},
+		{name: "k8s is builtin", profile: "k8s", expected: true},
+		{name: "matrix is builtin", profile: "matrix", expected: true},
+		{name: "meta is builtin", profile: "meta", expected: true},
+		{name: "proxy is builtin", profile: "proxy", expected: true},
+		{name: "python is builtin", profile: "python", expected: true},
+		{name: "rust is builtin", profile: "rust", expected: true},
+		{name: "synopra is builtin", profile: "synopra", expected: true},
+		{name: "web is builtin", profile: "web", expected: true},
+		{name: "custom profile is not builtin", profile: "mycustom", expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsBuiltin(tt.profile)
+			if got != tt.expected {
+				t.Errorf("IsBuiltin(%q) = %v, want %v", tt.profile, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestParseMiseTools(t *testing.T) {
 	tests := []struct {
 		name     string
