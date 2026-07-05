@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os/exec"
 	"strings"
 
 	"github.com/docker/docker/api/types/network"
@@ -22,7 +21,7 @@ import (
 // Returns an error if docker exec fails, no default route exists, or the line
 // has no parseable `via <ip>`.
 func DefaultRouteOf(container string) (string, error) {
-	out, err := exec.Command("docker", "exec", container, "ip", "route", "show", "default").CombinedOutput()
+	out, err := runWithTimeout(timeoutRead, "docker", "exec", container, "ip", "route", "show", "default")
 	if err != nil {
 		return "", fmt.Errorf("docker exec %s ip route show default: %w (output: %s)", container, err, strings.TrimSpace(string(out)))
 	}
