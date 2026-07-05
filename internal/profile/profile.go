@@ -14,6 +14,7 @@ import (
 var builtinProfiles = map[string]bool{
 	"default": true, "devops": true, "go": true, "k8s": true,
 	"matrix": true, "web": true, "proxy": true, "rust": true, "python": true, "synopra": true,
+	"meta": true,
 }
 
 // Info holds parsed profile metadata.
