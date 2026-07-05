@@ -14,8 +14,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
@@ -25,22 +23,7 @@ import (
 var vaultValidateRunFn = runVaultValidate
 
 func runVaultValidate(ctx context.Context, root *cobra.Command, vargs mcp.ValidateNoteArgs) (*mcp.Envelope, error) {
-	cl, err := mcp.NewClient(ctx, mcp.Options{
-		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
-		Version:         root.Version,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("spawn MCP client: %w", err)
-	}
-	stop := mcp.InstallSignalForward(cl)
-	defer stop()
-	defer func() { _ = cl.Close(ctx) }()
-
-	env, err := cl.Call(ctx, "validate_note", &vargs)
-	if err != nil {
-		return nil, fmt.Errorf("MCP roundtrip: %w", err)
-	}
-	return env, nil
+	return callVaultTool(ctx, root.Version, "validate_note", &vargs)
 }
 
 func newVaultValidateCmd() *cobra.Command {
