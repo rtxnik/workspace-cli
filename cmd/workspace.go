@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/rtxnik/workspace-cli/internal/config"
@@ -243,9 +245,12 @@ var sshCmd = &cobra.Command{
 		} else {
 			name = selectWorkspace()
 		}
-		// Rename tmux window if inside tmux.
+		// Rename tmux window if inside tmux. Bounded: a wedged tmux server
+		// must not stall the ssh command (best-effort, error ignored).
 		if tmux := os.Getenv("TMUX"); tmux != "" {
-			_ = exec.Command("tmux", "rename-window", name).Run()
+			tctx, tcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = exec.CommandContext(tctx, "tmux", "rename-window", name).Run()
+			tcancel()
 		}
 		if err := workspace.DevpodSSH(name); err != nil {
 			output.Die(err.Error())
@@ -318,10 +323,19 @@ var logsCmd = &cobra.Command{
 
 		// Try journalctl inside the workspace first.
 		journalArgs := []string{"ssh", name, "--", "journalctl", "--user", "-n", "50", "--no-pager"}
+		var c *exec.Cmd
 		if follow {
 			journalArgs = append(journalArgs, "-f")
+			// Live `journalctl -f` stream: intentionally unbounded (a
+			// deadline would truncate the follow session mid-stream).
+			c = exec.Command("devpod", journalArgs...)
+		} else {
+			// One-shot journal read: bounded so a wedged ssh transport to an
+			// unresponsive workspace cannot hang the command forever.
+			jctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			c = exec.CommandContext(jctx, "devpod", journalArgs...)
 		}
-		c := exec.Command("devpod", journalArgs...)
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
