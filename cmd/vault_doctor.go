@@ -97,10 +97,15 @@ var (
 
 // checkOrphanMCPImpl invokes `pgrep -fc vault_ai/adapter_stdio/server.py` and
 // reports red when count > 0. Detail carries the count + the leaked PIDs.
-func checkOrphanMCPImpl(_ context.Context) *doctorCheck {
+func checkOrphanMCPImpl(ctx context.Context) *doctorCheck {
 	check := &doctorCheck{Name: "orphan-mcp-subprocess"}
 
-	out, err := exec.Command("pgrep", "-fc", "vault_ai/adapter_stdio/server.py").Output()
+	// Bound the pgrep probes with a hard deadline so a wedged process table
+	// cannot hang the doctor check.
+	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(pctx, "pgrep", "-fc", "vault_ai/adapter_stdio/server.py").Output()
 	count := strings.TrimSpace(string(out))
 	// pgrep -fc exits non-zero (status 1) when no matches found and prints "0";
 	// treat that as the green path. Distinguish "no matches" from a real
@@ -127,7 +132,7 @@ func checkOrphanMCPImpl(_ context.Context) *doctorCheck {
 
 	// Resolve PIDs for the remediation path. Use `pgrep -f` (no -c) to get
 	// one PID per line.
-	pidsOut, _ := exec.Command("pgrep", "-f", "vault_ai/adapter_stdio/server.py").Output()
+	pidsOut, _ := exec.CommandContext(pctx, "pgrep", "-f", "vault_ai/adapter_stdio/server.py").Output()
 	var pids []int
 	for _, line := range strings.Split(strings.TrimSpace(string(pidsOut)), "\n") {
 		line = strings.TrimSpace(line)

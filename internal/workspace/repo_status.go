@@ -1,12 +1,25 @@
 package workspace
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// runProbe runs name+args under a hard deadline and returns stdout only.
+// Repo health probes parse git's stdout, so this uses Output() (not
+// CombinedOutput) to keep stderr out of the parsed bytes. A wedged git
+// invocation (e.g. a repo on an unresponsive filesystem) cannot hang the
+// status sweep. Binary-agnostic so it is unit-testable without git.
+func runProbe(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
+}
 
 // RepoStatus holds the git health of a single repository.
 type RepoStatus struct {
@@ -31,21 +44,21 @@ func ProbeRepo(path string) RepoStatus {
 	}
 	rs.Exists = true
 
-	out, err := exec.Command("git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	out, err := runProbe(timeoutProbe, "git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		rs.Error = fmt.Sprintf("branch: %v", err)
 		return rs
 	}
 	rs.Branch = strings.TrimSpace(string(out))
 
-	porcelain, err := exec.Command("git", "-C", path, "status", "--porcelain").Output()
+	porcelain, err := runProbe(timeoutProbe, "git", "-C", path, "status", "--porcelain")
 	if err != nil {
 		rs.Error = fmt.Sprintf("status: %v", err)
 		return rs
 	}
 	rs.Clean = len(strings.TrimSpace(string(porcelain))) == 0
 
-	revList, err := exec.Command("git", "-C", path, "rev-list", "--left-right", "--count", "HEAD...@{upstream}").Output()
+	revList, err := runProbe(timeoutProbe, "git", "-C", path, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
 	if err != nil {
 		rs.NoRemote = true
 		return rs
