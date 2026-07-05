@@ -240,11 +240,3 @@ This is a one-time migration per host.
 | `XRAY_PROFILES_DIR` | `~/.config/xray/profiles` | Profile storage directory |
 | `WS_PROXY_CONTAINER` | `dev-proxy` | Container name |
 | `WS_PROXY_IMAGE` | `devpod-proxy` | Image name |
-
-## Deprecated
-
-```bash
-ws proxy init 'vless://...' --add        # deprecated since Phase 22
-```
-
-The `--add` flag still works but prints a stderr warning. Use `ws proxy profile add <name> 'vless://...'` instead. Removal scheduled for the next minor release.
