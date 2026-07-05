@@ -138,12 +138,16 @@ ws proxy profile add hy2-hop 'hysteria2://<auth>@host:443,5000-6000?sni=host&hop
 
 1. Docker reachable
 2. Proxy image present
-3. Active profile passes `xray run -test` inside the container
-4. Container is running and healthy
-5. Proxy network has the expected subnet
-6. Default route inside proxy container is correct
-7. Live egress probe (IP reachability through the tunnel)
-8. Protocol-specific sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
+3. Active profile valid (`xray -test`)
+4. Datapath contract (image ↔ profile)
+5. Proxy container running and healthy
+6. TPROXY preconditions
+7. ws-proxy network + subnet
+8. Dev-container default route via proxy
+9. Self-egress (proxy tunnel exit-IP)
+10. Forwarding datapath (dev-container exit-IP)
+11. Protocol sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
+12. Inbound `sockopt.tproxy` (advisory)
 
 It stops at the first hard failure and prints a remediation hint plus exits non-zero. Use `--json` for a machine-readable report.
 

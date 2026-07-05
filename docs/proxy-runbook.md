@@ -52,19 +52,24 @@ ws proxy doctor
 
 Runs the ordered, fail-fast diagnostic chain:
 
-1. docker reachable
-2. proxy image present
-3. active profile valid (xray -test)
-4. proxy container running and healthy
-5. ws-proxy network + subnet
-6. dev-container default route via proxy
-7. self-egress (proxy tunnel exit-IP) — TCP
-8. protocol sanity
-9. inbound sockopt.tproxy (advisory)
+1. Docker reachable
+2. Proxy image present
+3. Active profile valid (`xray -test`)
+4. Datapath contract (image ↔ profile)
+5. Proxy container running and healthy
+6. TPROXY preconditions
+7. ws-proxy network + subnet
+8. Dev-container default route via proxy
+9. Self-egress (proxy tunnel exit-IP)
+10. Forwarding datapath (dev-container exit-IP)
+11. Protocol sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
+12. Inbound `sockopt.tproxy` (advisory)
 
-All nine checks must be green before proceeding. If any hard check fails, the command exits non-zero and prints a remediation hint. Fix the issue and re-run.
+All twelve checks must pass before proceeding (the UDP egress leg and the hy2 cert-pin observation are advisory — they report SKIP/notes without blocking). If any hard check fails, the command exits non-zero and prints a remediation hint. Fix the issue and re-run.
 
 For machine-readable output (CI or automated gates): `ws proxy doctor --json`.
+
+If workspace containers lost their default route (e.g. after a host reboot), run `ws proxy fix-routes` to restore routing through the proxy.
 
 ### Step 5 — Tunnel proof (expect Tunneled=yes)
 
@@ -90,7 +95,7 @@ If TPROXY misbehaves on the operator's kernel (e.g. the container lacks `CAP_NET
 
 - Revert the entrypoint to use iptables REDIRECT instead of TPROXY (edit `dotfiles`; rebuild with `ws proxy rebuild --force`).
 - Leave UDP fail-closed (no UDP forwarding rule) until TPROXY is confirmed working.
-- The `ws proxy doctor` advisory check (step 9, "inbound sockopt.tproxy") will report the missing field; that is expected in REDIRECT mode.
+- The `ws proxy doctor` advisory check (step 12, "inbound sockopt.tproxy") will report the missing field; that is expected in REDIRECT mode.
 
 ---
 
@@ -133,13 +138,13 @@ ws proxy profile show primary
 
 ---
 
-## CI datapath coverage (SP-4)
+## CI datapath coverage
 
 The `datapath` CI job builds the proxy image (`ws-proxy:gate`) from the pinned
 dotfiles recipe and runs:
 
 - **Red-line preconditions (T2–T5) + dead-socket detection (T13)** — `scripts/ci/datapath-gate.sh`.
-- **H6 golden validity** — `xray -test` over all five committed goldens
+- **Golden config validity** — `xray -test` over all five committed goldens
   (hysteria2 `base`/`obfs`/`pin`/`udphop` and `assemble_vless`), a generated
   7-transport VLESS URI matrix (tcp-reality, tcp-http-header, ws-tls, grpc,
   httpupgrade, xhttp, and `h2`), and 2 repaired-legacy configs (a pre-fix
@@ -151,11 +156,11 @@ dotfiles recipe and runs:
   migrated to an XHTTP stream-one config at generation, and `upgrade-config`
   repairs legacy stored profiles to the same shapes — all three are semantically
   validated here.
-- **H7 profile-lifecycle integration** — `make test-integration-proxy`.
+- **Profile-lifecycle integration** — `make test-integration-proxy`.
 
 **Flow-only boundary.** Without the `WS_TEST_ENDPOINT` repository secret the job
 runs in *flow-only* mode: preconditions, the forwarding-leg structure, T13, and
-H6 semantic validity are all enforced, but the **exit-IP value comparison**
+golden semantic validity are all enforced, but the **exit-IP value comparison**
 (`TestProxyE2E`, `Tunneled == true`) is skipped — it needs a real upstream.
 Setting `WS_TEST_ENDPOINT` promotes the job to *strict* mode and runs the full
 tunnel assertion. The gate prints a loud banner when running flow-only.
@@ -166,7 +171,7 @@ in `ci.yml` — which is what `datapath-gate.sh` and the strict-mode step read.)
 
 ---
 
-## Bump proxy base image digest (D6-06)
+## Bump proxy base image digest
 
 The proxy base image is pinned by **manifest-list (index) digest** in
 `dotfiles: dot_config/workspaces/profiles/proxy/Dockerfile`
@@ -206,6 +211,10 @@ To refresh:
 so the regenerated `recipe.lock` reflects every recipe change since the last pin,
 not just the digest. The two-PR order (dotfiles first, then workspace-cli) applies
 to every bump: the pin and the gate ref must point at a **merged** dotfiles commit.
+
+### Bypassing the pin check (`--allow-drift`)
+
+`ws proxy rebuild --allow-drift` builds even when the live recipe differs from the pinned known-good recipe. This bypasses the supply-chain pin check — use it only while intentionally iterating on the recipe, and re-pin (`make pin-recipe`) before shipping the change.
 
 ---
 

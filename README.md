@@ -4,12 +4,36 @@ Workspace manager CLI (`ws` binary) for [DevPod](https://devpod.sh/) environment
 
 ## Install
 
-```bash
-# From source
-go install github.com/rtxnik/workspace-cli@latest
+### Verified install (recommended)
 
-# Or download from releases
-# https://github.com/rtxnik/workspace-cli/releases
+```bash
+curl -fsSL https://raw.githubusercontent.com/rtxnik/workspace-cli/main/scripts/install.sh | sh
+```
+
+The installer always verifies the SHA-256 of the downloaded archive against the release `checksums.txt`. If `minisign` is installed, it also verifies the minisign signature over `checksums.txt` against the release signing key embedded in the script. To make signature verification mandatory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rtxnik/workspace-cli/main/scripts/install.sh -o install.sh
+sh install.sh --require-signature
+```
+
+Overrides: `WS_VERSION` installs a specific tag; `PREFIX` sets the install root (default `/usr/local`).
+
+### Manual verification
+
+Every release ships `checksums.txt`, its minisign signature `checksums.txt.minisig`, and a Syft SBOM (`*.sbom.json`) per artifact:
+
+```bash
+minisign -Vm checksums.txt -P RWS9SKDBxXVQRL27p1aOVmdoSffl83dqJqKtnwDO6IqEMpdoRf+AMDGL
+sha256sum -c --ignore-missing checksums.txt
+```
+
+The signing key and reporting policy are published in [SECURITY.md](SECURITY.md).
+
+### From source
+
+```bash
+go install github.com/rtxnik/workspace-cli@latest
 ```
 
 ## Usage
@@ -26,6 +50,7 @@ ws code myproject            # Open in VS Code
 ws stop myproject            # Stop workspace
 ws delete myproject          # Delete workspace
 ws detect .                  # Detect profile for current directory
+ws status                    # Show workspace health across all repositories
 ```
 
 ### Profiles
@@ -59,6 +84,8 @@ ws proxy doctor                   # Ordered fail-fast diagnostic of the full pro
 ws proxy doctor --json            # Machine-readable diagnostic report
 ws proxy debug on|off             # Toggle verbose xray logging
 ws proxy update [version]         # Update xray-core version
+ws proxy fix-routes               # Restore default routes in workspace containers (e.g. after reboot)
+ws proxy rebuild --allow-drift    # Rebuild even if the recipe differs from the pinned known-good recipe
 
 # Profiles (VLESS and Hysteria2 configurations)
 ws proxy profile add <name> <uri>     # Store a new profile from a VLESS or Hysteria2 URI
@@ -86,6 +113,10 @@ Key parameters:
 | `<port>,<ranges>` | Port-hopping: e.g. `443,5000-6000`. Requires `hopInterval` (default 30 s, min 5). |
 | `congestion` | `reno` \| `bbr` \| `brutal` \| `force-brutal` |
 
+### Vault
+
+`ws vault` provides CLI access to a private knowledge-base backend. The command reference lives in [docs/vault-commands.md](docs/vault-commands.md); these commands are not usable without access to that backend.
+
 ## Configuration
 
 Environment variables (with defaults):
@@ -103,12 +134,15 @@ Environment variables (with defaults):
 ## Build
 
 ```bash
-make build      # Build binary
-make test       # Run tests
-make vet        # Static analysis
-make lint       # golangci-lint
-make install    # Install to GOPATH/bin
-make test-e2e   # Docker e2e harness (requires Docker + a live primary profile)
+make build                   # Build binary
+make test                    # Run tests
+make vet                     # Static analysis
+make lint                    # golangci-lint
+make install                 # Install to GOPATH/bin
+make test-e2e                # Docker e2e harness (requires Docker + a live primary profile)
+make test-golden-xray        # Golden xray-config validation suite
+make test-integration-proxy  # Profile-lifecycle integration suite
+make pin-recipe              # Re-pin the known-good proxy recipe
 ```
 
 ## License
