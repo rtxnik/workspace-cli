@@ -2,7 +2,7 @@ package mcp
 
 // health.go — `vault_health` composition path per CONTEXT D-21 §OQ-1+OQ-3
 // Amendment (Wave 0 reconciliation). The `vault_health` MCP tool is absent
-// from tools.json v1.3.0; this file implements the Go-side surrogate by
+// from tools.json v1.5.0; this file implements the Go-side surrogate by
 // composing the canonical ADR-obs-05 score from existing MCP tools
 // (`get_coverage_report` + `get_orphans`).
 //
@@ -170,7 +170,7 @@ func ComputeVaultHealthScore(ctx context.Context, cl healthCaller) (int, error) 
 	}
 
 	// The get_orphans envelope returns a list of orphan rows (per
-	// tools.json v1.3.0 "list of orphan rows"). We count rows and apply
+	// tools.json v1.5.0 "list of orphan rows"). We count rows and apply
 	// the inverse-scale formula. Decode into a generic []any to avoid
 	// coupling to the row shape (only the count matters here).
 	orphanCount := 0

@@ -296,7 +296,7 @@ func (cl *Client) ListTools(ctx context.Context) ([]ListedTool, error) {
 
 // Call invokes an MCP tool by name with the given arguments and decodes the
 // response into a workspace-cli Envelope (the wire shape from
-// workspace-cli/docs/vault-commands.md v1.3.0).
+// workspace-cli/docs/vault-commands.md v1.5.0).
 //
 // MCP tool responses come back as a CallToolResult with a Content slice;
 // vault-ai's FastMCP handlers emit a single TextContent block whose Text is

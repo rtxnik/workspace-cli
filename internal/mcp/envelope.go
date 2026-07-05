@@ -16,7 +16,7 @@ import (
 )
 
 // Envelope is the MCP tool response wire shape per CONTEXT D-18 + vault-commands.md
-// v1.3.0. Either OK==true and Data carries the tool payload, or OK==false and
+// v1.5.0. Either OK==true and Data carries the tool payload, or OK==false and
 // Error carries a structured failure.
 type Envelope struct {
 	OK    bool            `json:"ok"`
@@ -34,7 +34,7 @@ type EnvelopeError struct {
 }
 
 // MapErrorCodeToExitCode maps the 8 documented MCP error codes (per
-// workspace-cli/docs/vault-commands.md v1.3.0 + CONTEXT D-18) onto Unix exit
+// workspace-cli/docs/vault-commands.md v1.5.0 + CONTEXT D-18) onto Unix exit
 // codes 0-7. Unknown codes return 1 and emit a stderr warning so the operator
 // notices likely XREPO-01 contract drift (vault-ai contract bumped a new code
 // the Go consumer does not yet know about).
