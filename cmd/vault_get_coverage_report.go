@@ -64,21 +64,7 @@ func newVaultGetCoverageReportCmd() *cobra.Command {
 			}
 
 			env, err := vaultGetCoverageReportRunFn(ctx, cmd.Root())
-			if err != nil {
-				return fmt.Errorf("get-coverage-report: %w", err)
-			}
-			if env == nil {
-				return fmt.Errorf("get-coverage-report: nil envelope")
-			}
-			if env.Error != nil {
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("get-coverage-report: %s: %s", env.Error.Code, env.Error.Message),
-				}
-			}
-
-			jsonFlag, _ := cmd.Flags().GetBool("json")
-			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
+			return vaultRenderResult(cmd, "get-coverage-report", env, err)
 		},
 	}
 }

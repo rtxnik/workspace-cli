@@ -60,21 +60,7 @@ func newVaultValidateCmd() *cobra.Command {
 			env, err := vaultValidateRunFn(ctx, cmd.Root(), mcp.ValidateNoteArgs{
 				Id: args[0],
 			})
-			if err != nil {
-				return fmt.Errorf("validate: %w", err)
-			}
-			if env == nil {
-				return fmt.Errorf("validate: nil envelope")
-			}
-			if env.Error != nil {
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("validate: %s: %s", env.Error.Code, env.Error.Message),
-				}
-			}
-
-			jsonFlag, _ := cmd.Flags().GetBool("json")
-			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
+			return vaultRenderResult(cmd, "validate", env, err)
 		},
 	}
 }
