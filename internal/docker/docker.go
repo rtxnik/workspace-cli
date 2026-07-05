@@ -28,6 +28,17 @@ const (
 	timeoutStop  = 15 * time.Second
 )
 
+// runWithTimeout runs name+args under a hard deadline and returns combined
+// stdout+stderr. Centralizes the context.WithTimeout + exec.CommandContext
+// plumbing for the package's docker shell-outs so a wedged daemon/container
+// cannot hang the caller. Binary-agnostic, so it is unit-testable without
+// docker (see timeout_test.go, which drives it with `sleep`).
+func runWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
 // Status holds proxy container status info.
 type Status struct {
 	Running bool
