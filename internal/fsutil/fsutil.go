@@ -1,7 +1,7 @@
-// Package fsutil provides atomic filesystem primitives shared across the xray
-// and xrayconf packages. It lives in its own leaf package (not in xray)
-// because xray imports xrayconf, and both need the writer — placing it in
-// xray would create an import cycle.
+// Package fsutil provides atomic filesystem primitives (file write, symlink
+// swap) shared across the codebase. It lives in its own leaf package with no
+// internal imports so any consumer — xray, xrayconf, workspace, cmd — can use
+// the same temp-then-rename discipline without import cycles.
 package fsutil
 
 import (
@@ -22,7 +22,7 @@ import (
 //
 // The explicit Chmod after create defends the perm contract against umask,
 // which would otherwise mask the O_CREATE mode bits. Mirrors the temp-then-
-// rename discipline of xray.AtomicSymlink (never remove-then-create).
+// rename discipline of AtomicSymlink in this package (never remove-then-create).
 func WriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
