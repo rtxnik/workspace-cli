@@ -19,8 +19,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
@@ -30,22 +28,7 @@ import (
 var vaultTriageRunCallFn = runVaultTriageRun
 
 func runVaultTriageRun(ctx context.Context, root *cobra.Command, targs mcp.TriageRunArgs) (*mcp.Envelope, error) {
-	cl, err := mcp.NewClient(ctx, mcp.Options{
-		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
-		Version:         root.Version,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("spawn MCP client: %w", err)
-	}
-	stop := mcp.InstallSignalForward(cl)
-	defer stop()
-	defer func() { _ = cl.Close(ctx) }()
-
-	env, err := cl.Call(ctx, "triage_run", &targs)
-	if err != nil {
-		return nil, fmt.Errorf("MCP roundtrip: %w", err)
-	}
-	return env, nil
+	return callVaultTool(ctx, root.Version, "triage_run", &targs)
 }
 
 func newVaultTriageRunCmd() *cobra.Command {
@@ -75,21 +58,7 @@ func newVaultTriageRunCmd() *cobra.Command {
 			}
 
 			env, err := vaultTriageRunCallFn(ctx, cmd.Root(), targs)
-			if err != nil {
-				return fmt.Errorf("triage-run: %w", err)
-			}
-			if env == nil {
-				return fmt.Errorf("triage-run: nil envelope")
-			}
-			if env.Error != nil {
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("triage-run: %s: %s", env.Error.Code, env.Error.Message),
-				}
-			}
-
-			jsonFlag, _ := cmd.Flags().GetBool("json")
-			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
+			return vaultRenderResult(cmd, "triage-run", env, err)
 		},
 	}
 	cmd.Flags().String("session-id", "", "Operator-supplied session correlation id (auto-generated when omitted)")

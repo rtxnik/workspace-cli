@@ -42,22 +42,7 @@ var (
 )
 
 func runVaultIngest(ctx context.Context, root *cobra.Command, cargs mcp.CreateNoteArgs) (*mcp.Envelope, error) {
-	cl, err := mcp.NewClient(ctx, mcp.Options{
-		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
-		Version:         root.Version,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("spawn MCP client: %w", err)
-	}
-	stop := mcp.InstallSignalForward(cl)
-	defer stop()
-	defer func() { _ = cl.Close(ctx) }()
-
-	env, err := cl.Call(ctx, "create_note", &cargs)
-	if err != nil {
-		return nil, fmt.Errorf("MCP roundtrip: %w", err)
-	}
-	return env, nil
+	return callVaultTool(ctx, root.Version, "create_note", &cargs)
 }
 
 // splitFrontmatter parses a markdown file with YAML frontmatter delimited by
@@ -206,10 +191,7 @@ func newVaultIngestCmd() *cobra.Command {
 						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s details: %s\n", env.Error.Code, string(env.Error.Details))
 					}
 				}
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("ingest: %s: %s", env.Error.Code, env.Error.Message),
-				}
+				return vaultErrExit("ingest", env.Error)
 			}
 
 			jsonFlag, _ := cmd.Flags().GetBool("json")

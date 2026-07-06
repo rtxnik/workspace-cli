@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
@@ -31,22 +30,7 @@ var vaultGetCoverageReportRunFn = runVaultGetCoverageReport
 // runVaultGetCoverageReport is the production runner: spawn client, call
 // the MCP tool, return the envelope (or an error).
 func runVaultGetCoverageReport(ctx context.Context, root *cobra.Command) (*mcp.Envelope, error) {
-	cl, err := mcp.NewClient(ctx, mcp.Options{
-		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
-		Version:         root.Version,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("spawn MCP client: %w", err)
-	}
-	stop := mcp.InstallSignalForward(cl)
-	defer stop()
-	defer func() { _ = cl.Close(ctx) }()
-
-	env, err := cl.Call(ctx, "get_coverage_report", &mcp.GetCoverageReportArgs{})
-	if err != nil {
-		return nil, fmt.Errorf("MCP roundtrip: %w", err)
-	}
-	return env, nil
+	return callVaultTool(ctx, root.Version, "get_coverage_report", &mcp.GetCoverageReportArgs{})
 }
 
 func newVaultGetCoverageReportCmd() *cobra.Command {
@@ -64,21 +48,7 @@ func newVaultGetCoverageReportCmd() *cobra.Command {
 			}
 
 			env, err := vaultGetCoverageReportRunFn(ctx, cmd.Root())
-			if err != nil {
-				return fmt.Errorf("get-coverage-report: %w", err)
-			}
-			if env == nil {
-				return fmt.Errorf("get-coverage-report: nil envelope")
-			}
-			if env.Error != nil {
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("get-coverage-report: %s: %s", env.Error.Code, env.Error.Message),
-				}
-			}
-
-			jsonFlag, _ := cmd.Flags().GetBool("json")
-			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
+			return vaultRenderResult(cmd, "get-coverage-report", env, err)
 		},
 	}
 }

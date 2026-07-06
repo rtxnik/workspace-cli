@@ -14,7 +14,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
@@ -27,22 +26,7 @@ import (
 var vaultSearchRunFn = runVaultSearch
 
 func runVaultSearch(ctx context.Context, root *cobra.Command, sargs mcp.SearchNotesArgs) (*mcp.Envelope, error) {
-	cl, err := mcp.NewClient(ctx, mcp.Options{
-		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
-		Version:         root.Version,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("spawn MCP client: %w", err)
-	}
-	stop := mcp.InstallSignalForward(cl)
-	defer stop()
-	defer func() { _ = cl.Close(ctx) }()
-
-	env, err := cl.Call(ctx, "search_notes", &sargs)
-	if err != nil {
-		return nil, fmt.Errorf("MCP roundtrip: %w", err)
-	}
-	return env, nil
+	return callVaultTool(ctx, root.Version, "search_notes", &sargs)
 }
 
 func newVaultSearchCmd() *cobra.Command {
@@ -73,21 +57,7 @@ func newVaultSearchCmd() *cobra.Command {
 				Query: query,
 				Limit: limit,
 			})
-			if err != nil {
-				return fmt.Errorf("search: %w", err)
-			}
-			if env == nil {
-				return fmt.Errorf("search: nil envelope")
-			}
-			if env.Error != nil {
-				return &cliErrorWithExit{
-					code: mcp.MapErrorCodeToExitCode(env.Error.Code),
-					msg:  fmt.Sprintf("search: %s: %s", env.Error.Code, env.Error.Message),
-				}
-			}
-
-			jsonFlag, _ := cmd.Flags().GetBool("json")
-			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
+			return vaultRenderResult(cmd, "search", env, err)
 		},
 	}
 	cmd.Flags().IntP("limit", "n", 10, "Maximum number of results to return (1-100)")

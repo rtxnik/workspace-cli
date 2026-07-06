@@ -17,10 +17,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
+	"time"
 
-	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -39,26 +38,15 @@ var predictMCPCallFn = predictMCPCallImpl
 // predictMCPCallImpl is the production implementation that calls the
 // predict_bulk_load MCP tool via the stdio transport.
 func predictMCPCallImpl(count int) (*predictResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*secondDuration)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cl, err := mcp.NewClient(ctx, mcp.Options{
-		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
-		Version:         "ws-vault-predict-bulk-load",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("MCP client init: %w", err)
-	}
-	defer func() { _ = cl.Close(ctx) }()
-
-	env, err := cl.Call(ctx, "predict_bulk_load", map[string]any{
+	env, err := callVaultTool(ctx, "ws-vault-predict-bulk-load", "predict_bulk_load", map[string]any{
 		"count": count,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("MCP call predict_bulk_load: %w", err)
 	}
-
-	// Check for MCP-level error
 	if !env.OK {
 		msg := "unknown error"
 		if env.Error != nil {
@@ -66,21 +54,12 @@ func predictMCPCallImpl(count int) (*predictResult, error) {
 		}
 		return nil, fmt.Errorf("MCP error: %s", msg)
 	}
-
-	// Parse the data field into predictResult
 	result := &predictResult{}
 	if err := json.Unmarshal(env.Data, result); err != nil {
 		return nil, fmt.Errorf("parse predict_bulk_load response: %w", err)
 	}
-
 	return result, nil
 }
-
-// secondDuration is time.Second extracted to avoid importing time in this file
-// when it's only needed for one constant. Actually, let's just use time.
-// The import is already available in vault_doctor.go but Go needs it
-// per-file for the const.
-const secondDuration = 1_000_000_000 // time.Second in nanoseconds as Duration
 
 func newVaultDoctorPredictCmd() *cobra.Command {
 	cmd := &cobra.Command{
