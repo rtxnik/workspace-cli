@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/procx"
 )
 
 // validateProbeIP returns the trimmed IP if s is a valid IP literal, else "".
@@ -164,7 +165,7 @@ const (
 // Package var so tests can inject a fake (mirrors newClientFunc). The DockerClient
 // SDK interface has no exec method, so in-container commands shell out to docker.
 var execInContainer = func(name string, args ...string) ([]byte, error) {
-	out, err := runWithTimeout(timeoutRead, "docker", append([]string{"exec", name}, args...)...)
+	out, err := procx.RunCombined(context.Background(), timeoutRead, "docker", append([]string{"exec", name}, args...)...)
 	if err != nil {
 		return out, fmt.Errorf("docker exec %s %v: %w (output: %s)", name, args, err, out)
 	}

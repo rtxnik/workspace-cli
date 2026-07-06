@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker/errdefs"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/procx"
 	"github.com/rtxnik/workspace-cli/internal/proxyrecipe"
 )
 
@@ -28,21 +29,10 @@ const (
 	timeoutStop  = 15 * time.Second
 )
 
-// runWithTimeout runs name+args under a hard deadline and returns combined
-// stdout+stderr. Centralizes the context.WithTimeout + exec.CommandContext
-// plumbing for the package's docker shell-outs so a wedged daemon/container
-// cannot hang the caller. Binary-agnostic, so it is unit-testable without
-// docker (see timeout_test.go, which drives it with `sleep`).
-func runWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
-
 // PruneImages removes dangling images (`docker image prune -f`) under a hard
 // deadline so a wedged daemon cannot hang the caller. Best-effort by nature.
 func PruneImages() error {
-	_, err := runWithTimeout(timeoutRead, "docker", "image", "prune", "-f")
+	_, err := procx.RunCombined(context.Background(), timeoutRead, "docker", "image", "prune", "-f")
 	return err
 }
 
@@ -460,7 +450,7 @@ type FixRoutesReport struct {
 // fixRouteExecFn runs the route-replace command for a single container.
 // Extracted as a var so tests can stub it without shelling out.
 var fixRouteExecFn = func(containerName, proxyIP string) error {
-	_, err := runWithTimeout(timeoutRead, "docker", "exec", containerName,
+	_, err := procx.RunCombined(context.Background(), timeoutRead, "docker", "exec", containerName,
 		"ip", "route", "replace", "default", "via", proxyIP)
 	return err
 }
@@ -633,7 +623,7 @@ func WaitForHealth(cfg config.Config, timeout time.Duration) error {
 // validation before symlink swap (CONTEXT.md D-09).
 func ProxyExec(cfg config.Config, args ...string) ([]byte, error) {
 	cmdArgs := append([]string{"exec", cfg.ProxyContainer}, args...)
-	out, err := runWithTimeout(timeoutRead, "docker", cmdArgs...)
+	out, err := procx.RunCombined(context.Background(), timeoutRead, "docker", cmdArgs...)
 	if err != nil {
 		return out, fmt.Errorf("docker exec %s %v: %w (output: %s)", cfg.ProxyContainer, args, err, string(out))
 	}
