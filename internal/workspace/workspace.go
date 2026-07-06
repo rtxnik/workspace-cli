@@ -13,6 +13,7 @@ import (
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/procx"
 )
 
 type Info struct {
@@ -108,9 +109,7 @@ func List(cfg config.Config) ([]Info, error) {
 // devpodStatuses queries devpod for workspace statuses.
 func devpodStatuses() map[string]string {
 	result := make(map[string]string)
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutProbe)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, devpodBin, "list", "--output", "json").Output()
+	out, err := procx.Run(context.Background(), timeoutProbe, devpodBin, "list", "--output", "json")
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			output.Warn("devpod not found in PATH, workspace statuses unavailable")
@@ -127,9 +126,7 @@ func devpodStatuses() map[string]string {
 		return result
 	}
 	for _, item := range items {
-		sctx, scancel := context.WithTimeout(context.Background(), timeoutProbe)
-		out, err := exec.CommandContext(sctx, devpodBin, "status", item.ID).CombinedOutput()
-		scancel()
+		out, err := procx.RunCombined(context.Background(), timeoutProbe, devpodBin, "status", item.ID)
 		if err != nil {
 			continue
 		}
