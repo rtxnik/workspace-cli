@@ -37,3 +37,17 @@ func TestWriteJSONPropagatesEncodeError(t *testing.T) {
 		t.Fatal("expected encode error for unmarshalable value, got nil")
 	}
 }
+
+// TestWriteJSONEscapesHTML pins the default HTML escaping the migrated
+// call sites inherited from json.MarshalIndent — a SetEscapeHTML(false)
+// in WriteJSON would silently change display output.
+func TestWriteJSONEscapesHTML(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteJSON(&buf, map[string]string{"u": "a<b&c"}); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	want := "{\n  \"u\": \"a\\u003cb\\u0026c\"\n}\n"
+	if got := buf.String(); got != want {
+		t.Errorf("HTML escaping mismatch:\n got %q\nwant %q", got, want)
+	}
+}
