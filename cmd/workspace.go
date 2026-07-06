@@ -13,6 +13,7 @@ import (
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/detect"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/procx"
 	"github.com/rtxnik/workspace-cli/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -248,9 +249,7 @@ var sshCmd = &cobra.Command{
 		// Rename tmux window if inside tmux. Bounded: a wedged tmux server
 		// must not stall the ssh command (best-effort, error ignored).
 		if tmux := os.Getenv("TMUX"); tmux != "" {
-			tctx, tcancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = exec.CommandContext(tctx, "tmux", "rename-window", name).Run()
-			tcancel()
+			_, _ = procx.Run(context.Background(), 5*time.Second, "tmux", "rename-window", name)
 		}
 		if err := workspace.DevpodSSH(name); err != nil {
 			output.Die(err.Error())

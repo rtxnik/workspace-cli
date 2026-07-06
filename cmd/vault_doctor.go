@@ -39,7 +39,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -48,6 +47,7 @@ import (
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/procx"
 	"github.com/spf13/cobra"
 )
 
@@ -101,11 +101,9 @@ func checkOrphanMCPImpl(ctx context.Context) *doctorCheck {
 	check := &doctorCheck{Name: "orphan-mcp-subprocess"}
 
 	// Bound the pgrep probes with a hard deadline so a wedged process table
-	// cannot hang the doctor check.
-	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	out, err := exec.CommandContext(pctx, "pgrep", "-fc", "vault_ai/adapter_stdio/server.py").Output()
+	// cannot hang the doctor check (10s each; the PID-resolution probe below
+	// runs only on the red path).
+	out, err := procx.Run(ctx, 10*time.Second, "pgrep", "-fc", "vault_ai/adapter_stdio/server.py")
 	count := strings.TrimSpace(string(out))
 	// pgrep -fc exits non-zero (status 1) when no matches found and prints "0";
 	// treat that as the green path. Distinguish "no matches" from a real
@@ -132,7 +130,7 @@ func checkOrphanMCPImpl(ctx context.Context) *doctorCheck {
 
 	// Resolve PIDs for the remediation path. Use `pgrep -f` (no -c) to get
 	// one PID per line.
-	pidsOut, _ := exec.CommandContext(pctx, "pgrep", "-f", "vault_ai/adapter_stdio/server.py").Output()
+	pidsOut, _ := procx.Run(ctx, 10*time.Second, "pgrep", "-f", "vault_ai/adapter_stdio/server.py")
 	var pids []int
 	for _, line := range strings.Split(strings.TrimSpace(string(pidsOut)), "\n") {
 		line = strings.TrimSpace(line)
@@ -285,8 +283,9 @@ func checkXrepoDriftImpl(ctx context.Context) *doctorCheck {
 		return check
 	}
 
-	cmd := exec.CommandContext(ctx, "bash", script)
-	out, err := cmd.CombinedOutput()
+	// 30s hard deadline (was unbounded): matches the dry-run handshake bound
+	// above; the contract walker is a local file diff and finishes in seconds.
+	out, err := procx.RunCombined(ctx, 30*time.Second, "bash", script)
 	if err == nil {
 		check.Band = bandGreen
 		check.Detail = "no xrepo contract drift"
