@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
@@ -265,5 +266,5 @@ func patchProxyNetwork(dcPath, proxyNetwork, proxyIP string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dcPath, out, 0o644)
+	return fsutil.WriteFile(dcPath, out, 0o644)
 }

@@ -5,10 +5,28 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 )
 
+// setXrayLogLevel rewrites the loglevel of the active xray config.
+//
+// configPath is normally the active-profile symlink (~/.config/xray/config.json
+// -> profiles/<name>.json, D-07 layout). The path is resolved BEFORE writing:
+// fsutil.WriteFile renames a temp file over the path it is given; aimed at
+// the symlink itself, that write would replace the symlink with a regular
+// file and silently destroy the active-profile pointer. Writing the resolved target
+// keeps the pointer intact, and the rename keeps the rewrite atomic for the
+// running proxy that reads the same file through the whole-directory bind
+// mount (a plain os.WriteFile here risked a torn read).
 func setXrayLogLevel(configPath, level string) error {
-	data, err := os.ReadFile(configPath)
+	resolved, err := filepath.EvalSymlinks(configPath)
+	if err != nil {
+		return fmt.Errorf("resolve config path: %w", err)
+	}
+
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
@@ -30,7 +48,7 @@ func setXrayLogLevel(configPath, level string) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	return os.WriteFile(configPath, out, 0o600)
+	return fsutil.WriteFile(resolved, out, 0o600)
 }
 
 func fetchLatestXrayVersion() (string, error) {
