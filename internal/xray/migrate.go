@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
@@ -68,13 +69,13 @@ func MigrateLegacy(cfg config.Config) (bool, error) {
 	}
 
 	// Relative symlink target (NOT absolute) so the link survives chezmoi apply
-	// rewrites and DevPod rebuilds. Wave-3 AtomicSymlink reused here rather than
-	// a bare os.Symlink so the create itself is atomic against any concurrent
-	// reader between os.Rename and link materialisation (and so a future
-	// failure-mode-improvement of AtomicSymlink lands here too without touching
-	// migrate.go).
+	// rewrites and DevPod rebuilds. fsutil.AtomicSymlink is reused here rather
+	// than a bare os.Symlink so the create itself is atomic against any
+	// concurrent reader between os.Rename and link materialisation (and so a
+	// future failure-mode-improvement of fsutil.AtomicSymlink lands here too
+	// without touching migrate.go).
 	relativeTarget := filepath.Join("profiles", "primary.json")
-	if err := AtomicSymlink(relativeTarget, cfg.XrayConfig); err != nil {
+	if err := fsutil.AtomicSymlink(relativeTarget, cfg.XrayConfig); err != nil {
 		return false, fmt.Errorf(
 			"create symlink (note: %s already moved to %s; restore manually if needed): %w",
 			cfg.XrayConfig, primaryPath, err,

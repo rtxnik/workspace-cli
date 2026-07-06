@@ -4,18 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 	"github.com/rtxnik/workspace-cli/internal/output"
 )
-
-// symlinkTempSeq makes AtomicSymlink temp names unique per call. A plain
-// timestamp collides when concurrent writers to the same linkPath read the
-// same nanosecond; the monotonic counter breaks that tie deterministically.
-var symlinkTempSeq atomic.Uint64
 
 // xrayRestartLivenessTimeout is the deadline for post-restart liveness check
 // per RESEARCH §6 and D-10. 15s = practical middle ground given Dockerfile
@@ -31,27 +26,6 @@ var (
 	waitForHealthFn       = docker.WaitForHealth
 	bindMountIsWholeDirFn = docker.BindMountIsWholeDir
 )
-
-// AtomicSymlink replaces linkPath with a symlink to target atomically.
-// Linux: create a temp symlink in the same directory then os.Rename it
-// over linkPath. Observers see either the old target or the new target,
-// never an in-between "missing" state.
-//
-// D-04 enforcement: NEVER shell out to `ln -sfn`; NEVER use a non-atomic
-// remove-then-create sequence (opens a window where the symlink is missing).
-func AtomicSymlink(target, linkPath string) error {
-	dir := filepath.Dir(linkPath)
-	base := filepath.Base(linkPath)
-	tmp := filepath.Join(dir, fmt.Sprintf(".%s.tmp.%d.%d", base, time.Now().UnixNano(), symlinkTempSeq.Add(1)))
-	if err := os.Symlink(target, tmp); err != nil {
-		return fmt.Errorf("create temp symlink: %w", err)
-	}
-	if err := os.Rename(tmp, linkPath); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("atomic rename: %w", err)
-	}
-	return nil
-}
 
 // ValidateProfile shells out via docker.ProxyExec to
 // `docker exec dev-proxy xray run -test -config /etc/xray/profiles/<name>.json`.
@@ -110,7 +84,7 @@ func SwitchTo(cfg config.Config, name string) error {
 		}},
 		output.Step{Name: "Atomic symlink swap", Fn: func() error {
 			relativeTarget := filepath.Join("profiles", name+".json")
-			return AtomicSymlink(relativeTarget, cfg.XrayConfig)
+			return fsutil.AtomicSymlink(relativeTarget, cfg.XrayConfig)
 		}},
 		output.Step{Name: "Restart dev-proxy", Fn: func() error {
 			return restartProxyFn(cfg)
@@ -150,7 +124,7 @@ func SwitchTo(cfg config.Config, name string) error {
 // bind-mount check, target-file existence, xray -test) — failures
 // return early without committing the symlink swap. Post-swap there is
 // nothing left to fail; the function returns nil after a successful
-// AtomicSymlink.
+// fsutil.AtomicSymlink.
 //
 // The ~10-line pre-flight duplication with SwitchTo is intentional —
 // see plan decision D-symlink-only-path: a shared helper would force
@@ -173,5 +147,5 @@ func SwitchToSymlinkOnly(cfg config.Config, name string) error {
 		return err
 	}
 	relativeTarget := filepath.Join("profiles", name+".json")
-	return AtomicSymlink(relativeTarget, cfg.XrayConfig)
+	return fsutil.AtomicSymlink(relativeTarget, cfg.XrayConfig)
 }

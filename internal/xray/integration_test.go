@@ -11,6 +11,7 @@ import (
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 )
 
 // Throwaway VLESS URIs — `xray -test` validates JSON shape only; localhost
@@ -49,7 +50,7 @@ func captureOriginalActive(t *testing.T) string {
 // test-isolated XRAY_CONFIG + XRAY_PROFILES_DIR via t.Setenv (operator's real
 // ~/.config/xray/ NEVER touched). Strategy A: bypasses SwitchTo's container
 // validation gate (container bind cannot see test tmpdir); exercises
-// AddProfile + AtomicSymlink + ReadActiveProfileName + RemoveProfile directly.
+// AddProfile + fsutil.AtomicSymlink + ReadActiveProfileName + RemoveProfile directly.
 // Full real-pipeline E2E lives in TestProfileLifecycleE2E + operator checkpoint.
 func TestIntegration_Cycle(t *testing.T) {
 	requireDevProxy(t)
@@ -97,13 +98,13 @@ func TestIntegration_Cycle(t *testing.T) {
 		}
 	}
 	// Seed initial symlink, then swap. Bypasses SwitchTo container gate.
-	if err := AtomicSymlink(filepath.Join("profiles", "test-primary.json"), cfg.XrayConfig); err != nil {
+	if err := fsutil.AtomicSymlink(filepath.Join("profiles", "test-primary.json"), cfg.XrayConfig); err != nil {
 		t.Fatalf("AtomicSymlink seed: %v", err)
 	}
 	if active, err := ReadActiveProfileName(cfg); err != nil || active != "test-primary" {
 		t.Fatalf("after seed: active=%q err=%v; want test-primary", active, err)
 	}
-	if err := AtomicSymlink(filepath.Join("profiles", "test-backup.json"), cfg.XrayConfig); err != nil {
+	if err := fsutil.AtomicSymlink(filepath.Join("profiles", "test-backup.json"), cfg.XrayConfig); err != nil {
 		t.Fatalf("AtomicSymlink swap: %v", err)
 	}
 	active, err := ReadActiveProfileName(cfg)
