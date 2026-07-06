@@ -23,7 +23,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -487,12 +486,7 @@ func newVaultStatusCmd() *cobra.Command {
 // document) or the human-readable table.
 func renderStatusReport(out io.Writer, rep *statusReport, jsonMode bool) error {
 	if jsonMode {
-		raw, err := json.MarshalIndent(rep, "", "  ")
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(out, string(raw))
-		return err
+		return output.WriteJSON(out, rep)
 	}
 	var b strings.Builder
 	b.WriteString(output.SectionStyle.Render("Vault Status"))

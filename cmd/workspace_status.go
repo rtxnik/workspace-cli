@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -39,12 +38,7 @@ func isRepoHealthy(s workspace.RepoStatus) bool {
 
 func renderWorkspaceStatus(out io.Writer, statuses []workspace.RepoStatus, jsonMode bool) error {
 	if jsonMode {
-		raw, err := json.MarshalIndent(statuses, "", "  ")
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(out, string(raw))
-		return err
+		return output.WriteJSON(out, statuses)
 	}
 
 	healthy := 0

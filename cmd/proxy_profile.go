@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -234,9 +233,7 @@ var profileShowCmd = &cobra.Command{
 		}
 
 		if jsonFlag {
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			_ = enc.Encode(dp)
+			_ = output.WriteJSON(cmd.OutOrStdout(), dp)
 			return
 		}
 		w := cmd.OutOrStdout()

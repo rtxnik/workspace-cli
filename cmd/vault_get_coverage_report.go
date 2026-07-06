@@ -18,6 +18,7 @@ import (
 	"io"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -66,11 +67,5 @@ func renderCoverageReport(out io.Writer, data json.RawMessage, jsonMode bool) er
 		_, e := fmt.Fprintln(out, string(data))
 		return e
 	}
-	indented, err := json.MarshalIndent(pretty, "", "  ")
-	if err != nil {
-		_, e := fmt.Fprintln(out, string(data))
-		return e
-	}
-	_, err = fmt.Fprintln(out, string(indented))
-	return err
+	return output.WriteJSON(out, pretty)
 }

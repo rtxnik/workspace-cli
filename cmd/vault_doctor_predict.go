@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -85,9 +86,7 @@ func newVaultDoctorPredictCmd() *cobra.Command {
 
 			jsonFlag, _ := cmd.Flags().GetBool("json")
 			if jsonFlag {
-				enc := json.NewEncoder(cmd.OutOrStdout())
-				enc.SetIndent("", "  ")
-				return enc.Encode(result)
+				return output.WriteJSON(cmd.OutOrStdout(), result)
 			}
 
 			// Table output
