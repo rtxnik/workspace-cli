@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
-	"github.com/rtxnik/workspace-cli/internal/xray"
+	"github.com/rtxnik/workspace-cli/internal/fsutil"
 )
 
 func TestProxyProfileCommand(t *testing.T) {
@@ -312,7 +312,7 @@ func TestProfileUseRendersPartialFailureWithoutRollback(t *testing.T) {
 	// restartProxyFn fails after AtomicSymlink succeeded.
 	*s.switchTo = func(cfg config.Config, name string) error {
 		relativeTarget := filepath.Join("profiles", name+".json")
-		if err := xray.AtomicSymlink(relativeTarget, cfg.XrayConfig); err != nil {
+		if err := fsutil.AtomicSymlink(relativeTarget, cfg.XrayConfig); err != nil {
 			return err
 		}
 		return fmt.Errorf("switch to %q failed (previous=%q): %w",
