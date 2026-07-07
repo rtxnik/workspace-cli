@@ -81,4 +81,21 @@ if ! grep -q 'failed to execute' "$err5"; then
     echo "FAIL: smoke-check failure message missing:"; cat "$err5"; exit 1
 fi
 echo "PASS: non-executing binary fails the post-install smoke check"
+
+# Case 6: a fatal signature problem is decided BEFORE the archive download —
+# the dist has checksums.txt but neither a signature nor the archive, so an
+# installer that fetches the archive first dies with the wrong error.
+dist6="${work}/dist6"; mkdir -p "$dist6"
+cp "${dist}/checksums.txt" "${dist6}/checksums.txt"
+err6="${work}/case6.err"
+if PATH="${stub}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist6}" PREFIX="${work}/root6" sh "$installer" --require-signature 2>"$err6"; then
+    echo "FAIL: missing minisig accepted under --require-signature"; exit 1
+fi
+if grep -q "failed to download ${archive}" "$err6"; then
+    echo "FAIL: archive was fetched before the signature policy was decided:"; cat "$err6"; exit 1
+fi
+if ! grep -Eq 'no checksums\.txt\.minisig asset|could not download checksums\.txt\.minisig' "$err6"; then
+    echo "FAIL: missing-minisig error does not state a reason:"; cat "$err6"; exit 1
+fi
+echo "PASS: signature policy decided before the archive download"
 echo "ALL PASS"

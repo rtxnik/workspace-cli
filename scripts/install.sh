@@ -99,17 +99,30 @@ base="${WS_BASE_URL:-https://github.com/${REPO}/releases/download/${version}}"
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT INT TERM
 
-info "downloading ${archive} (${version})"
-DOWNLOAD "${base}/${archive}"    "${workdir}/${archive}"    || die "failed to download ${archive}"
-DOWNLOAD "${base}/checksums.txt" "${workdir}/checksums.txt" || die "failed to download checksums.txt"
-
-# The signature download is load-bearing under --require-signature, so a
-# failure must say WHY: "asset absent" (unsigned release) reads very
-# differently from "network failure" (retry / check connectivity).
+# Fetch BOTH manifests in one downloader invocation, and BEFORE the archive.
+# Throttling middleboxes were observed killing the Nth fresh TLS handshake in
+# a burst (retries included) while already-established connections kept
+# working — and the standalone signature fetch was exactly that Nth handshake.
+# One curl process reuses its connections across URLs, so the tiny .minisig
+# rides the same connection as checksums.txt instead of opening a new one.
+# Manifest-first also fails --require-signature fast, before the big download.
+#
+# A signature failure must say WHY: "asset absent" (unsigned release) reads
+# very differently from "network failure" (retry / check connectivity).
+info "downloading release manifests (${version})"
 have_sig=0
 sig_reason=""
-sig_err="${workdir}/minisig.err"
-if DOWNLOAD "${base}/checksums.txt.minisig" "${workdir}/checksums.txt.minisig" 2>"$sig_err"; then
+sig_err="${workdir}/manifests.err"
+if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 300 \
+        -o "${workdir}/checksums.txt"         "${base}/checksums.txt" \
+        -o "${workdir}/checksums.txt.minisig" "${base}/checksums.txt.minisig" 2>"$sig_err" || true
+else
+    DOWNLOAD "${base}/checksums.txt"         "${workdir}/checksums.txt"         2>"$sig_err"  || true
+    DOWNLOAD "${base}/checksums.txt.minisig" "${workdir}/checksums.txt.minisig" 2>>"$sig_err" || true
+fi
+[ -s "${workdir}/checksums.txt" ] || die "failed to download checksums.txt ($(tr '\n' ' ' < "$sig_err"))"
+if [ -s "${workdir}/checksums.txt.minisig" ]; then
     have_sig=1
 elif grep -q '404' "$sig_err" 2>/dev/null; then
     sig_reason="the release has no checksums.txt.minisig asset (HTTP 404)"
@@ -134,15 +147,15 @@ verify_signature() {
     info "minisign signature OK"
 }
 
-verify_checksum
-
+# Signature policy is decided (and the signature verified) BEFORE the archive
+# download: a fatal signature problem must not cost the big transfer first.
 if command -v minisign >/dev/null 2>&1; then
     if [ "$have_sig" -eq 1 ]; then
         verify_signature
     elif [ "$REQUIRE_SIGNATURE" -eq 1 ]; then
         die "--require-signature was set but ${sig_reason}"
     else
-        warn "${sig_reason}; installed with checksum-level verification only"
+        warn "${sig_reason}; proceeding with checksum-level verification only"
     fi
 else
     if [ "$REQUIRE_SIGNATURE" -eq 1 ]; then
@@ -151,6 +164,11 @@ else
     warn "minisign not found — CHECKSUM-LEVEL protection only (no protection against a compromised release)."
     warn "Install minisign and re-run for the full chain of trust (apt-get install minisign / brew install minisign)."
 fi
+
+info "downloading ${archive} (${version})"
+DOWNLOAD "${base}/${archive}" "${workdir}/${archive}" || die "failed to download ${archive}"
+
+verify_checksum
 
 info "extracting ws from ${archive}"
 tar -xzf "${workdir}/${archive}" -C "$workdir" ws || die "could not extract 'ws' from ${archive}"
