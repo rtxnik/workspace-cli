@@ -15,7 +15,11 @@
 # Environment overrides:
 #   WS_VERSION    install a specific tag (e.g. v0.7.1) instead of latest
 #   PREFIX        install root (default /usr/local); binary -> $PREFIX/bin/ws
-#   WS_BASE_URL   override the asset base URL (testing seam)
+#   WS_BASE_URL   override the asset base URL. Testing seam AND the offline /
+#                 mirror path: download ws_<os>_<arch>.tar.gz, checksums.txt
+#                 and checksums.txt.minisig on a connected machine, then
+#                 WS_VERSION=vX.Y.Z WS_BASE_URL="file:///path/to/assets" \
+#                   sh install.sh --require-signature
 
 set -eu
 
@@ -44,10 +48,14 @@ done
 need() { command -v "$1" >/dev/null 2>&1 || die "required tool not found: $1"; }
 need uname; need mktemp; need tar; need chmod
 
+# Bounded, retrying downloads: flaky paths to the release CDN must not hang the
+# install (no timeout) or kill it on a single transient failure (no retry).
+# --retry-all-errors covers connection resets / TLS handshake failures that
+# curl's plain --retry does not classify as transient.
 if command -v curl >/dev/null 2>&1; then
-    DOWNLOAD() { curl -fsSL "$1" -o "$2"; }
+    DOWNLOAD() { curl -fsSL --retry 3 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 300 "$1" -o "$2"; }
 elif command -v wget >/dev/null 2>&1; then
-    DOWNLOAD() { wget -q "$1" -O "$2"; }
+    DOWNLOAD() { wget -q --tries=3 --connect-timeout=10 --timeout=300 "$1" -O "$2"; }
 else
     die "need curl or wget to download release assets"
 fi
@@ -95,9 +103,18 @@ info "downloading ${archive} (${version})"
 DOWNLOAD "${base}/${archive}"    "${workdir}/${archive}"    || die "failed to download ${archive}"
 DOWNLOAD "${base}/checksums.txt" "${workdir}/checksums.txt" || die "failed to download checksums.txt"
 
+# The signature download is load-bearing under --require-signature, so a
+# failure must say WHY: "asset absent" (unsigned release) reads very
+# differently from "network failure" (retry / check connectivity).
 have_sig=0
-if DOWNLOAD "${base}/checksums.txt.minisig" "${workdir}/checksums.txt.minisig" 2>/dev/null; then
+sig_reason=""
+sig_err="${workdir}/minisig.err"
+if DOWNLOAD "${base}/checksums.txt.minisig" "${workdir}/checksums.txt.minisig" 2>"$sig_err"; then
     have_sig=1
+elif grep -q '404' "$sig_err" 2>/dev/null; then
+    sig_reason="the release has no checksums.txt.minisig asset (HTTP 404)"
+else
+    sig_reason="could not download checksums.txt.minisig — network failure, retry or check connectivity ($(tr '\n' ' ' < "$sig_err"))"
 fi
 
 verify_checksum() {
@@ -123,9 +140,9 @@ if command -v minisign >/dev/null 2>&1; then
     if [ "$have_sig" -eq 1 ]; then
         verify_signature
     elif [ "$REQUIRE_SIGNATURE" -eq 1 ]; then
-        die "checksums.txt.minisig not available but --require-signature was set"
+        die "--require-signature was set but ${sig_reason}"
     else
-        warn "checksums.txt.minisig not available; installed with checksum-level verification only"
+        warn "${sig_reason}; installed with checksum-level verification only"
     fi
 else
     if [ "$REQUIRE_SIGNATURE" -eq 1 ]; then
@@ -140,15 +157,34 @@ tar -xzf "${workdir}/${archive}" -C "$workdir" ws || die "could not extract 'ws'
 [ -f "${workdir}/ws" ] || die "archive did not contain a 'ws' binary"
 chmod 0755 "${workdir}/ws"
 
+# Install by staging next to the destination and rename()-ing over it: the
+# replacement is atomic AND lands on a NEW inode. An in-place `cp` reuses the
+# destination inode, and macOS caches code-signature validity per inode —
+# overwriting an existing signed binary that way makes every subsequent exec
+# die with SIGKILL until the file is recreated.
 dest_dir="${PREFIX}/bin"; dest="${dest_dir}/ws"
+staged="${dest_dir}/.ws.staged.$$"
 if [ -w "$PREFIX" ] || { [ -d "$dest_dir" ] && [ -w "$dest_dir" ]; } || mkdir -p "$dest_dir" 2>/dev/null; then
     info "installing to ${dest}"
-    mkdir -p "$dest_dir"; cp "${workdir}/ws" "$dest"; chmod 0755 "$dest"
+    if ! { mkdir -p "$dest_dir" && cp "${workdir}/ws" "$staged" && chmod 0755 "$staged" && mv -f "$staged" "$dest"; }; then
+        rm -f "$staged" 2>/dev/null
+        die "failed to install to ${dest}"
+    fi
 elif command -v sudo >/dev/null 2>&1; then
     info "installing to ${dest} (requires sudo)"
-    sudo sh -c "mkdir -p '$dest_dir' && cp '${workdir}/ws' '$dest' && chmod 0755 '$dest'"
+    if ! sudo sh -c "mkdir -p '$dest_dir' && cp '${workdir}/ws' '$staged' && chmod 0755 '$staged' && mv -f '$staged' '$dest'"; then
+        sudo rm -f "$staged" 2>/dev/null
+        die "failed to install to ${dest} (sudo)"
+    fi
 else
     die "cannot write to ${dest_dir} and sudo unavailable; set PREFIX to a writable location (e.g. PREFIX=\$HOME/.local)"
+fi
+
+# Smoke-check: the installed binary must actually execute. "Installed" must
+# mean "runs", not "file copied" — this catches a broken binary and, on macOS,
+# a stale per-inode code-signature cache (file present, every exec SIGKILLed).
+if ! "$dest" version >/dev/null 2>&1 && ! "$dest" --version >/dev/null 2>&1; then
+    die "installed binary at ${dest} failed to execute; remove it (rm '${dest}') and re-run this installer"
 fi
 
 info "installed ws ${version} to ${dest}"
