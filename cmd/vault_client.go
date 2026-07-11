@@ -29,7 +29,9 @@ func vaultErrExit(leaf string, e *mcp.EnvelopeError) error {
 // vaultRenderResult is the shared RunE tail for the envelope-returning vault
 // leaves (search/validate/triage-run/get-coverage-report). It wraps a
 // transport error, guards a nil envelope, maps an envelope error to an exit
-// code, and otherwise renders env.Data via renderCoverageReport honoring --json.
+// code, rejects a non-OK envelope that carries no error block (malformed
+// per the wire contract — fail closed, never render it as success), and
+// otherwise renders env.Data via renderCoverageReport honoring --json.
 func vaultRenderResult(cmd *cobra.Command, leaf string, env *mcp.Envelope, err error) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", leaf, err)
@@ -39,6 +41,12 @@ func vaultRenderResult(cmd *cobra.Command, leaf string, env *mcp.Envelope, err e
 	}
 	if env.Error != nil {
 		return vaultErrExit(leaf, env.Error)
+	}
+	if !env.OK {
+		return &cliErrorWithExit{
+			code: env.ExitCode(),
+			msg:  fmt.Sprintf("%s: backend reported failure without error details", leaf),
+		}
 	}
 	jsonFlag, _ := cmd.Flags().GetBool("json")
 	return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
