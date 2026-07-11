@@ -6,8 +6,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
 )
@@ -34,6 +36,7 @@ func quietStderr(t *testing.T, fn func()) {
 	if _, err := io.Copy(io.Discard, r); err != nil {
 		t.Fatalf("drain stderr pipe: %v", err)
 	}
+	_ = r.Close()
 }
 
 // TestL3_07_VaultRenderResultTreatsOKFalseAsSuccess: a failure envelope
@@ -110,5 +113,38 @@ func TestL3_07_IngestTreatsOKFalseAsSuccess(t *testing.T) {
 	}
 	if cerr.code == 0 {
 		t.Fatalf("ok=false envelope mapped to exit code 0")
+	}
+}
+
+// TestUpFailureDetail_RouteDegradedNamesWorkspaces: a *docker.RouteFixError
+// from the up sequence renders as a degraded-but-running outcome (the proxy
+// DID start) naming every failed workspace, with fix-routes as the
+// remediation -- not as the generic "Failed to start proxy" screen.
+func TestUpFailureDetail_RouteDegradedNamesWorkspaces(t *testing.T) {
+	rep := docker.FixRoutesReport{Fixed: 1, Attempted: 2, Failures: []string{"my-workspace: exit status 1"}}
+	d := upFailureDetail(rep.Err())
+	if !strings.Contains(d.Title, "DEGRADED") {
+		t.Errorf("degraded route-fix must not render as a start failure; got title %q", d.Title)
+	}
+	if !strings.Contains(d.Context["Failures"], "my-workspace") {
+		t.Errorf("failing workspace must be named; got %v", d.Context)
+	}
+	if joined := strings.Join(d.Suggestions, " "); !strings.Contains(joined, "fix-routes") {
+		t.Errorf("suggestions must include fix-routes; got %v", d.Suggestions)
+	}
+}
+
+// TestUpFailureDetail_GenericFailureUnchanged: non-route errors keep the
+// existing operator-facing rendering byte-for-byte.
+func TestUpFailureDetail_GenericFailureUnchanged(t *testing.T) {
+	d := upFailureDetail(errors.New("boom"))
+	if d.Title != "Failed to start proxy" {
+		t.Errorf("non-route errors must keep the existing title; got %q", d.Title)
+	}
+	if d.Context["Error"] != "boom" {
+		t.Errorf("generic context must carry the error; got %v", d.Context)
+	}
+	if len(d.Suggestions) != 3 {
+		t.Errorf("generic suggestions must be unchanged; got %v", d.Suggestions)
 	}
 }

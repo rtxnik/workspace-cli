@@ -1057,6 +1057,11 @@ func TestProxyUp_OwnAndBackupEndpointsNotForeign(t *testing.T) {
 		},
 	}
 	defer withMock(mock)()
+	// The cold-create tail now runs a route-fix pass over this non-empty
+	// topology; stub the exec seam so the test stays hermetic (no real
+	// docker binary) and quiet.
+	restore, _ := withFixRouteExec(func(string, string) error { return nil })
+	defer restore()
 
 	if err := ProxyUp(cfg); err != nil {
 		t.Fatalf("expected own/backup endpoints to be excluded, got: %v", err)

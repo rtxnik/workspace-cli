@@ -104,26 +104,45 @@ func ProxyUp(cfg config.Config) error {
 	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
 	if err == nil {
 		if info.State.Running {
-			// Proxy already running — still fix routes for workspaces
-			// that may have lost them after a reboot.
-			if _, err := ProxyFixRoutes(cfg); err != nil {
+			// Proxy already running -- still fix routes for workspaces that
+			// may have lost them after a reboot. Partial failures are warned,
+			// not returned: ProxyUp is shared by up/restart/switch, and a
+			// degraded route must not fail a restart or trigger the switch
+			// failure path. The up command surfaces the degraded outcome via
+			// its dedicated route step.
+			rep, err := ProxyFixRoutes(cfg)
+			if err != nil {
 				return err
 			}
+			warnRouteFailures(rep)
 			return nil
 		}
 		if err := cli.ContainerStart(ctx, cfg.ProxyContainer, container.StartOptions{}); err != nil {
 			return err
 		}
-		if _, err := ProxyFixRoutes(cfg); err != nil {
+		rep, err := ProxyFixRoutes(cfg)
+		if err != nil {
 			return err
 		}
+		warnRouteFailures(rep)
 		return nil
 	}
 
 	if err := proxyCreatePreflight(ctx, cli, cfg); err != nil {
 		return err
 	}
-	return proxyCreateAndStart(ctx, cli, cfg)
+	if err := proxyCreateAndStart(ctx, cli, cfg); err != nil {
+		return err
+	}
+	// Cold create fixes routes too (the doc contract above): workspaces
+	// already on the network may hold a stale default route. Same warn-only
+	// surfacing as the other branches.
+	rep, err := ProxyFixRoutes(cfg)
+	if err != nil {
+		return err
+	}
+	warnRouteFailures(rep)
+	return nil
 }
 
 // proxyCreatePreflight runs the pre-mutation validation shared by ProxyUp's
@@ -447,6 +466,30 @@ type FixRoutesReport struct {
 	Failures  []string // "name: error" for each container whose exec failed
 }
 
+// RouteFixError reports a partial route-fix failure: the pass itself ran
+// (transport was fine) but one or more workspace containers did not get
+// their default route replaced and therefore egress DIRECT.
+type RouteFixError struct {
+	Report FixRoutesReport
+}
+
+func (e *RouteFixError) Error() string {
+	return fmt.Sprintf("%d of %d workspace container(s) kept a DIRECT route: %s",
+		len(e.Report.Failures), e.Report.Attempted, strings.Join(e.Report.Failures, "; "))
+}
+
+// Err converts the report into its surfacing contract: a *RouteFixError when
+// any workspace failed, nil otherwise. Callers that must fail loud on partial
+// failure (the up command's route step) return this; callers that must not
+// abort (ProxyUp branches, recreate COMMIT/rollback) render warnRouteFailures
+// instead.
+func (rep FixRoutesReport) Err() error {
+	if len(rep.Failures) == 0 {
+		return nil
+	}
+	return &RouteFixError{Report: rep}
+}
+
 // fixRouteExecFn runs the route-replace command for a single container.
 // Extracted as a var so tests can stub it without shelling out.
 var fixRouteExecFn = func(containerName, proxyIP string) error {
@@ -487,6 +530,21 @@ func ProxyFixRoutes(cfg config.Config) (FixRoutesReport, error) {
 		rep.Fixed++
 	}
 	return rep, nil
+}
+
+// warnRouteFailures renders a route-fix report loudly without failing the
+// caller: every failed workspace is named and the remediation command is
+// spelled out. Shared surfacing point for the paths that must not abort on a
+// partial failure (ProxyUp branches, recreate COMMIT/rollback).
+func warnRouteFailures(rep FixRoutesReport) {
+	if len(rep.Failures) == 0 {
+		return
+	}
+	for _, f := range rep.Failures {
+		output.Warn("route fix failed -- " + f)
+	}
+	output.Warn(fmt.Sprintf("%d of %d workspace container(s) kept a DIRECT route (unproxied egress) -- run 'ws proxy fix-routes'",
+		len(rep.Failures), rep.Attempted))
 }
 
 // ProxyConnectedContainers returns names of running containers on the

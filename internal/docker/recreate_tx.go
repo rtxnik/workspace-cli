@@ -177,7 +177,13 @@ func proxyRecreate(cfg config.Config) error {
 	commitCtx, commitCancel := context.WithTimeout(context.Background(), recreateMutateTimeout)
 	defer commitCancel()
 	_ = cli.ContainerRemove(commitCtx, backupName(cfg), container.RemoveOptions{Force: true})
-	_, _ = ProxyFixRoutes(cfg)
+	// Best-effort by design (DR-HB2-4): a committed recreate must not be
+	// reported as failed -- but route-fix failures are surfaced loudly.
+	if rep, err := ProxyFixRoutes(cfg); err != nil {
+		output.Warn(fmt.Sprintf("route fix skipped: %v -- run 'ws proxy fix-routes'", err))
+	} else {
+		warnRouteFailures(rep)
+	}
 	// §8 end-state observability: name which container now serves cfg.ProxyIP so
 	// the reused-IP swap is unambiguous and LEDGER-quotable (vocab: NEW / restored
 	// OLD / DOWN -- "restored OLD" and "DOWN" appear in the rollback/CRITICAL paths).
@@ -281,7 +287,11 @@ func rollbackToBackup(cli DockerClient, cfg config.Config, origErr error) error 
 	vctx, vcancel := context.WithTimeout(context.Background(), proxyHealthTimeout)
 	defer vcancel()
 	ok, _, verr := verifyHealthyFn(vctx, cli, cfg, proxyHealthTimeout)
-	_, _ = ProxyFixRoutes(cfg)
+	if rep, ferr := ProxyFixRoutes(cfg); ferr != nil {
+		output.Warn(fmt.Sprintf("route fix skipped: %v -- run 'ws proxy fix-routes'", ferr))
+	} else {
+		warnRouteFailures(rep)
+	}
 	if verr != nil || !ok {
 		return fmt.Errorf("recreate failed AND the restored proxy is also unhealthy -- on-disk xray config is likely broken; run 'ws proxy doctor'. Original failure: %w", origErr)
 	}

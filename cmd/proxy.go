@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -47,17 +48,18 @@ var proxyUpCmd = &cobra.Command{
 		steps = append(steps, output.Step{
 			Name: "Fixing workspace routes",
 			Fn: func() error {
-				_, err := docker.ProxyFixRoutes(cfg)
-				return err
+				rep, err := docker.ProxyFixRoutes(cfg)
+				if err != nil {
+					return err
+				}
+				// Partial failure = degraded, non-zero outcome (a workspace
+				// egressing DIRECT must not render a green screen).
+				return rep.Err()
 			},
 		})
 
 		if err := output.NewStepRunner(steps...).Run(); err != nil {
-			fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
-				Title:       "Failed to start proxy",
-				Context:     map[string]string{"Error": err.Error()},
-				Suggestions: []string{"Check config: ws proxy check", "Initialize config: ws proxy init <vless-uri>", "Rebuild image: ws proxy rebuild"},
-			}))
+			fmt.Fprintln(os.Stderr, output.RenderError(upFailureDetail(err)))
 			os.Exit(1)
 		}
 	},
@@ -475,4 +477,28 @@ func recreateUpdateOutcome(err error) (msg string, isWarn bool) {
 		return fmt.Sprintf("update rolled back -- still running previous version: %s", err), true
 	}
 	return "Proxy restarted with new version", false
+}
+
+// upFailureDetail maps a proxy-up failure to its operator-facing rendering.
+// A partial route-fix failure means the proxy IS running but one or more
+// workspace containers kept a direct default route -- rendered as a degraded
+// outcome naming the failures, not as a start failure.
+func upFailureDetail(err error) output.ErrorDetail {
+	var rf *docker.RouteFixError
+	if errors.As(err, &rf) {
+		return output.ErrorDetail{
+			Title: fmt.Sprintf("Proxy is up, but workspace routes are DEGRADED (%d of %d failed)",
+				len(rf.Report.Failures), rf.Report.Attempted),
+			Context: map[string]string{"Failures": strings.Join(rf.Report.Failures, "; ")},
+			Suggestions: []string{
+				"Retry: ws proxy fix-routes",
+				"Diagnose: ws proxy doctor",
+			},
+		}
+	}
+	return output.ErrorDetail{
+		Title:       "Failed to start proxy",
+		Context:     map[string]string{"Error": err.Error()},
+		Suggestions: []string{"Check config: ws proxy check", "Initialize config: ws proxy init <vless-uri>", "Rebuild image: ws proxy rebuild"},
+	}
 }
