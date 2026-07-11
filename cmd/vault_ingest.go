@@ -193,6 +193,14 @@ func newVaultIngestCmd() *cobra.Command {
 				}
 				return vaultErrExit("ingest", env.Error)
 			}
+			if !env.OK {
+				// A failure envelope without an error block is malformed per
+				// the wire contract — fail closed, never render it as success.
+				return &cliErrorWithExit{
+					code: env.ExitCode(),
+					msg:  "ingest: backend reported failure without error details",
+				}
+			}
 
 			jsonFlag, _ := cmd.Flags().GetBool("json")
 			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)

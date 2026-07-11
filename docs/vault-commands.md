@@ -68,6 +68,8 @@ CLI exit codes map the MCP error envelope to Unix-native semantics (locked in AD
 
 Codes 8-127 are reserved for future sub-command-specific semantics. Codes ≥128 indicate a wrapper or signal-handling issue (bash convention) and are not part of the vault-ai contract.
 
+A failure envelope carrying an empty or unrecognized `error.code` maps to exit 1 with a stderr drift warning (`run ws vault doctor`) — a reported failure never maps to exit 0. Exit 0 is produced only by an `ok: true` envelope with no error block.
+
 ## Auth
 
 Single authentication secret: `VAULT_AI_TOKEN` (256-bit bearer per ADR-ai-06 (`vault-ai/docs/adr/adr-ai-06-mcp-auth.md`)).
