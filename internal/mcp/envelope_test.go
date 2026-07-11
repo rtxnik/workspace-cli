@@ -8,6 +8,29 @@ import (
 	"testing"
 )
 
+// quietStderr runs fn with os.Stderr redirected to a drained pipe so that an
+// intentional warning side effect (the unknown-code drift warning) does not
+// pollute passing-test output. Tests that assert ON the warning text keep
+// their own capture logic instead of using this helper.
+func quietStderr(t *testing.T, fn func()) {
+	t.Helper()
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+	})
+	fn()
+	os.Stderr = origStderr
+	_ = w.Close()
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		t.Fatalf("drain stderr pipe: %v", err)
+	}
+}
+
 // TestMapErrorCodeToExitCode is the table-driven verification of the 8-code
 // exit-code mapping per CONTEXT D-18 + vault-commands.md v1.3.0. Unknown codes
 // MUST return 1 AND emit a stderr warning naming XREPO-01 + `ws vault doctor`
@@ -19,7 +42,7 @@ func TestMapErrorCodeToExitCode(t *testing.T) {
 		code     string
 		wantExit int
 	}{
-		{name: "empty code returns 0 (success)", code: "", wantExit: 0},
+		{name: "empty code fails closed (exit 1, drift guard)", code: "", wantExit: 1},
 		{name: "VALIDATION_FAILED returns 1", code: "VALIDATION_FAILED", wantExit: 1},
 		{name: "BUDGET_EXCEEDED returns 2", code: "BUDGET_EXCEEDED", wantExit: 2},
 		{name: "VISIBILITY_LEAK returns 3", code: "VISIBILITY_LEAK", wantExit: 3},
@@ -32,7 +55,8 @@ func TestMapErrorCodeToExitCode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := MapErrorCodeToExitCode(tc.code)
+			var got int
+			quietStderr(t, func() { got = MapErrorCodeToExitCode(tc.code) })
 			if got != tc.wantExit {
 				t.Fatalf("MapErrorCodeToExitCode(%q) = %d; want %d", tc.code, got, tc.wantExit)
 			}
@@ -74,6 +98,35 @@ func TestMapErrorCodeToExitCodeUnknownEmitsWarning(t *testing.T) {
 	}
 	if !strings.Contains(captured, "MYSTERY_NEW_CODE") {
 		t.Errorf("stderr missing offending code; got %q", captured)
+	}
+}
+
+// TestMapErrorCodeToExitCodeEmptyEmitsWarning: an empty code is as much a
+// drift signal as an unrecognized one — it must exit 1 AND warn, never
+// silently succeed.
+func TestMapErrorCodeToExitCodeEmptyEmitsWarning(t *testing.T) {
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+	})
+
+	got := MapErrorCodeToExitCode("")
+	_ = w.Close()
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("read captured stderr: %v", err)
+	}
+
+	if got != 1 {
+		t.Errorf("empty code exit code = %d; want 1", got)
+	}
+	if !strings.Contains(buf.String(), "unknown error code") {
+		t.Errorf("stderr missing 'unknown error code' substring; got %q", buf.String())
 	}
 }
 

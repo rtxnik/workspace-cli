@@ -33,16 +33,20 @@ type EnvelopeError struct {
 	Details json.RawMessage `json:"details,omitempty"`
 }
 
-// MapErrorCodeToExitCode maps the 8 documented MCP error codes (per
+// MapErrorCodeToExitCode maps the documented MCP error codes (per
 // workspace-cli/docs/vault-commands.md v1.5.0 + CONTEXT D-18) onto Unix exit
-// codes 0-7. Unknown codes return 1 and emit a stderr warning so the operator
-// notices likely XREPO-01 contract drift (vault-ai contract bumped a new code
-// the Go consumer does not yet know about).
+// codes 1-7. Unknown codes — including an EMPTY code, which a well-formed
+// failure envelope must never carry — return 1 and emit a stderr warning so
+// the operator notices likely XREPO-01 contract drift (vault-ai bumped a new
+// code the Go consumer does not yet know about, or the envelope is malformed).
+//
+// Success (exit 0) is decided by (*Envelope).ExitCode on an OK envelope,
+// never by this mapper: a failure path always yields a non-zero exit.
 //
 // Exit code table (locked by ADR-int-03 §Exit codes; cannot reshape without
 // supersession ADR):
 //
-//	0 = success (empty code)
+//	0 = success (OK envelope, no error block — see (*Envelope).ExitCode)
 //	1 = VALIDATION_FAILED
 //	2 = BUDGET_EXCEEDED
 //	3 = VISIBILITY_LEAK
@@ -53,8 +57,6 @@ type EnvelopeError struct {
 //	8-127 reserved
 func MapErrorCodeToExitCode(code string) int {
 	switch code {
-	case "":
-		return 0
 	case "VALIDATION_FAILED":
 		return 1
 	case "BUDGET_EXCEEDED":
@@ -76,16 +78,17 @@ func MapErrorCodeToExitCode(code string) int {
 }
 
 // ExitCode is a convenience for cobra leaves' RunE: success (OK && Error == nil)
-// maps to 0; otherwise the Error.Code drives the exit code via MapErrorCodeToExitCode.
-// A nil-Error failure (OK == false with no Error block) is treated as a generic
-// validation failure (exit 1) — this protects against malformed envelopes that
-// claim failure without naming a code.
+// maps to 0; otherwise the Error.Code drives the exit code via
+// MapErrorCodeToExitCode. Failure shapes fail closed: a nil envelope and a
+// nil-Error failure (OK == false with no Error block) both map to exit 1, and
+// an empty Error.Code falls into the mapper's unknown-code guard (exit 1) —
+// a reported failure can never map to exit 0.
 func (e *Envelope) ExitCode() int {
 	if e == nil {
 		return 1
 	}
 	if e.OK && e.Error == nil {
-		return MapErrorCodeToExitCode("")
+		return 0
 	}
 	if e.Error == nil {
 		return MapErrorCodeToExitCode("VALIDATION_FAILED")
