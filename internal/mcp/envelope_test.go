@@ -29,6 +29,7 @@ func quietStderr(t *testing.T, fn func()) {
 	if _, err := io.Copy(io.Discard, r); err != nil {
 		t.Fatalf("drain stderr pipe: %v", err)
 	}
+	_ = r.Close()
 }
 
 // TestMapErrorCodeToExitCode is the table-driven verification of the 8-code
