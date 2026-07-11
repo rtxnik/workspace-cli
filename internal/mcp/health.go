@@ -135,12 +135,11 @@ func ComputeVaultHealthScore(ctx context.Context, cl healthCaller) (int, error) 
 	if err != nil {
 		return 0, fmt.Errorf("%w: get_coverage_report transport: %v", ErrUpstreamHealthSignalFailed, err)
 	}
-	if covEnv == nil || covEnv.Error != nil {
+	if covEnv == nil || covEnv.Error != nil || !covEnv.OK {
 		code := "nil"
 		msg := "nil envelope"
-		if covEnv != nil && covEnv.Error != nil {
-			code = covEnv.Error.Code
-			msg = covEnv.Error.Message
+		if covEnv != nil {
+			code, msg = envelopeFailureDetail(covEnv)
 		}
 		return 0, fmt.Errorf("%w: get_coverage_report envelope error [%s]: %s", ErrUpstreamHealthSignalFailed, code, msg)
 	}
@@ -159,12 +158,11 @@ func ComputeVaultHealthScore(ctx context.Context, cl healthCaller) (int, error) 
 	if err != nil {
 		return 0, fmt.Errorf("%w: get_orphans transport: %v", ErrUpstreamHealthSignalFailed, err)
 	}
-	if orphEnv == nil || orphEnv.Error != nil {
+	if orphEnv == nil || orphEnv.Error != nil || !orphEnv.OK {
 		code := "nil"
 		msg := "nil envelope"
-		if orphEnv != nil && orphEnv.Error != nil {
-			code = orphEnv.Error.Code
-			msg = orphEnv.Error.Message
+		if orphEnv != nil {
+			code, msg = envelopeFailureDetail(orphEnv)
 		}
 		return 0, fmt.Errorf("%w: get_orphans envelope error [%s]: %s", ErrUpstreamHealthSignalFailed, code, msg)
 	}
@@ -234,6 +232,17 @@ func ComputeVaultHealthScore(ctx context.Context, cl healthCaller) (int, error) 
 		score = 100
 	}
 	return score, nil
+}
+
+// envelopeFailureDetail extracts an operator-readable code+message from a
+// non-nil failure envelope. A non-OK envelope without an error block is
+// malformed per the wire contract — reported explicitly so the operator sees
+// the drift instead of a fabricated composite score.
+func envelopeFailureDetail(env *Envelope) (code, msg string) {
+	if env.Error != nil {
+		return env.Error.Code, env.Error.Message
+	}
+	return "OK_FALSE", "non-OK envelope without error block"
 }
 
 // clamp01Pct clamps a percentage value (expected 0-100) into [0, 100].
