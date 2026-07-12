@@ -235,3 +235,29 @@ func TestParseIPv6FailClosed(t *testing.T) {
 		t.Error("unknown v6 state without FORWARD DROP must NOT be fail-closed")
 	}
 }
+
+// TestParseV6RouteFailClosed covers the pure `ip -6 route show default`
+// classifier without docker: an active global default route means the container
+// can egress IPv6 around the v4-only proxy (V6Leak); no active default route
+// means there is no v6 egress path (V6FailClosed). unreachable/blackhole
+// defaults are not egress paths.
+func TestParseV6RouteFailClosed(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want WorkspaceV6Verdict
+	}{
+		{"global default present is a leak", "default via fe80::1 dev eth0 metric 1024\n", V6Leak},
+		{"global default via GUA is a leak", "default via 2001:db8::1 dev eth0\n", V6Leak},
+		{"no default route is fail-closed", "", V6FailClosed},
+		{"only non-default routes is fail-closed", "2001:db8::/64 dev eth0 proto kernel\n", V6FailClosed},
+		{"unreachable default is not an egress path", "unreachable default dev lo metric 1024\n", V6FailClosed},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := parseV6RouteFailClosed(c.in); got != c.want {
+				t.Errorf("parseV6RouteFailClosed(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
