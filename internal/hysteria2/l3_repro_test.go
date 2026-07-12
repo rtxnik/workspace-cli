@@ -172,3 +172,38 @@ func TestL3_02_MalformedRangeRejected(t *testing.T) {
 		}
 	}
 }
+
+// Common exporters emit insecure=true (boolean), not insecure=1. Its only
+// in-repo effect is the pin-guidance advisory, so a missed flag silences it.
+func TestL3_lowA_InsecureTrueNotRecognized(t *testing.T) {
+	for _, uri := range []string{
+		"hy2://pw@example.com:443?insecure=true",
+		"hy2://pw@example.com:443?allowInsecure=true",
+	} {
+		cfg, err := Parse(uri)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", uri, err)
+		}
+		if !cfg.AllowInsecure {
+			t.Errorf("Parse(%q): AllowInsecure=false, want true", uri)
+		}
+	}
+	// Numeric form must not regress; false/absent stay false.
+	for _, tc := range []struct {
+		uri  string
+		want bool
+	}{
+		{"hy2://pw@example.com:443?insecure=1", true},
+		{"hy2://pw@example.com:443?insecure=0", false},
+		{"hy2://pw@example.com:443?insecure=false", false},
+		{"hy2://pw@example.com:443", false},
+	} {
+		cfg, err := Parse(tc.uri)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", tc.uri, err)
+		}
+		if cfg.AllowInsecure != tc.want {
+			t.Errorf("Parse(%q): AllowInsecure=%v, want %v", tc.uri, cfg.AllowInsecure, tc.want)
+		}
+	}
+}

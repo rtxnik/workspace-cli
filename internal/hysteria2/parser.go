@@ -91,7 +91,7 @@ func Parse(uri string) (Config, error) {
 		Fingerprint:   q.Get("fp"),
 		Obfs:          q.Get("obfs"),
 		ObfsPassword:  q.Get("obfs-password"),
-		AllowInsecure: q.Get("insecure") == "1" || q.Get("allowInsecure") == "1",
+		AllowInsecure: truthyFlag(q.Get("insecure")) || truthyFlag(q.Get("allowInsecure")),
 		Remark:        u.Fragment,
 		HopPorts:      hopPorts,
 		PortHopping:   hopped,
@@ -159,6 +159,12 @@ func Parse(uri string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// truthyFlag reports whether a URI query flag encodes an affirmative boolean.
+// Share links use both the numeric "1" and the literal "true".
+func truthyFlag(v string) bool {
+	return v == "1" || strings.EqualFold(v, "true")
 }
 
 // stripPortHopping removes port-hopping detail (a comma list and/or a
