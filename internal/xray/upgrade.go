@@ -106,7 +106,35 @@ func upgradeProfile(path string) (bool, error) {
 		return false, nil
 	}
 
-	out, err := json.MarshalIndent(&xc, "", "  ")
+	// Rewrite only the keys this command owns, splicing them over the original
+	// bytes so every hand-added top-level section (dns, api, policy, stats,
+	// transport, …) and unknown routing sub-key survives. Only the field that
+	// actually changed is re-serialized.
+	owned := map[string]json.RawMessage{}
+	if inboundChanged {
+		// The inbound is wholesale-replaced with the canonical TPROXY block by
+		// design (the datapath migration), so marshalling the typed inbounds is
+		// correct here.
+		inb, err := json.Marshal(xc.Inbounds)
+		if err != nil {
+			return false, fmt.Errorf("marshal inbounds: %w", err)
+		}
+		owned["inbounds"] = inb
+	}
+	if outboundChanged {
+		// RepairConfig only ever rewrites streamSettings (see RepairOutbound), so
+		// splice each repaired outbound's streamSettings back into the ORIGINAL
+		// raw outbound object. Marshalling the typed xc.Outbounds instead would
+		// drop outbound-level fields the struct does not model (sendThrough, mux,
+		// proxySettings) — a silent, lossy round-trip.
+		outb, err := spliceRepairedStreamSettings(data, xc.Outbounds)
+		if err != nil {
+			return false, fmt.Errorf("splice repaired outbounds: %w", err)
+		}
+		owned["outbounds"] = outb
+	}
+
+	out, err := applyOwnedKeys(data, owned)
 	if err != nil {
 		return false, fmt.Errorf("marshal: %w", err)
 	}
@@ -114,6 +142,35 @@ func upgradeProfile(path string) (bool, error) {
 		return false, fmt.Errorf("write: %w", err)
 	}
 	return true, nil
+}
+
+// spliceRepairedStreamSettings returns the profile's outbounds array with each
+// repaired outbound's streamSettings written back into the ORIGINAL raw outbound
+// object, preserving outbound-level fields the typed xrayconf.Outbound does not
+// model (sendThrough, mux, proxySettings). repaired MUST be the same slice that
+// was unmarshalled from original — RepairConfig mutates in place and never adds
+// or removes entries, so index i of repaired aligns with index i of the raw
+// array. RepairOutbound preserves unknown streamSettings sub-keys itself (it
+// round-trips streamSettings through map[string]any), so splicing its result is
+// lossless. An outbound with no streamSettings is left untouched.
+func spliceRepairedStreamSettings(original []byte, repaired []xrayconf.Outbound) (json.RawMessage, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(original, &root); err != nil {
+		return nil, err
+	}
+	var rawOut []map[string]json.RawMessage
+	if err := json.Unmarshal(root["outbounds"], &rawOut); err != nil {
+		return nil, fmt.Errorf("parse outbounds: %w", err)
+	}
+	for i := range repaired {
+		if i >= len(rawOut) {
+			break
+		}
+		if len(repaired[i].StreamSettings) > 0 {
+			rawOut[i]["streamSettings"] = repaired[i].StreamSettings
+		}
+	}
+	return json.Marshal(rawOut)
 }
 
 // firstProxyOutbound returns the first outbound whose protocol is a known proxy
