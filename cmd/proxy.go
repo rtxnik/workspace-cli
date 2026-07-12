@@ -95,7 +95,11 @@ var proxyStatusCmd = &cobra.Command{
 
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		if jsonFlag {
-			prot, _ := docker.WorkspaceRouteProtection(cfg)
+			prot, perr := docker.WorkspaceRouteProtection(cfg)
+			scanErr := ""
+			if perr != nil {
+				scanErr = perr.Error()
+			}
 			output.JSON(struct {
 				Running             bool                      `json:"running"`
 				Health              string                    `json:"health"`
@@ -104,6 +108,7 @@ var proxyStatusCmd = &cobra.Command{
 				Network             string                    `json:"network"`
 				ConnectedWorkspaces []string                  `json:"connectedWorkspaces"`
 				WorkspaceProtection []workspaceProtectionJSON `json:"workspaceProtection"`
+				ProtectionScanError string                    `json:"protectionScanError,omitempty"`
 			}{
 				Running:             st.Running,
 				Health:              st.Health,
@@ -112,6 +117,7 @@ var proxyStatusCmd = &cobra.Command{
 				Network:             cfg.ProxyNetwork,
 				ConnectedWorkspaces: protectionNames(prot),
 				WorkspaceProtection: protectionJSON(prot),
+				ProtectionScanError: scanErr,
 			})
 			return
 		}
@@ -137,7 +143,7 @@ var proxyStatusCmd = &cobra.Command{
 			label("Network"), cfg.ProxyNetwork, cfg.ProxyIP))
 
 		// Connected workspaces + route-protection summary (single read-only scan).
-		prot, _ := docker.WorkspaceRouteProtection(cfg)
+		prot, perr := docker.WorkspaceRouteProtection(cfg)
 		if names := protectionNames(prot); len(names) > 0 {
 			lines = append(lines, "")
 			lines = append(lines, output.StyleHeader.Render("Connected Workspaces"))
@@ -145,7 +151,11 @@ var proxyStatusCmd = &cobra.Command{
 				lines = append(lines, "  "+name)
 			}
 		}
-		if summary, anyUnprot := protectionSummary(prot); summary != "" {
+		if perr != nil {
+			lines = append(lines, "")
+			lines = append(lines, output.StyleHeader.Render("Protection"))
+			lines = append(lines, "  "+output.StyleError.Render("✗ ")+"protection scan failed: "+perr.Error()+" (workspace protection UNKNOWN)")
+		} else if summary, anyUnprot := protectionSummary(prot); summary != "" {
 			lines = append(lines, "")
 			lines = append(lines, output.StyleHeader.Render("Protection"))
 			marked := summary

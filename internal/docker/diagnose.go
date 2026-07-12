@@ -91,26 +91,49 @@ func classifyRouteProtection(via string, lookupErr error, proxyIP string) RouteP
 }
 
 // WorkspaceRouteProtection reports, READ-ONLY, whether each workspace container
-// on the proxy network routes its default via the proxy. It reuses the same
-// endpoint enumeration as ProxyFixRoutes (ProxyConnectedContainers) and the same
-// read-only `ip route show default` lookup as the doctor's default-route check
+// on the proxy network routes its default via the proxy. It performs its own
+// endpoint enumeration (the same NetworkInspect scan ProxyFixRoutes uses,
+// rather than delegating to ProxyConnectedContainers, whose NetworkInspect
+// error is swallowed into (nil, nil) -- an empty scan with no error would
+// render `ws proxy status` as a silent "all clear" when the true state is
+// UNKNOWN, violating the sweeping fail-open invariant) and the same read-only
+// `ip route show default` lookup as the doctor's default-route check
 // (DefaultRouteOf); it NEVER mutates a route (no `ip route replace` -- that is
 // ProxyFixRoutes' job, DR-SH1-4). A container whose route cannot be read is
-// UNKNOWN, never PROTECTED.
+// UNKNOWN, never PROTECTED. Enumeration failure itself is returned as an
+// error so the caller renders UNKNOWN rather than an empty, falsely
+// reassuring scan.
 //
 // NOTE (U6): this is a third read-only reader of the proxy-network route
 // topology (checkDefaultRoute and ProxyFixRoutes are the others); consolidating
 // the three into one compute-once scan is U6's scope, not this change's.
 func WorkspaceRouteProtection(cfg config.Config) ([]RouteProtection, error) {
-	names, err := ProxyConnectedContainers(cfg)
+	cli, err := newClientFunc()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("docker client: %w", err)
 	}
-	out := make([]RouteProtection, 0, len(names))
-	for _, name := range names {
-		via, rerr := DefaultRouteOf(name)
+	defer func() { _ = cli.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutRead)
+	defer cancel()
+
+	info, err := cli.NetworkInspect(ctx, cfg.ProxyNetwork, network.InspectOptions{})
+	if err != nil {
+		// Enumeration failure is surfaced, not swallowed: an uninspectable
+		// proxy network must render UNKNOWN, never a silent "all clear"
+		// (sweeping fail-open invariant). This mirrors ProxyFixRoutes' own
+		// NetworkInspect error handling -- the same endpoint scan, made loud.
+		return nil, fmt.Errorf("inspect network: %w", err)
+	}
+
+	out := make([]RouteProtection, 0, len(info.Containers))
+	for _, ep := range info.Containers {
+		if ep.Name == cfg.ProxyContainer {
+			continue
+		}
+		via, rerr := DefaultRouteOf(ep.Name)
 		rp := classifyRouteProtection(via, rerr, cfg.ProxyIP)
-		rp.Name = name
+		rp.Name = ep.Name
 		out = append(out, rp)
 	}
 	return out, nil

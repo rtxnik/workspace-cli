@@ -1,8 +1,11 @@
 package docker
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"github.com/docker/docker/api/types/network"
 )
 
 // TestParseDefaultRouteVia covers the pure `ip route show default` parser
@@ -62,5 +65,22 @@ func TestClassifyRouteProtection(t *testing.T) {
 				t.Errorf("verdict = %v, want %v (detail %q)", got.Verdict, c.wantVerdict, got.Detail)
 			}
 		})
+	}
+}
+
+// TestWorkspaceRouteProtection_PropagatesEnumerationError recreates the review
+// finding: an uninspectable proxy network must surface as an error, never a
+// silent empty result. Before the fix, WorkspaceRouteProtection delegated to
+// ProxyConnectedContainers, which swallows a NetworkInspect error into
+// (nil, nil) -- an empty scan with no error renders as a false "all clear" in
+// `ws proxy status` instead of UNKNOWN. This test fails red against that
+// behavior and must pass once enumeration failure propagates.
+func TestWorkspaceRouteProtection_PropagatesEnumerationError(t *testing.T) {
+	mock := &mockClient{networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+		return network.Inspect{}, errors.New("network gone")
+	}}
+	defer withMock(mock)()
+	if _, err := WorkspaceRouteProtection(testCfg()); err == nil {
+		t.Fatal("enumeration failure must surface as an error, not a silent empty result")
 	}
 }
