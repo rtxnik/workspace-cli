@@ -57,6 +57,9 @@ func Delete(cfg config.Config, name string) error {
 	if IsBuiltin(name) {
 		return fmt.Errorf("cannot delete built-in profile %q", name)
 	}
+	if err := ValidateName(name); err != nil {
+		return err
+	}
 	dir := filepath.Join(cfg.ProfilesDir, name)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return fmt.Errorf("profile %q not found", name)
