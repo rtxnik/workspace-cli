@@ -76,10 +76,10 @@ ws proxy down                     # Stop container
 ws proxy restart                  # Stop + start (re-reads config on disk)
 ws proxy recreate                 # Remove + create new (after image/env/network changes)
 ws proxy rebuild                  # Rebuild image + recreate
-ws proxy status                   # Show running state, health, uptime
+ws proxy status                   # Show running state, health, uptime; per-workspace route protection (--json: workspaceProtection)
 ws proxy logs                     # Tail container logs
 ws proxy test                     # Prove tunnel is active (compares direct vs proxied exit IP)
-ws proxy test --json              # Machine-readable {"directIP", "proxiedIP", "tunneled", "latencyMs"}
+ws proxy test --json              # Machine-readable {"directIP","proxiedIP","tunneled","latencyMs","dns","dnsExitIP"} — exits 1 on a DNS leak
 ws proxy doctor                   # Ordered fail-fast diagnostic of the full proxy stack
 ws proxy doctor --json            # Machine-readable diagnostic report
 ws proxy debug on|off             # Toggle verbose xray logging

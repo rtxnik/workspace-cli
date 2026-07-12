@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
@@ -139,6 +140,47 @@ func TestProxyDoctorChecks_IncludeDatapathContract(t *testing.T) {
 	if idx != len(wantOrdered) {
 		t.Errorf("datapath-contract check missing or out of order.\n got: %v\nwant subsequence: %v", names, wantOrdered)
 	}
+}
+
+// TestV6FailClosedOutcome covers the pure aggregation of per-workspace v6
+// verdicts into a doctor CheckOutcome (SEC2-04): any proven leak is HARD
+// (OK=false) and names the leaking workspaces; otherwise any UNKNOWN is advisory
+// (OK=true, detail says UNKNOWN -- never a PROTECTED claim); all fail-closed is a
+// pass; no workspaces is a pass with an informational detail.
+func TestV6FailClosedOutcome(t *testing.T) {
+	t.Run("proven leak is HARD and names the workspace", func(t *testing.T) {
+		got := v6FailClosedOutcome(
+			[]string{"a", "b"},
+			[]docker.WorkspaceV6Verdict{docker.V6FailClosed, docker.V6Leak},
+		)
+		if got.OK {
+			t.Fatalf("a proven v6 leak must be HARD (OK=false); got %+v", got)
+		}
+		if !strings.Contains(got.Detail, "b") {
+			t.Errorf("detail must name the leaking workspace; got %q", got.Detail)
+		}
+	})
+	t.Run("unknown is advisory, not a leak", func(t *testing.T) {
+		got := v6FailClosedOutcome([]string{"a"}, []docker.WorkspaceV6Verdict{docker.V6Unknown})
+		if !got.OK {
+			t.Fatalf("an unreadable posture must be advisory (OK=true); got %+v", got)
+		}
+		if !strings.Contains(got.Detail, "UNKNOWN") {
+			t.Errorf("advisory detail must say UNKNOWN; got %q", got.Detail)
+		}
+	})
+	t.Run("all fail-closed passes", func(t *testing.T) {
+		got := v6FailClosedOutcome([]string{"a"}, []docker.WorkspaceV6Verdict{docker.V6FailClosed})
+		if !got.OK {
+			t.Fatalf("all fail-closed must pass; got %+v", got)
+		}
+	})
+	t.Run("no workspaces passes informationally", func(t *testing.T) {
+		got := v6FailClosedOutcome(nil, nil)
+		if !got.OK {
+			t.Fatalf("no workspaces must pass; got %+v", got)
+		}
+	})
 }
 
 // TestDoctorExitCode maps FailedAt to the process exit code: FailedAt+1 on

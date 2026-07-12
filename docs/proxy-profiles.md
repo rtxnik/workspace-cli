@@ -146,8 +146,9 @@ ws proxy profile add hy2-hop 'hysteria2://<auth>@host:443,5000-6000?sni=host&hop
 8. Dev-container default route via proxy
 9. Self-egress (proxy tunnel exit-IP)
 10. Forwarding datapath (dev-container exit-IP)
-11. Protocol sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
-12. Inbound `sockopt.tproxy` (advisory)
+11. Workspace IPv6 fail-closed (see [IPv6](#ipv6) below)
+12. Protocol sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
+13. Inbound `sockopt.tproxy` (advisory)
 
 It stops at the first hard failure and prints a remediation hint plus exits non-zero. Use `--json` for a machine-readable report.
 
@@ -156,16 +157,26 @@ ws proxy doctor            # human-readable, fail-fast
 ws proxy doctor --json     # full JSON result list
 ```
 
+## IPv6
+
+The proxy captures traffic via an IPv4-only TPROXY rule. A workspace container that has a global IPv6 default route can send v6 traffic straight to the internet, bypassing the tunnel entirely — the capture never sees it, so `ws proxy test` and the human eye both look clean while v6 packets leak unencrypted and unproxied.
+
+`ws proxy doctor`'s "workspace IPv6 fail-closed" check (step 11 above) asserts every connected workspace has no such route. It fails hard, naming the affected workspace(s), when one is found; it reports the posture as UNKNOWN (not a pass, not a leak) when a workspace's route table can't be read.
+
+**Remediation:** disable IPv6 in the affected workspace, or otherwise drop its v6 default route/egress, so all outbound traffic is forced through the IPv4 path the proxy actually captures.
+
 ## Verifying the tunnel: `ws proxy test`
 
 `ws proxy test` proves the tunnel is active by comparing the direct exit IP to the proxied exit IP:
 
 ```bash
-ws proxy test              # human-readable (✓/✗ + latency)
-ws proxy test --json       # JSON: {"directIP", "proxiedIP", "tunneled", "latencyMs"}
+ws proxy test              # human-readable (✓/✗ + latency), also probes the UDP/DNS leg
+ws proxy test --json       # JSON: {"directIP","proxiedIP","tunneled","latencyMs","dns","dnsExitIP"}
 ```
 
-Exits 0 when `tunneled=true` (the two IPs differ), exits 1 otherwise.
+`tunneled` compares the TCP exit IPs (direct vs proxied). `dns` is the UDP/DNS-leg verdict, probed only when `tunneled=true`: one of `tunneled` (the resolver-observed exit IP is not your direct/real IP — the query egressed through the tunnel; usually the proxied IP, but any non-direct IP counts, e.g. a multi-homed exit), `leak` (resolver saw the direct/real IP — the DNS query egressed around the tunnel), `inconclusive` (no UDP/DNS egress observed — advisory, not treated as a leak), or `skipped` (the TCP tunnel itself is down, so the DNS leg was not probed). `dnsExitIP` carries the resolver-observed exit IP and is omitted when `dns` is `inconclusive` or `skipped`.
+
+Exits 0 when `tunneled=true` and `dns` is not `leak` (an `inconclusive` DNS leg is advisory and does not fail the command). Exits 1 when `tunneled=false` (the exit IPs are identical) or when `dns:"leak"` (the DNS query escaped the tunnel).
 
 ## Editing routing rules
 
@@ -194,10 +205,12 @@ Refuses to remove the active profile. Asks for confirmation; use `--force` to sk
 | `ws proxy restart` | Stop + start same container | After manual config edits, or recovery |
 | `ws proxy recreate` | Remove + create new container | After image / env / network changes |
 | `ws proxy rebuild` | Rebuild image + recreate | After bumping xray-core version |
-| `ws proxy status` | Show running state, health, uptime, image |
+| `ws proxy status` | Show running state, health, uptime, image, per-workspace route protection |
 | `ws proxy logs` | Tail container logs |
 | `ws proxy test` | End-to-end connectivity test through proxy |
 | `ws proxy debug on\|off` | Toggle verbose xray logging |
+
+`ws proxy status` also lists each connected workspace's route-protection verdict (read-only — it does not fix anything): `protected` (default route goes via the proxy), `unprotected` (it does not — run `ws proxy fix-routes`), or `unknown` (the route table could not be read). `ws proxy status --json` carries the same verdicts in `workspaceProtection` (one `{"name","status","detail"}` entry per workspace); a `protectionScanError` field appears only when the read-only scan itself failed (for example, the proxy network became uninspectable); in that case `workspaceProtection` is empty and protection cannot be determined for any workspace.
 
 ## Recovery
 

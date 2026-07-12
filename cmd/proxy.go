@@ -95,21 +95,29 @@ var proxyStatusCmd = &cobra.Command{
 
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		if jsonFlag {
-			connected, _ := docker.ProxyConnectedContainers(cfg)
+			prot, perr := docker.WorkspaceRouteProtection(cfg)
+			scanErr := ""
+			if perr != nil {
+				scanErr = perr.Error()
+			}
 			output.JSON(struct {
-				Running             bool     `json:"running"`
-				Health              string   `json:"health"`
-				Uptime              string   `json:"uptime"`
-				Image               string   `json:"image"`
-				Network             string   `json:"network"`
-				ConnectedWorkspaces []string `json:"connectedWorkspaces"`
+				Running             bool                      `json:"running"`
+				Health              string                    `json:"health"`
+				Uptime              string                    `json:"uptime"`
+				Image               string                    `json:"image"`
+				Network             string                    `json:"network"`
+				ConnectedWorkspaces []string                  `json:"connectedWorkspaces"`
+				WorkspaceProtection []workspaceProtectionJSON `json:"workspaceProtection"`
+				ProtectionScanError string                    `json:"protectionScanError,omitempty"`
 			}{
 				Running:             st.Running,
 				Health:              st.Health,
 				Uptime:              st.Uptime,
 				Image:               st.Image,
 				Network:             cfg.ProxyNetwork,
-				ConnectedWorkspaces: connected,
+				ConnectedWorkspaces: protectionNames(prot),
+				WorkspaceProtection: protectionJSON(prot),
+				ProtectionScanError: scanErr,
 			})
 			return
 		}
@@ -134,14 +142,27 @@ var proxyStatusCmd = &cobra.Command{
 		lines = append(lines, fmt.Sprintf("%s  %s (%s)",
 			label("Network"), cfg.ProxyNetwork, cfg.ProxyIP))
 
-		// Connected workspaces.
-		connected, _ := docker.ProxyConnectedContainers(cfg)
-		if len(connected) > 0 {
+		// Connected workspaces + route-protection summary (single read-only scan).
+		prot, perr := docker.WorkspaceRouteProtection(cfg)
+		if names := protectionNames(prot); len(names) > 0 {
 			lines = append(lines, "")
 			lines = append(lines, output.StyleHeader.Render("Connected Workspaces"))
-			for _, name := range connected {
+			for _, name := range names {
 				lines = append(lines, "  "+name)
 			}
+		}
+		if perr != nil {
+			lines = append(lines, "")
+			lines = append(lines, output.StyleHeader.Render("Protection"))
+			lines = append(lines, "  "+output.StyleError.Render("✗ ")+"protection scan failed: "+perr.Error()+" (workspace protection UNKNOWN)")
+		} else if summary, anyUnprot := protectionSummary(prot); summary != "" {
+			lines = append(lines, "")
+			lines = append(lines, output.StyleHeader.Render("Protection"))
+			marked := summary
+			if anyUnprot {
+				marked = output.StyleError.Render("✗ ") + summary
+			}
+			lines = append(lines, "  "+marked)
 		}
 
 		box := lipgloss.NewStyle().
@@ -252,8 +273,25 @@ var proxyTestCmd = &cobra.Command{
 
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		if jsonFlag {
-			output.JSON(result)
-			if !result.Tunneled {
+			// Run the same UDP/DNS-leak leg the human path runs, so automation
+			// keying on the JSON sees a leak the operator screen would catch
+			// (SEC2-02). DNS is probed only when the TCP tunnel holds, mirroring
+			// the human path.
+			var dnsExit string
+			if result.Tunneled {
+				dnsRes, _ := proxyengine.ProbeDNS(cfg)
+				dnsExit = dnsRes.ExitIP
+			}
+			verdict, exitNonZero := testDNSVerdict(result, dnsExit)
+			output.JSON(testJSONResult{
+				DirectIP:  result.DirectIP,
+				ProxiedIP: result.ProxiedIP,
+				Tunneled:  result.Tunneled,
+				LatencyMs: result.Latency.Milliseconds(),
+				DNS:       verdict,
+				DNSExitIP: dnsExit,
+			})
+			if exitNonZero {
 				os.Exit(1)
 			}
 			return
@@ -500,5 +538,121 @@ func upFailureDetail(err error) output.ErrorDetail {
 		Title:       "Failed to start proxy",
 		Context:     map[string]string{"Error": err.Error()},
 		Suggestions: []string{"Check config: ws proxy check", "Initialize config: ws proxy init <vless-uri>", "Rebuild image: ws proxy rebuild"},
+	}
+}
+
+// workspaceProtectionJSON is the per-workspace route-protection entry in
+// `ws proxy status --json`. Status is "protected" | "unprotected" | "unknown".
+type workspaceProtectionJSON struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// protectionStatusString maps a route-protection verdict to its stable JSON
+// token.
+func protectionStatusString(v docker.RouteProtectionVerdict) string {
+	switch v {
+	case docker.RouteProtected:
+		return "protected"
+	case docker.RouteUnprotected:
+		return "unprotected"
+	default:
+		return "unknown"
+	}
+}
+
+// protectionNames extracts the workspace names in scan order.
+func protectionNames(prot []docker.RouteProtection) []string {
+	names := make([]string, 0, len(prot))
+	for _, p := range prot {
+		names = append(names, p.Name)
+	}
+	return names
+}
+
+// protectionJSON projects the read-only route-protection scan into the JSON
+// wire entries.
+func protectionJSON(prot []docker.RouteProtection) []workspaceProtectionJSON {
+	out := make([]workspaceProtectionJSON, 0, len(prot))
+	for _, p := range prot {
+		out = append(out, workspaceProtectionJSON{
+			Name:   p.Name,
+			Status: protectionStatusString(p.Verdict),
+			Detail: p.Detail,
+		})
+	}
+	return out
+}
+
+// protectionSummary produces the human status line for workspace route
+// protection and reports whether any workspace is UNPROTECTED. UNPROTECTED
+// takes priority (it is the actionable leak), then UNKNOWN, then all-protected;
+// an empty scan yields no line. Pure.
+func protectionSummary(prot []docker.RouteProtection) (line string, anyUnprotected bool) {
+	var unprot, unknown, protd int
+	for _, p := range prot {
+		switch p.Verdict {
+		case docker.RouteUnprotected:
+			unprot++
+		case docker.RouteUnknown:
+			unknown++
+		case docker.RouteProtected:
+			protd++
+		}
+	}
+	total := len(prot)
+	if total == 0 {
+		return "", false
+	}
+	switch {
+	case unprot > 0:
+		return fmt.Sprintf("%d of %d workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)", unprot, total), true
+	case unknown > 0:
+		return fmt.Sprintf("%d of %d workspace(s) protection UNKNOWN — route unreadable", unknown, total), false
+	default:
+		return fmt.Sprintf("%d workspace(s) protected — route via proxy", protd), false
+	}
+}
+
+// testJSONResult is the machine-readable shape of `ws proxy test --json`. It is
+// a backward-compatible superset of ProbeResult's wire form
+// (directIP/proxiedIP/tunneled/latencyMs preserved verbatim) plus the UDP/DNS
+// leg the human path already reports: dns is one of "tunneled", "leak",
+// "inconclusive", or "skipped" (TCP tunnel down, DNS not probed); dnsExitIP is
+// the resolver-observed exit IP ("" when inconclusive/skipped).
+type testJSONResult struct {
+	DirectIP  string `json:"directIP"`
+	ProxiedIP string `json:"proxiedIP"`
+	Tunneled  bool   `json:"tunneled"`
+	LatencyMs int64  `json:"latencyMs"`
+	DNS       string `json:"dns"`
+	DNSExitIP string `json:"dnsExitIP,omitempty"`
+}
+
+// testDNSVerdict is the pure exit/verdict decision for `ws proxy test --json`,
+// mirroring the human path's severity split so the JSON consumer is never
+// weaker than the operator screen (SEC2-02): a broken TCP tunnel or a proven
+// DNS leak is a non-zero outcome; an inconclusive DNS probe is its own verdict
+// (never "tunneled"/green) but not a failure -- matching the human path, which
+// treats an inconclusive UDP leg as advisory. dnsExit is "" when the DNS probe
+// was inconclusive or not run.
+func testDNSVerdict(result proxyengine.ProbeResult, dnsExit string) (verdict string, exitNonZero bool) {
+	if !result.Tunneled {
+		// TCP tunnel is down: the DNS leg is moot and not probed (the human path
+		// only probes DNS inside `if result.Tunneled`). Already a failure.
+		return "skipped", true
+	}
+	switch proxyengine.ClassifyDNS(result.DirectIP, result.ProxiedIP, dnsExit) {
+	case proxyengine.DNSLeak:
+		return "leak", true
+	case proxyengine.DNSTunneled:
+		return "tunneled", false
+	case proxyengine.DNSInconclusive:
+		return "inconclusive", false
+	default:
+		// Fail safe: an unmodelled future verdict is advisory, never a green
+		// "tunneled" claim (this is a never-false-green security verdict).
+		return "inconclusive", false
 	}
 }

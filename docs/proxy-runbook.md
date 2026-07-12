@@ -62,10 +62,11 @@ Runs the ordered, fail-fast diagnostic chain:
 8. Dev-container default route via proxy
 9. Self-egress (proxy tunnel exit-IP)
 10. Forwarding datapath (dev-container exit-IP)
-11. Protocol sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
-12. Inbound `sockopt.tproxy` (advisory)
+11. Workspace IPv6 fail-closed (see [docs/proxy-profiles.md (IPv6)](proxy-profiles.md#ipv6))
+12. Protocol sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
+13. Inbound `sockopt.tproxy` (advisory)
 
-All twelve checks must pass before proceeding (the UDP egress leg and the hy2 cert-pin observation are advisory — they report SKIP/notes without blocking). If any hard check fails, the command exits non-zero and prints a remediation hint. Fix the issue and re-run.
+All thirteen checks must pass before proceeding (the UDP egress leg and the hy2 cert-pin observation are advisory — they report SKIP/notes without blocking). If any hard check fails, the command exits non-zero and prints a remediation hint. Fix the issue and re-run.
 
 For machine-readable output (CI or automated gates): `ws proxy doctor --json`.
 
@@ -87,7 +88,7 @@ Tunneled    ✓
 
 `ProxiedIP` must differ from `DirectIP`. If they are identical the tunnel is not carrying traffic — check the profile and container logs (`ws proxy logs`).
 
-For machine-readable output: `ws proxy test --json` → `{"directIP":"…","proxiedIP":"…","tunneled":true,"latency":"…"}`.
+For machine-readable output: `ws proxy test --json` → `{"directIP":"…","proxiedIP":"…","tunneled":true,"latencyMs":12,"dns":"tunneled","dnsExitIP":"…"}` (exits 1 on `tunneled:false` or `dns:"leak"`; `dns` is one of `tunneled`, `leak`, `inconclusive`, or `skipped`, and `dnsExitIP` is omitted when `dns` is `inconclusive` or `skipped`).
 
 ### Step 6 — Rollback note
 
@@ -95,7 +96,7 @@ If TPROXY misbehaves on the operator's kernel (e.g. the container lacks `CAP_NET
 
 - Revert the entrypoint to use iptables REDIRECT instead of TPROXY (edit `dotfiles`; rebuild with `ws proxy rebuild --force`).
 - Leave UDP fail-closed (no UDP forwarding rule) until TPROXY is confirmed working.
-- The `ws proxy doctor` advisory check (step 12, "inbound sockopt.tproxy") will report the missing field; that is expected in REDIRECT mode.
+- The `ws proxy doctor` advisory check (step 13, "inbound sockopt.tproxy") will report the missing field; that is expected in REDIRECT mode.
 
 ---
 

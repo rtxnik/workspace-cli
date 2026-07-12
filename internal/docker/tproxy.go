@@ -134,6 +134,59 @@ func parseIPv6FailClosed(disableIPv6Out, ip6tablesDropRC string) bool {
 	return strings.TrimSpace(ip6tablesDropRC) == "0"
 }
 
+// WorkspaceV6Verdict classifies a workspace container's IPv6 egress posture.
+type WorkspaceV6Verdict int
+
+const (
+	// V6Unknown: the posture could not be read (exec error) -- fail-open,
+	// reported as UNKNOWN, never fail-closed/PROTECTED.
+	V6Unknown WorkspaceV6Verdict = iota
+	// V6FailClosed: the container cannot egress IPv6 around the v4 TPROXY capture
+	// -- no active global IPv6 default route (or the v6 stack is disabled).
+	V6FailClosed
+	// V6Leak: the container has an active global IPv6 default route, so it can
+	// egress v6 directly around the v4-only proxy.
+	V6Leak
+)
+
+// parseV6RouteFailClosed classifies `ip -6 route show default` output. That
+// command lists only default routes; an active one (not unreachable/blackhole/
+// prohibit) is a real v6 egress path -> V6Leak. No active default route ->
+// V6FailClosed. Pure -- unit-testable without docker.
+func parseV6RouteFailClosed(routeOut string) WorkspaceV6Verdict {
+	for _, line := range strings.Split(routeOut, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "default":
+			return V6Leak
+		case "unreachable", "blackhole", "prohibit":
+			continue
+		}
+	}
+	return V6FailClosed
+}
+
+// WorkspaceV6FailClosed reports a workspace container's IPv6 posture, READ-ONLY,
+// via the execInContainer seam (SEC2-04). The primary signal is the v6 default
+// route table; if that read fails it falls back to the disable_ipv6 sysctl (a
+// disabled stack is definitively fail-closed). An unreadable posture is
+// V6Unknown (fail-open -> never fail-closed). This asserts the WORKSPACE netns,
+// complementing the proxy-netns P9 assertion in TproxyPreconditions.
+func WorkspaceV6FailClosed(name string) WorkspaceV6Verdict {
+	route, rerr := execInContainer(name, "ip", "-6", "route", "show", "default")
+	if rerr == nil {
+		return parseV6RouteFailClosed(string(route))
+	}
+	disable, derr := execInContainer(name, "cat", "/proc/sys/net/ipv6/conf/all/disable_ipv6")
+	if derr == nil && strings.TrimSpace(string(disable)) == "1" {
+		return V6FailClosed
+	}
+	return V6Unknown
+}
+
 // parseXraySelfMarksUDP reports whether the mangle XRAY_SELF chain MARKs UDP
 // (not only TCP), so the proxy's own UDP/QUIC self-egress is captured into the
 // tunnel rather than leaking around the old TCP-only REDIRECT path. Parses

@@ -150,6 +150,7 @@ func proxyDoctorChecks(cfg config.Config, eng proxyengine.Engine) []Check {
 		{Name: "dev-container default route via proxy", Run: func() CheckOutcome { return checkDefaultRoute(cfg) }},
 		{Name: "self-egress (proxy tunnel exit-IP)", Run: func() CheckOutcome { return checkEgress(cfg, eng) }},
 		{Name: "forwarding datapath (dev-container exit-IP)", Run: func() CheckOutcome { return checkForwardingEgress(cfg, eng) }},
+		{Name: "workspace IPv6 fail-closed", Run: func() CheckOutcome { return checkWorkspaceV6FailClosed(cfg) }},
 		{Name: "protocol sanity", Run: func() CheckOutcome { return checkProtocolSanity(cfg) }},
 		{Name: "inbound sockopt.tproxy (advisory)", Run: func() CheckOutcome { return checkInboundTproxy(cfg) }},
 	}
@@ -370,6 +371,57 @@ func checkForwardingEgress(cfg config.Config, eng proxyengine.Engine) CheckOutco
 		}
 	}
 	return CheckOutcome{OK: true, Detail: fmt.Sprintf("forwarded exit-IP %s via tunnel", fwd.ForwardedIP)}
+}
+
+// v6FailClosedOutcome is the pure aggregation of per-workspace IPv6 verdicts
+// into a doctor CheckOutcome (SEC2-04, DR-SH1-6): a proven v6 egress path is a
+// HARD failure naming the workspaces; an unreadable posture is advisory
+// (OK=true, detail says UNKNOWN -- never a PROTECTED claim); all fail-closed
+// passes; no workspaces is informational.
+func v6FailClosedOutcome(names []string, verdicts []docker.WorkspaceV6Verdict) CheckOutcome {
+	if len(names) == 0 {
+		return CheckOutcome{OK: true, Detail: "no workspace containers connected (nothing to assert)"}
+	}
+	var leaks, unknown []string
+	for i, name := range names {
+		switch verdicts[i] {
+		case docker.V6Leak:
+			leaks = append(leaks, name)
+		case docker.V6Unknown:
+			unknown = append(unknown, name)
+		}
+	}
+	if len(leaks) > 0 {
+		return CheckOutcome{
+			OK:     false,
+			Detail: fmt.Sprintf("global IPv6 default route present in: %s (can egress v6 around the v4 capture)", strings.Join(leaks, ", ")),
+			Fix:    "The proxy is IPv4-only. Disable IPv6 (or drop v6 egress) in these workspaces — see docs/proxy-profiles.md (IPv6).",
+		}
+	}
+	if len(unknown) > 0 {
+		return CheckOutcome{
+			OK:     true,
+			Detail: fmt.Sprintf("IPv6 posture UNKNOWN for: %s (v6 route table unreadable)", strings.Join(unknown, ", ")),
+		}
+	}
+	return CheckOutcome{OK: true, Detail: fmt.Sprintf("%d workspace(s) IPv6 fail-closed", len(names))}
+}
+
+// checkWorkspaceV6FailClosed asserts every workspace container on the proxy
+// network is IPv6 fail-closed (SEC2-04): the v4 TPROXY capture does not cover
+// IPv6, so a workspace with a global v6 default route can egress v6 directly
+// around the proxy. Docker-bound (exercised live); the aggregation is pure
+// (v6FailClosedOutcome).
+func checkWorkspaceV6FailClosed(cfg config.Config) CheckOutcome {
+	names, err := docker.ProxyConnectedContainers(cfg)
+	if err != nil {
+		return CheckOutcome{OK: false, Fix: "Could not list connected workspaces: " + err.Error()}
+	}
+	verdicts := make([]docker.WorkspaceV6Verdict, len(names))
+	for i, name := range names {
+		verdicts[i] = docker.WorkspaceV6FailClosed(name)
+	}
+	return v6FailClosedOutcome(names, verdicts)
 }
 
 // checkProtocolSanity: HARD that the profile loads; advisory thereafter.

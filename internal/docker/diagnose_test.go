@@ -1,6 +1,12 @@
 package docker
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/docker/docker/api/types/network"
+)
 
 // TestParseDefaultRouteVia covers the pure `ip route show default` parser
 // without docker: it must extract the gateway after `via` and reject lines with
@@ -34,5 +40,47 @@ func TestParseDefaultRouteVia(t *testing.T) {
 				t.Errorf("via = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestClassifyRouteProtection covers the pure route-protection decision without
+// docker: a route via the proxy is PROTECTED; via anything else is UNPROTECTED
+// (direct egress); a lookup error is UNKNOWN (fail-open -> never PROTECTED).
+func TestClassifyRouteProtection(t *testing.T) {
+	const proxyIP = "172.28.0.2"
+	cases := []struct {
+		name        string
+		via         string
+		lookupErr   error
+		wantVerdict RouteProtectionVerdict
+	}{
+		{"via proxy is protected", proxyIP, nil, RouteProtected},
+		{"via other gateway is unprotected", "172.28.0.1", nil, RouteUnprotected},
+		{"lookup error is unknown", "", errors.New("docker exec failed"), RouteUnknown},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyRouteProtection(c.via, c.lookupErr, proxyIP)
+			if got.Verdict != c.wantVerdict {
+				t.Errorf("verdict = %v, want %v (detail %q)", got.Verdict, c.wantVerdict, got.Detail)
+			}
+		})
+	}
+}
+
+// TestWorkspaceRouteProtection_PropagatesEnumerationError recreates the review
+// finding: an uninspectable proxy network must surface as an error, never a
+// silent empty result. Before the fix, WorkspaceRouteProtection delegated to
+// ProxyConnectedContainers, which swallows a NetworkInspect error into
+// (nil, nil) -- an empty scan with no error renders as a false "all clear" in
+// `ws proxy status` instead of UNKNOWN. This test fails red against that
+// behavior and must pass once enumeration failure propagates.
+func TestWorkspaceRouteProtection_PropagatesEnumerationError(t *testing.T) {
+	mock := &mockClient{networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+		return network.Inspect{}, errors.New("network gone")
+	}}
+	defer withMock(mock)()
+	if _, err := WorkspaceRouteProtection(testCfg()); err == nil {
+		t.Fatal("enumeration failure must surface as an error, not a silent empty result")
 	}
 }
