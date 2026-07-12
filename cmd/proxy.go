@@ -437,8 +437,12 @@ var proxyInitCmd = &cobra.Command{
 		cfg := config.Load()
 		uri := args[0]
 
-		switch {
-		case strings.HasPrefix(uri, "vless://"):
+		scheme, _, ok := strings.Cut(uri, "://")
+		if !ok {
+			output.Die("unsupported URI scheme (want vless://, hysteria2://, or hy2://)")
+		}
+		switch strings.ToLower(scheme) {
+		case "vless":
 			parsed, err := vless.Parse(uri)
 			if err != nil {
 				output.Die(err.Error())
@@ -448,7 +452,7 @@ var proxyInitCmd = &cobra.Command{
 			}
 			output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))
 			output.Detail(fmt.Sprintf("Transport: %s, Security: %s", parsed.Network, parsed.Security))
-		case strings.HasPrefix(uri, "hysteria2://"), strings.HasPrefix(uri, "hy2://"):
+		case "hysteria2", "hy2":
 			parsed, err := hysteria2.Parse(uri)
 			if err != nil {
 				output.Die(err.Error())
