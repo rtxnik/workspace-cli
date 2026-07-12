@@ -142,8 +142,6 @@ func TestProxyDoctorChecks_IncludeDatapathContract(t *testing.T) {
 	}
 }
 
-// TestDoctorExitCode maps FailedAt to the process exit code: FailedAt+1 on
-// failure (1-based so the first check failing exits 1), 0 on all-pass.
 // TestV6FailClosedOutcome covers the pure aggregation of per-workspace v6
 // verdicts into a doctor CheckOutcome (SEC2-04): any proven leak is HARD
 // (OK=false) and names the leaking workspaces; otherwise any UNKNOWN is advisory
@@ -185,6 +183,8 @@ func TestV6FailClosedOutcome(t *testing.T) {
 	})
 }
 
+// TestDoctorExitCode maps FailedAt to the process exit code: FailedAt+1 on
+// failure (1-based so the first check failing exits 1), 0 on all-pass.
 func TestDoctorExitCode(t *testing.T) {
 	cases := []struct {
 		name string
