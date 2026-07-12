@@ -207,3 +207,20 @@ func TestL3_lowA_InsecureTrueNotRecognized(t *testing.T) {
 		}
 	}
 }
+
+// RFC 3986 schemes are case-insensitive; some exporters emit uppercase.
+func TestL3_lowB_SchemeCaseSensitive(t *testing.T) {
+	for _, uri := range []string{
+		"HY2://pw@example.com:443",
+		"Hysteria2://pw@example.com:443",
+		"HYSTERIA2://pw@example.com:443",
+	} {
+		if _, err := Parse(uri); err != nil {
+			t.Errorf("Parse(%q): %v, want accepted", uri, err)
+		}
+	}
+	// A non-matching scheme is still rejected.
+	if _, err := Parse("vless://uuid@example.com:443"); err == nil {
+		t.Errorf("Parse(vless://...) = nil err, want rejected")
+	}
+}

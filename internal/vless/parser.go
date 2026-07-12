@@ -44,7 +44,8 @@ type VLESSConfig struct {
 
 // Parse parses a VLESS URI (vless://UUID@HOST:PORT?params#remark) into a VLESSConfig.
 func Parse(uri string) (VLESSConfig, error) {
-	if !strings.HasPrefix(uri, "vless://") {
+	scheme, _, ok := strings.Cut(uri, "://")
+	if !ok || !strings.EqualFold(scheme, "vless") {
 		return VLESSConfig{}, fmt.Errorf("not a VLESS URI: must start with vless://")
 	}
 

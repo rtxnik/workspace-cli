@@ -43,9 +43,8 @@ type Config struct {
 
 // Parse parses a hysteria2:// (alias hy2://) URI into a Config.
 func Parse(uri string) (Config, error) {
-	switch {
-	case strings.HasPrefix(uri, "hysteria2://"), strings.HasPrefix(uri, "hy2://"):
-	default:
+	scheme, _, ok := strings.Cut(uri, "://")
+	if !ok || (!strings.EqualFold(scheme, "hysteria2") && !strings.EqualFold(scheme, "hy2")) {
 		return Config{}, fmt.Errorf("not a Hysteria2 URI: must start with hysteria2:// or hy2://")
 	}
 

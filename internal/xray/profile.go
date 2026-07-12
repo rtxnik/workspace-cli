@@ -366,8 +366,12 @@ func summarizeHysteria(s *ProfileSummary, ob xrayconf.Outbound) error {
 // This is the single authoritative dispatch point; proxyengine.BuildConfig
 // reuses it via xray.GenerateProfileConfig.
 func GenerateProfileConfig(uri string) (*xrayconf.XrayConfig, error) {
-	switch {
-	case strings.HasPrefix(uri, "vless://"):
+	scheme, _, ok := strings.Cut(uri, "://")
+	if !ok {
+		return nil, fmt.Errorf("unsupported proxy URI scheme (want vless://, hysteria2://, or hy2://)")
+	}
+	switch strings.ToLower(scheme) {
+	case "vless":
 		parsed, err := vless.Parse(uri)
 		if err != nil {
 			return nil, err
@@ -377,7 +381,7 @@ func GenerateProfileConfig(uri string) (*xrayconf.XrayConfig, error) {
 			return nil, fmt.Errorf("generate config: %w", err)
 		}
 		return cfg, nil
-	case strings.HasPrefix(uri, "hysteria2://"), strings.HasPrefix(uri, "hy2://"):
+	case "hysteria2", "hy2":
 		parsed, err := hysteria2.Parse(uri)
 		if err != nil {
 			return nil, err
