@@ -252,8 +252,25 @@ var proxyTestCmd = &cobra.Command{
 
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		if jsonFlag {
-			output.JSON(result)
-			if !result.Tunneled {
+			// Run the same UDP/DNS-leak leg the human path runs, so automation
+			// keying on the JSON sees a leak the operator screen would catch
+			// (SEC2-02). DNS is probed only when the TCP tunnel holds, mirroring
+			// the human path.
+			var dnsExit string
+			if result.Tunneled {
+				dnsRes, _ := proxyengine.ProbeDNS(cfg)
+				dnsExit = dnsRes.ExitIP
+			}
+			verdict, exitNonZero := testDNSVerdict(result, dnsExit)
+			output.JSON(testJSONResult{
+				DirectIP:  result.DirectIP,
+				ProxiedIP: result.ProxiedIP,
+				Tunneled:  result.Tunneled,
+				LatencyMs: result.Latency.Milliseconds(),
+				DNS:       verdict,
+				DNSExitIP: dnsExit,
+			})
+			if exitNonZero {
 				os.Exit(1)
 			}
 			return
@@ -500,5 +517,43 @@ func upFailureDetail(err error) output.ErrorDetail {
 		Title:       "Failed to start proxy",
 		Context:     map[string]string{"Error": err.Error()},
 		Suggestions: []string{"Check config: ws proxy check", "Initialize config: ws proxy init <vless-uri>", "Rebuild image: ws proxy rebuild"},
+	}
+}
+
+// testJSONResult is the machine-readable shape of `ws proxy test --json`. It is
+// a backward-compatible superset of ProbeResult's wire form
+// (directIP/proxiedIP/tunneled/latencyMs preserved verbatim) plus the UDP/DNS
+// leg the human path already reports: dns is one of "tunneled", "leak",
+// "inconclusive", or "skipped" (TCP tunnel down, DNS not probed); dnsExitIP is
+// the resolver-observed exit IP ("" when inconclusive/skipped).
+type testJSONResult struct {
+	DirectIP  string `json:"directIP"`
+	ProxiedIP string `json:"proxiedIP"`
+	Tunneled  bool   `json:"tunneled"`
+	LatencyMs int64  `json:"latencyMs"`
+	DNS       string `json:"dns"`
+	DNSExitIP string `json:"dnsExitIP,omitempty"`
+}
+
+// testDNSVerdict is the pure exit/verdict decision for `ws proxy test --json`,
+// mirroring the human path's severity split so the JSON consumer is never
+// weaker than the operator screen (SEC2-02): a broken TCP tunnel or a proven
+// DNS leak is a non-zero outcome; an inconclusive DNS probe is its own verdict
+// (never "tunneled"/green) but not a failure -- matching the human path, which
+// treats an inconclusive UDP leg as advisory. dnsExit is "" when the DNS probe
+// was inconclusive or not run.
+func testDNSVerdict(result proxyengine.ProbeResult, dnsExit string) (verdict string, exitNonZero bool) {
+	if !result.Tunneled {
+		// TCP tunnel is down: the DNS leg is moot and not probed (the human path
+		// only probes DNS inside `if result.Tunneled`). Already a failure.
+		return "skipped", true
+	}
+	switch proxyengine.ClassifyDNS(result.DirectIP, result.ProxiedIP, dnsExit) {
+	case proxyengine.DNSLeak:
+		return "leak", true
+	case proxyengine.DNSInconclusive:
+		return "inconclusive", false
+	default: // DNSTunneled
+		return "tunneled", false
 	}
 }
