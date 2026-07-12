@@ -52,6 +52,70 @@ func parseDefaultRouteVia(out string) (string, error) {
 	return "", fmt.Errorf("no default route with a 'via' gateway found")
 }
 
+// RouteProtectionVerdict classifies one workspace container's default-route
+// posture relative to the proxy.
+type RouteProtectionVerdict int
+
+const (
+	// RouteUnknown: the default route could not be determined (exec error, no
+	// default route) -- a fail-open probe, reported as UNKNOWN, never PROTECTED.
+	RouteUnknown RouteProtectionVerdict = iota
+	// RouteProtected: the default route points at the proxy (via == cfg.ProxyIP).
+	RouteProtected
+	// RouteUnprotected: the default route points elsewhere -- the container
+	// egresses DIRECT, around the proxy.
+	RouteUnprotected
+)
+
+// RouteProtection pairs a workspace container name with its route-protection
+// verdict and a human-readable detail.
+type RouteProtection struct {
+	Name    string
+	Verdict RouteProtectionVerdict
+	Detail  string
+}
+
+// classifyRouteProtection is the pure decision: given the `via` gateway a
+// read-only route lookup returned (and its error), decide the verdict. A lookup
+// error is UNKNOWN (fail-open -> never PROTECTED); via == proxyIP is PROTECTED;
+// anything else is UNPROTECTED (direct egress). The caller sets Name.
+func classifyRouteProtection(via string, lookupErr error, proxyIP string) RouteProtection {
+	switch {
+	case lookupErr != nil:
+		return RouteProtection{Verdict: RouteUnknown, Detail: "route unreadable: " + lookupErr.Error()}
+	case via == proxyIP:
+		return RouteProtection{Verdict: RouteProtected, Detail: "default via " + via}
+	default:
+		return RouteProtection{Verdict: RouteUnprotected, Detail: fmt.Sprintf("default via %s (not the proxy %s)", via, proxyIP)}
+	}
+}
+
+// WorkspaceRouteProtection reports, READ-ONLY, whether each workspace container
+// on the proxy network routes its default via the proxy. It reuses the same
+// endpoint enumeration as ProxyFixRoutes (ProxyConnectedContainers) and the same
+// read-only `ip route show default` lookup as the doctor's default-route check
+// (DefaultRouteOf); it NEVER mutates a route (no `ip route replace` -- that is
+// ProxyFixRoutes' job, DR-SH1-4). A container whose route cannot be read is
+// UNKNOWN, never PROTECTED.
+//
+// NOTE (U6): this is a third read-only reader of the proxy-network route
+// topology (checkDefaultRoute and ProxyFixRoutes are the others); consolidating
+// the three into one compute-once scan is U6's scope, not this change's.
+func WorkspaceRouteProtection(cfg config.Config) ([]RouteProtection, error) {
+	names, err := ProxyConnectedContainers(cfg)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RouteProtection, 0, len(names))
+	for _, name := range names {
+		via, rerr := DefaultRouteOf(name)
+		rp := classifyRouteProtection(via, rerr, cfg.ProxyIP)
+		rp.Name = name
+		out = append(out, rp)
+	}
+	return out, nil
+}
+
 // NetworkSubnet returns the first IPAM subnet of the proxy network
 // (NetworkInspect(...).IPAM.Config[0].Subnet), e.g. "172.28.0.0/16". Used by
 // `ws proxy doctor` to confirm the ws-proxy network exists with the expected

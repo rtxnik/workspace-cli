@@ -1,6 +1,9 @@
 package docker
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // TestParseDefaultRouteVia covers the pure `ip route show default` parser
 // without docker: it must extract the gateway after `via` and reject lines with
@@ -32,6 +35,31 @@ func TestParseDefaultRouteVia(t *testing.T) {
 			}
 			if got != c.want {
 				t.Errorf("via = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestClassifyRouteProtection covers the pure route-protection decision without
+// docker: a route via the proxy is PROTECTED; via anything else is UNPROTECTED
+// (direct egress); a lookup error is UNKNOWN (fail-open -> never PROTECTED).
+func TestClassifyRouteProtection(t *testing.T) {
+	const proxyIP = "172.28.0.2"
+	cases := []struct {
+		name        string
+		via         string
+		lookupErr   error
+		wantVerdict RouteProtectionVerdict
+	}{
+		{"via proxy is protected", proxyIP, nil, RouteProtected},
+		{"via other gateway is unprotected", "172.28.0.1", nil, RouteUnprotected},
+		{"lookup error is unknown", "", errors.New("docker exec failed"), RouteUnknown},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := classifyRouteProtection(c.via, c.lookupErr, proxyIP)
+			if got.Verdict != c.wantVerdict {
+				t.Errorf("verdict = %v, want %v (detail %q)", got.Verdict, c.wantVerdict, got.Detail)
 			}
 		})
 	}

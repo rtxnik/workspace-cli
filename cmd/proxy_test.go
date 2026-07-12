@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 )
 
@@ -87,6 +88,67 @@ func TestTestJSONResult_WireIsBackwardCompatibleSuperset(t *testing.T) {
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("wire %s missing %s", s, want)
+		}
+	}
+}
+
+// TestProtectionSummary covers the pure human status line for workspace route
+// protection: UNPROTECTED takes priority (with fix hint), then UNKNOWN, then
+// all-protected; empty list yields no line.
+func TestProtectionSummary(t *testing.T) {
+	cases := []struct {
+		name            string
+		prot            []docker.RouteProtection
+		wantContains    string
+		wantUnprotected bool
+	}{
+		{"none connected", nil, "", false},
+		{
+			"one unprotected dominates",
+			[]docker.RouteProtection{
+				{Name: "a", Verdict: docker.RouteProtected},
+				{Name: "b", Verdict: docker.RouteUnprotected},
+			},
+			"UNPROTECTED", true,
+		},
+		{
+			"unknown when no unprotected",
+			[]docker.RouteProtection{{Name: "a", Verdict: docker.RouteUnknown}},
+			"UNKNOWN", false,
+		},
+		{
+			"all protected",
+			[]docker.RouteProtection{{Name: "a", Verdict: docker.RouteProtected}},
+			"protected", false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			line, anyUnprot := protectionSummary(c.prot)
+			if c.wantContains == "" {
+				if line != "" {
+					t.Errorf("want empty line, got %q", line)
+				}
+			} else if !strings.Contains(line, c.wantContains) {
+				t.Errorf("line %q must contain %q", line, c.wantContains)
+			}
+			if anyUnprot != c.wantUnprotected {
+				t.Errorf("anyUnprotected = %v, want %v", anyUnprot, c.wantUnprotected)
+			}
+		})
+	}
+}
+
+// TestProtectionStatusString maps each verdict to its stable JSON token.
+func TestProtectionStatusString(t *testing.T) {
+	cases := map[docker.RouteProtectionVerdict]string{
+		docker.RouteProtected:   "protected",
+		docker.RouteUnprotected: "unprotected",
+		docker.RouteUnknown:     "unknown",
+	}
+	for v, want := range cases {
+		if got := protectionStatusString(v); got != want {
+			t.Errorf("protectionStatusString(%v) = %q, want %q", v, got, want)
 		}
 	}
 }
