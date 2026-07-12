@@ -222,24 +222,38 @@ var profileDeleteCmd = &cobra.Command{
 	Short:       "Delete a custom profile",
 	Args:        cobra.ExactArgs(1),
 	Annotations: profileAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name := args[0]
 
 		if profile.IsBuiltin(name) {
-			output.Die(fmt.Sprintf("cannot delete built-in profile %q", name))
+			return &cliErrorWithExit{code: 1, msg: fmt.Sprintf("cannot delete built-in profile %q", name)}
+		}
+		if err := profile.ValidateName(name); err != nil {
+			return &cliErrorWithExit{code: 1, msg: err.Error()}
+		}
+
+		force, _ := cmd.Flags().GetBool("force")
+		if !confirmDestructiveFn(force,
+			fmt.Sprintf("Delete profile %q?", name),
+			"This will remove the profile directory and its files.") {
+			output.Info("Aborted")
+			return nil
 		}
 
 		if err := profile.Delete(cfg, name); err != nil {
-			output.Die(err.Error())
+			return &cliErrorWithExit{code: 1, msg: err.Error()}
 		}
 		output.Success(fmt.Sprintf("Profile %q deleted", name))
+		return nil
 	},
 }
 
 func init() {
 	profileCreateCmd.Flags().String("image", "mcr.microsoft.com/devcontainers/base:ubuntu-24.04", "Base Docker image")
 	profileCreateCmd.Flags().Bool("docker-in-docker", false, "Enable Docker-in-Docker feature")
+	profileDeleteCmd.Flags().BoolP("force", "f", false, "Skip delete confirmation")
 
 	rootCmd.AddCommand(profilesCmd)
 	rootCmd.AddCommand(profileCreateCmd)
