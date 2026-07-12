@@ -96,7 +96,7 @@ If TPROXY misbehaves on the operator's kernel (e.g. the container lacks `CAP_NET
 
 - Revert the entrypoint to use iptables REDIRECT instead of TPROXY (edit `dotfiles`; rebuild with `ws proxy rebuild --force`).
 - Leave UDP fail-closed (no UDP forwarding rule) until TPROXY is confirmed working.
-- The `ws proxy doctor` advisory check (step 12, "inbound sockopt.tproxy") will report the missing field; that is expected in REDIRECT mode.
+- The `ws proxy doctor` advisory check (step 13, "inbound sockopt.tproxy") will report the missing field; that is expected in REDIRECT mode.
 
 ---
 

@@ -646,9 +646,13 @@ func testDNSVerdict(result proxyengine.ProbeResult, dnsExit string) (verdict str
 	switch proxyengine.ClassifyDNS(result.DirectIP, result.ProxiedIP, dnsExit) {
 	case proxyengine.DNSLeak:
 		return "leak", true
+	case proxyengine.DNSTunneled:
+		return "tunneled", false
 	case proxyengine.DNSInconclusive:
 		return "inconclusive", false
-	default: // DNSTunneled
-		return "tunneled", false
+	default:
+		// Fail safe: an unmodelled future verdict is advisory, never a green
+		// "tunneled" claim (this is a never-false-green security verdict).
+		return "inconclusive", false
 	}
 }
