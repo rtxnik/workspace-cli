@@ -20,6 +20,10 @@ import (
 
 var wsAnnotation = map[string]string{"group": "workspace"}
 
+// confirmDestructiveFn gates every destructive delete; a test seam so
+// confirmation outcomes are driven deterministically without a terminal.
+var confirmDestructiveFn = output.ConfirmDestructive
+
 var newCmd = &cobra.Command{
 	Use:         "new <name> [profile]",
 	Short:       "Create a new workspace",
@@ -164,6 +168,9 @@ var startCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		name := args[0]
+		if err := workspace.ValidateName(name); err != nil {
+			output.Die(err.Error())
+		}
 		if !workspace.Exists(cfg, name) {
 			fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
 				Title:       fmt.Sprintf("Workspace %q not found", name),
@@ -196,6 +203,9 @@ var stopCmd = &cobra.Command{
 	Annotations: wsAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
+		if err := workspace.ValidateName(name); err != nil {
+			output.Die(err.Error())
+		}
 		if err := output.RunWithSpinner(fmt.Sprintf("Stopping workspace %q", name), func() error {
 			return workspace.DevpodStop(name)
 		}); err != nil {
@@ -210,16 +220,21 @@ var deleteCmd = &cobra.Command{
 	Short:       "Delete a workspace",
 	Args:        cobra.ExactArgs(1),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name := args[0]
 
+		if err := workspace.ValidateName(name); err != nil {
+			return &cliErrorWithExit{code: 1, msg: err.Error()}
+		}
+
 		force, _ := cmd.Flags().GetBool("force")
-		if !force {
-			if !output.Confirm(fmt.Sprintf("Delete workspace %q?", name), "This will remove the workspace and its local files.") {
-				output.Info("Aborted")
-				return
-			}
+		if !confirmDestructiveFn(force,
+			fmt.Sprintf("Delete workspace %q?", name),
+			"This will remove the workspace and its local files.") {
+			output.Info("Aborted")
+			return nil
 		}
 
 		if err := output.RunWithSpinner(fmt.Sprintf("Deleting workspace %q", name), func() error {
@@ -229,8 +244,9 @@ var deleteCmd = &cobra.Command{
 			wsDir := filepath.Join(cfg.WorkspacesDir, name)
 			return os.RemoveAll(wsDir)
 		}); err != nil {
-			output.Die(err.Error())
+			return &cliErrorWithExit{code: 1, msg: err.Error()}
 		}
+		return nil
 	},
 }
 
@@ -245,6 +261,9 @@ var sshCmd = &cobra.Command{
 			name = args[0]
 		} else {
 			name = selectWorkspace()
+		}
+		if err := workspace.ValidateName(name); err != nil {
+			output.Die(err.Error())
 		}
 		// Rename tmux window if inside tmux. Bounded: a wedged tmux server
 		// must not stall the ssh command (best-effort, error ignored).
@@ -269,6 +288,9 @@ var codeCmd = &cobra.Command{
 		} else {
 			name = selectWorkspace()
 		}
+		if err := workspace.ValidateName(name); err != nil {
+			output.Die(err.Error())
+		}
 		output.Info(fmt.Sprintf("Opening workspace %q in VS Code...", name))
 		if err := workspace.DevpodCode(name); err != nil {
 			output.Die(err.Error())
@@ -284,6 +306,9 @@ var restartCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
 		name := args[0]
+		if err := workspace.ValidateName(name); err != nil {
+			output.Die(err.Error())
+		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 
 		steps := []output.Step{
@@ -318,6 +343,9 @@ var logsCmd = &cobra.Command{
 	Annotations: wsAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
 		name := args[0]
+		if err := workspace.ValidateName(name); err != nil {
+			output.Die(err.Error())
+		}
 		follow, _ := cmd.Flags().GetBool("follow")
 
 		// Try journalctl inside the workspace first.
