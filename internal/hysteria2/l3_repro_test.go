@@ -94,3 +94,30 @@ func TestL3_clean_PinNormalization(t *testing.T) {
 		t.Errorf("PinSHA256 = %q", cfg.PinSHA256)
 	}
 }
+
+// A hy2 password may legitimately contain ':'. Taking only the pre-colon part
+// silently sends the wrong secret. Both a single and multiple raw colons.
+func TestL3_01_AuthWithColonIsTruncated(t *testing.T) {
+	cases := []struct{ uri, want string }{
+		{"hy2://user:secretpass@example.com:443?sni=example.com", "user:secretpass"},
+		{"hy2://user:p:a:ss@example.com:443", "user:p:a:ss"},
+		// An auth that legitimately begins with a colon must survive the guard.
+		{"hy2://:secret@example.com:443", ":secret"},
+	}
+	for _, c := range cases {
+		cfg, err := Parse(c.uri)
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.uri, err)
+		}
+		if cfg.Auth != c.want {
+			t.Errorf("auth mismatch: got %q, want %q", cfg.Auth, c.want)
+		}
+	}
+	// A genuinely empty auth is still rejected (guard must test the full auth,
+	// not just the pre-colon username).
+	for _, uri := range []string{"hy2://@example.com:443", "hy2://example.com:443"} {
+		if _, err := Parse(uri); err == nil {
+			t.Errorf("Parse(%q) = nil err, want missing-auth error", uri)
+		}
+	}
+}

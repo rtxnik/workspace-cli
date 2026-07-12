@@ -57,7 +57,17 @@ func Parse(uri string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("parse URI: %w", err)
 	}
-	if u.User == nil || u.User.Username() == "" {
+	if u.User == nil {
+		return Config{}, fmt.Errorf("missing auth (password) in URI")
+	}
+	// A hysteria2 URI carries its whole userinfo as the auth secret, which may
+	// contain ':'. net/url splits userinfo on the first colon, so rejoin the
+	// username and password to recover the full value.
+	auth := u.User.Username()
+	if pw, ok := u.User.Password(); ok {
+		auth += ":" + pw
+	}
+	if auth == "" {
 		return Config{}, fmt.Errorf("missing auth (password) in URI")
 	}
 	host := u.Hostname()
@@ -74,7 +84,7 @@ func Parse(uri string) (Config, error) {
 
 	q := u.Query()
 	cfg := Config{
-		Auth:          u.User.Username(),
+		Auth:          auth,
 		Address:       host,
 		Port:          port,
 		SNI:           q.Get("sni"),
