@@ -121,3 +121,54 @@ func TestL3_01_AuthWithColonIsTruncated(t *testing.T) {
 		}
 	}
 }
+
+// Port hopping also arrives as a bare range (no comma). It must parse: base
+// port = low end of the range, HopPorts = the original spec.
+func TestL3_02_RangeOnlyPortHoppingRejected(t *testing.T) {
+	cfg, err := Parse("hysteria2://pass@example.com:20000-50000?sni=example.com")
+	if err != nil {
+		t.Fatalf("range-only port-hopping URI rejected: %v", err)
+	}
+	if cfg.Port != 20000 {
+		t.Errorf("base port = %d, want 20000", cfg.Port)
+	}
+	if cfg.HopPorts != "20000-50000" {
+		t.Errorf("HopPorts = %q, want %q", cfg.HopPorts, "20000-50000")
+	}
+	if !cfg.PortHopping {
+		t.Errorf("PortHopping = false, want true")
+	}
+}
+
+// Guard: a bare range on an IPv6 host keeps its brackets and low-end base.
+func TestL3_clean_IPv6RangeOnlyHopping(t *testing.T) {
+	cfg, err := Parse("hy2://pw@[2001:db8::1]:20000-50000")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if cfg.Address != "2001:db8::1" || cfg.Port != 20000 {
+		t.Errorf("addr/port = %q/%d, want 2001:db8::1/20000", cfg.Address, cfg.Port)
+	}
+	if cfg.HopPorts != "20000-50000" {
+		t.Errorf("HopPorts = %q, want %q", cfg.HopPorts, "20000-50000")
+	}
+}
+
+// A malformed port token must NOT be widened into an accepted (broken) config:
+// it stays rejected, as today. Covers the dash-regression the fix could add.
+func TestL3_02_MalformedRangeRejected(t *testing.T) {
+	for _, uri := range []string{
+		"hy2://pw@example.com:443-",        // empty high
+		"hy2://pw@example.com:443-abc",     // non-numeric high
+		"hy2://pw@example.com:443--444",    // double dash
+		"hy2://pw@example.com:0-100",       // zero endpoint (out of 1..65535)
+		"hy2://pw@example.com:20000-99999", // high out of range
+		"hy2://pw@example.com:443,",        // trailing empty item
+		"hy2://pw@example.com:443,abc",     // non-numeric list item
+		"hy2://pw@example.com:443-100",     // inverted range (low > high)
+	} {
+		if _, err := Parse(uri); err == nil {
+			t.Errorf("Parse(%q) = nil err, want rejected (malformed port spec)", uri)
+		}
+	}
+}
