@@ -174,7 +174,7 @@ ws proxy test              # human-readable (✓/✗ + latency), also probes the
 ws proxy test --json       # JSON: {"directIP","proxiedIP","tunneled","latencyMs","dns","dnsExitIP"}
 ```
 
-`tunneled` compares the TCP exit IPs (direct vs proxied). `dns` is the UDP/DNS-leg verdict, probed only when `tunneled=true`: one of `tunneled` (resolver exit matches the proxied IP), `leak` (resolver saw the direct/real IP — the DNS query egressed around the tunnel), `inconclusive` (no UDP/DNS egress observed — advisory, not treated as a leak), or `skipped` (the TCP tunnel itself is down, so the DNS leg was not probed). `dnsExitIP` carries the resolver-observed exit IP and is omitted when `dns` is `inconclusive` or `skipped`.
+`tunneled` compares the TCP exit IPs (direct vs proxied). `dns` is the UDP/DNS-leg verdict, probed only when `tunneled=true`: one of `tunneled` (the resolver-observed exit IP is not your direct/real IP — the query egressed through the tunnel; usually the proxied IP, but any non-direct IP counts, e.g. a multi-homed exit), `leak` (resolver saw the direct/real IP — the DNS query egressed around the tunnel), `inconclusive` (no UDP/DNS egress observed — advisory, not treated as a leak), or `skipped` (the TCP tunnel itself is down, so the DNS leg was not probed). `dnsExitIP` carries the resolver-observed exit IP and is omitted when `dns` is `inconclusive` or `skipped`.
 
 Exits 0 when `tunneled=true` and `dns` is not `leak` (an `inconclusive` DNS leg is advisory and does not fail the command). Exits 1 when `tunneled=false` (the exit IPs are identical) or when `dns:"leak"` (the DNS query escaped the tunnel).
 
@@ -210,7 +210,7 @@ Refuses to remove the active profile. Asks for confirmation; use `--force` to sk
 | `ws proxy test` | End-to-end connectivity test through proxy |
 | `ws proxy debug on\|off` | Toggle verbose xray logging |
 
-`ws proxy status` also lists each connected workspace's route-protection verdict (read-only — it does not fix anything): `protected` (default route goes via the proxy), `unprotected` (it does not — run `ws proxy fix-routes`), or `unknown` (the route table could not be read). `ws proxy status --json` carries the same verdicts in `workspaceProtection` (one `{"name","status","detail"}` entry per workspace); a `protectionScanError` field appears only when the scan itself failed, meaning every workspace's protection is `unknown`.
+`ws proxy status` also lists each connected workspace's route-protection verdict (read-only — it does not fix anything): `protected` (default route goes via the proxy), `unprotected` (it does not — run `ws proxy fix-routes`), or `unknown` (the route table could not be read). `ws proxy status --json` carries the same verdicts in `workspaceProtection` (one `{"name","status","detail"}` entry per workspace); a `protectionScanError` field appears only when the read-only scan itself failed (for example, the proxy network became uninspectable); in that case `workspaceProtection` is empty and protection cannot be determined for any workspace.
 
 ## Recovery
 
