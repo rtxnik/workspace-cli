@@ -12,7 +12,8 @@ package cmd
 //   --reason <txt> -> args.Reason; REQUIRED whenever --dedup-force set
 //   --yes          -> skip the operator confirmation prompt
 //                     (default behavior fires output.Confirm; declining
-//                      Aborted with exit 1; create_note NOT called)
+//                      writes nothing and exits 0 — declining an override is
+//                      a safe operator choice, not an error)
 //
 // NOTE on contract-field naming (Rule 1 deviation tracked in SUMMARY):
 //   The plan draft <interfaces> proposed args.DedupForce + args.DedupOverrideReason,
@@ -158,7 +159,7 @@ func newVaultIngestCmd() *cobra.Command {
 					desc := "This will write the note bypassing the similarity-based DEDUP_BLOCKED. The reason is audited verbatim per Phase 17 D-12 dedup_override stream."
 					if !vaultIngestConfirmFn(title, desc) {
 						output.Info("Aborted")
-						return &cliErrorWithExit{code: 1, msg: "ingest: aborted by operator at dedup-force confirmation prompt"}
+						return nil
 					}
 				}
 			}
