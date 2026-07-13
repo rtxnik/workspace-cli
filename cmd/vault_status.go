@@ -189,16 +189,6 @@ func collectVaultHealthSignal(ctx context.Context, cl *mcp.Client) statusSignal 
 // any captured stderr first line for diagnostic output.
 var verifyAuditChainFn = invokeVerifyAuditChain
 
-// invokeVerifyAuditChain runs `uv run --project <repo>/_tooling/mcp --
-// python -m vault_ai.tooling.verify_audit_chain verify --month YYYY-MM
-// --stream <s> --strict` for each of the 8 streams declared in
-// vault-ai/_tooling/mcp/vault_ai/tooling/verify_audit_chain.py STREAMS
-// tuple at HEAD 2026-05-18. CONTEXT D-21 §OQ-1+OQ-3 Amendment selects
-// this shell-out transport over an MCP roundtrip because
-// verify_audit_chain is a Python CLI script (argparse, no FastMCP).
-//
-// Returns (failedStream, exitCode, stderrFirstLine). failedStream=="" on
-// all-green; otherwise it's the first stream that failed.
 // verifyAuditChainTimeout bounds each per-stream verify shell-out so a single
 // wedged `uv run` cannot hang `ws vault status`. Generous upper bound: a
 // healthy per-stream verify is sub-second, but `uv run` may pay cold
@@ -210,6 +200,16 @@ const verifyAuditChainTimeout = 60 * time.Second
 // extraction without spawning uv.
 var procxRunFn = procx.Run
 
+// invokeVerifyAuditChain runs `uv run --project <repo>/_tooling/mcp --
+// python -m vault_ai.tooling.verify_audit_chain verify --month YYYY-MM
+// --stream <s> --strict` for each of the 8 streams declared in
+// vault-ai/_tooling/mcp/vault_ai/tooling/verify_audit_chain.py STREAMS
+// tuple at HEAD 2026-05-18. CONTEXT D-21 §OQ-1+OQ-3 Amendment selects
+// this shell-out transport over an MCP roundtrip because
+// verify_audit_chain is a Python CLI script (argparse, no FastMCP).
+//
+// Returns (failedStream, exitCode, stderrFirstLine). failedStream=="" on
+// all-green; otherwise it's the first stream that failed.
 func invokeVerifyAuditChain(ctx context.Context, repoRoot string) (failedStream string, code int, stderrFirstLine string) {
 	streams := []string{"mcp", "search", "visibility", "cost", "embedder", "dedup", "triage", "watcher"}
 	month := time.Now().UTC().Format("2006-01")

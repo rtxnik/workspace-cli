@@ -326,12 +326,40 @@ func TestInvokeVerifyAuditChain_SurfacesStreamFailure(t *testing.T) {
 }
 
 // TestInvokeVerifyAuditChain_AllStreamsPass covers the all-green path and pins
-// that every one of the 8 streams is probed.
+// that every one of the 8 streams is probed with the expected bounded-exec
+// call shape: the shared timeout, the "uv" binary, and a verify command line
+// naming that stream.
 func TestInvokeVerifyAuditChain_AllStreamsPass(t *testing.T) {
 	prev := procxRunFn
 	defer func() { procxRunFn = prev }()
+	wantStreams := []string{"mcp", "search", "visibility", "cost", "embedder", "dedup", "triage", "watcher"}
 	calls := 0
 	procxRunFn = func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+		if timeout != verifyAuditChainTimeout {
+			t.Errorf("call %d: timeout = %v, want %v", calls, timeout, verifyAuditChainTimeout)
+		}
+		if name != "uv" {
+			t.Errorf("call %d: name = %q, want %q", calls, name, "uv")
+		}
+		if len(args) == 0 || args[0] != "run" {
+			t.Errorf("call %d: args[0] = %v, want args[0] == %q", calls, args, "run")
+		}
+		wantStream := wantStreams[calls]
+		foundStream, foundStrict := false, false
+		for i, a := range args {
+			if a == "--stream" && i+1 < len(args) && args[i+1] == wantStream {
+				foundStream = true
+			}
+			if a == "--strict" {
+				foundStrict = true
+			}
+		}
+		if !foundStream {
+			t.Errorf("call %d: args %v missing \"--stream\" %q", calls, args, wantStream)
+		}
+		if !foundStrict {
+			t.Errorf("call %d: args %v missing \"--strict\"", calls, args)
+		}
 		calls++
 		return []byte(""), nil
 	}
