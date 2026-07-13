@@ -1,16 +1,20 @@
 package cmd
 
-// vault_doctor_predict_test.go -- unit tests for `ws vault doctor predict-bulk-load`.
+// vault_doctor_predict_test.go -- unit tests for `ws vault predict-bulk-load`.
 //
-// 5 test cases (Plan 23-07 Task 2):
-//   1. TestPredictRegistered           -- walker finds predict-bulk-load under vault
-//   2. TestPredictTableOutput          -- default table rendering with mocked response
-//   3. TestPredictJSONOutput           -- --json flag outputs raw JSON
-//   4. TestPredictReadOnly             -- no state mutations
-//   5. TestPredictMCPError             -- graceful error when MCP call fails
+// 7 test cases:
+//   1. TestPredictRegistered                         -- walker finds predict-bulk-load under vault
+//   2. TestPredictTableOutput                        -- default table rendering with mocked response
+//   3. TestPredictJSONOutput                         -- --json flag outputs raw JSON
+//   4. TestPredictReadOnly                           -- no state mutations
+//   5. TestPredictMCPError                           -- graceful error when the MCP call fails
+//   6. TestPredictEnvelopeErrorCarriesMappedExit     -- non-OK envelope yields the mapped exit code
+//   7. TestPredictEnvelopeErrorRoutesExitCodeEndToEnd -- end-to-end: mapped exit code + reason on stderr
 //
-// All tests inject mocked predictMCPCallFn via the package-level seam
-// so no live MCP subprocess is spawned at unit test time.
+// Cases 1-5 inject a mocked predictMCPCallFn via the package-level seam;
+// cases 6-7 inject at the callVaultTool-level seam (predictCallToolFn) to
+// exercise the envelope-handling path (case 7 pins the production
+// predictMCPCallFn). No live MCP subprocess is spawned at unit test time.
 
 import (
 	"bytes"
