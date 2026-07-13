@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // assertLogLevel fails the test unless the file at path is valid JSON whose
@@ -147,4 +151,66 @@ func TestSetXrayLogLevelMissingConfig(t *testing.T) {
 	}
 	// The failed calls created nothing.
 	assertOnlyEntries(t, root, "dangling.json")
+}
+
+// swapXrayReleaseURL points fetchLatestXrayVersion at a test server and
+// returns a restore func (defer it).
+func swapXrayReleaseURL(u string) func() {
+	prev := xrayReleaseURL
+	xrayReleaseURL = u
+	return func() { xrayReleaseURL = prev }
+}
+
+// swapXrayVersionFetchTimeout shrinks the fetch deadline for tests.
+func swapXrayVersionFetchTimeout(d time.Duration) func() {
+	prev := xrayVersionFetchTimeout
+	xrayVersionFetchTimeout = d
+	return func() { xrayVersionFetchTimeout = prev }
+}
+
+// TestFetchLatestXrayVersion_SuccessParsesTag locks the happy path against a
+// local server (no network dependency): the tag_name is parsed and returned.
+func TestFetchLatestXrayVersion_SuccessParsesTag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"tag_name":"v1.8.24"}`)
+	}))
+	defer srv.Close()
+	defer swapXrayReleaseURL(srv.URL)()
+
+	got, err := fetchLatestXrayVersion()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v1.8.24" {
+		t.Errorf("tag = %q, want %q", got, "v1.8.24")
+	}
+}
+
+// TestFetchLatestXrayVersion_BoundedOnUnresponsiveServer is the red line: a
+// server that never answers must NOT hang the fetch. With the deadline shrunk
+// to 50ms the call must return an error and unblock well under 2s.
+func TestFetchLatestXrayVersion_BoundedOnUnresponsiveServer(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-block:
+		case <-r.Context().Done(): // client hung up (its deadline fired)
+		}
+	}))
+	defer srv.Close()
+	defer close(block)
+	defer swapXrayReleaseURL(srv.URL)()
+	defer swapXrayVersionFetchTimeout(50 * time.Millisecond)()
+
+	done := make(chan error, 1)
+	go func() { _, err := fetchLatestXrayVersion(); done <- err }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a timeout error, got nil (fetch was not bounded)")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fetchLatestXrayVersion did not return within 2s — not bounded (hung)")
+	}
 }

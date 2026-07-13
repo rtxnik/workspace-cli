@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/fsutil"
 )
@@ -51,8 +53,25 @@ func setXrayLogLevel(configPath, level string) error {
 	return fsutil.WriteFile(resolved, out, 0o600)
 }
 
+// xrayReleaseURL is the GitHub API endpoint for the latest Xray-core release.
+// A package var (not a const) so tests can point the fetch at a local server
+// with no live-network dependency.
+var xrayReleaseURL = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+
+// xrayVersionFetchTimeout bounds the latest-version lookup so an unresponsive
+// GitHub (or a network black hole) fails fast instead of hanging
+// `ws proxy update` indefinitely. A package var so tests can shrink it.
+var xrayVersionFetchTimeout = 10 * time.Second
+
 func fetchLatestXrayVersion() (string, error) {
-	resp, err := http.Get("https://api.github.com/repos/XTLS/Xray-core/releases/latest")
+	ctx, cancel := context.WithTimeout(context.Background(), xrayVersionFetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, xrayReleaseURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch latest release: %w", err)
 	}
@@ -68,10 +87,8 @@ func fetchLatestXrayVersion() (string, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return "", fmt.Errorf("parse response: %w", err)
 	}
-
 	if release.TagName == "" {
 		return "", fmt.Errorf("no tag found in latest release")
 	}
-
 	return release.TagName, nil
 }
