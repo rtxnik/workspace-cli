@@ -294,9 +294,12 @@ func HealthBand(score int) string {
 	}
 }
 
-// HealthBandExitCode converts a band into a Unix exit code per CONTEXT
-// D-28. 0=green, 1=yellow, 2=red. Other inputs return 2 (red) as the
-// safest default for unknown band strings.
+// HealthBandExitCode is the single band-to-exit-code mapper shared by
+// `ws vault doctor`, `ws vault status`, and `ws vault vault-health-score`.
+// It converts a band into a Unix exit code per CONTEXT D-28: 0=green,
+// 1=yellow, 2=red. Any other input — including an empty string — returns 2
+// (red), the safest default, so an unrecognized band always fails closed
+// rather than reporting healthy.
 func HealthBandExitCode(band string) int {
 	switch band {
 	case "green":

@@ -372,19 +372,6 @@ func worstBand(checks []*doctorCheck) statusBand {
 	return worst
 }
 
-// bandToExitCode maps the worst observed band to the CONTEXT D-12 aggregator
-// exit code: green=0, yellow=1, red=2.
-func bandToExitCode(band statusBand) int {
-	switch band {
-	case bandRed:
-		return 2
-	case bandYellow:
-		return 1
-	default:
-		return 0
-	}
-}
-
 // renderChecks writes the checks to w. JSON mode emits NDJSON (one
 // doctorCheck per line). Human mode emits a table with ●/⚠/✗ prefix.
 func renderChecks(w io.Writer, checks []*doctorCheck, jsonMode bool) error {
@@ -516,7 +503,7 @@ func newVaultDoctorCmd() *cobra.Command {
 			applyMutations(cmd, checks)
 
 			band := worstBand(checks)
-			code := bandToExitCode(band)
+			code := mcp.HealthBandExitCode(string(band))
 			if code == 0 {
 				return nil
 			}
