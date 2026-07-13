@@ -13,8 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
+	"github.com/rtxnik/workspace-cli/internal/procx"
 	"github.com/spf13/cobra"
 )
 
@@ -299,6 +301,102 @@ func toolFixturesToListed(fixtures []listedToolFixture) []mcp.ListedTool {
 	return out
 }
 
+// TestInvokeVerifyAuditChain_SurfacesStreamFailure pins the return contract:
+// the first failing stream, its exit code, and its first stderr line are
+// surfaced unchanged. The runner is faked so no live `uv` is needed.
+func TestInvokeVerifyAuditChain_SurfacesStreamFailure(t *testing.T) {
+	prev := procxRunFn
+	defer func() { procxRunFn = prev }()
+	procxRunFn = func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+		// A broken chain: exit 3, diagnostic on stderr (procx.Run puts it in
+		// *exec.ExitError.Stderr, exactly like the real uv failure path).
+		return procx.Run(ctx, timeout, "sh", "-c", "echo 'chain hash mismatch at row 42' >&2; exit 3")
+	}
+
+	stream, code, line := invokeVerifyAuditChain(context.Background(), "/repo")
+	if stream != "mcp" { // "mcp" is the first stream in the loop
+		t.Errorf("failedStream = %q, want %q", stream, "mcp")
+	}
+	if code != 3 {
+		t.Errorf("code = %d, want 3", code)
+	}
+	if line != "chain hash mismatch at row 42" {
+		t.Errorf("stderrFirstLine = %q", line)
+	}
+}
+
+// TestInvokeVerifyAuditChain_AllStreamsPass covers the all-green path and pins
+// that every one of the 8 streams is probed with the expected bounded-exec
+// call shape: the shared timeout, the "uv" binary, and a verify command line
+// naming that stream.
+func TestInvokeVerifyAuditChain_AllStreamsPass(t *testing.T) {
+	prev := procxRunFn
+	defer func() { procxRunFn = prev }()
+	wantStreams := []string{"mcp", "search", "visibility", "cost", "embedder", "dedup", "triage", "watcher"}
+	calls := 0
+	procxRunFn = func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+		if timeout != verifyAuditChainTimeout {
+			t.Errorf("call %d: timeout = %v, want %v", calls, timeout, verifyAuditChainTimeout)
+		}
+		if name != "uv" {
+			t.Errorf("call %d: name = %q, want %q", calls, name, "uv")
+		}
+		if len(args) == 0 || args[0] != "run" {
+			t.Errorf("call %d: args[0] = %v, want args[0] == %q", calls, args, "run")
+		}
+		wantStream := wantStreams[calls]
+		foundStream, foundStrict := false, false
+		for i, a := range args {
+			if a == "--stream" && i+1 < len(args) && args[i+1] == wantStream {
+				foundStream = true
+			}
+			if a == "--strict" {
+				foundStrict = true
+			}
+		}
+		if !foundStream {
+			t.Errorf("call %d: args %v missing \"--stream\" %q", calls, args, wantStream)
+		}
+		if !foundStrict {
+			t.Errorf("call %d: args %v missing \"--strict\"", calls, args)
+		}
+		calls++
+		return []byte(""), nil
+	}
+
+	stream, code, line := invokeVerifyAuditChain(context.Background(), "/repo")
+	if stream != "" || code != 0 || line != "" {
+		t.Errorf(`all-green want ("",0,""); got (%q,%d,%q)`, stream, code, line)
+	}
+	if calls != 8 {
+		t.Errorf("expected 8 per-stream probes, got %d", calls)
+	}
+}
+
+// TestInvokeVerifyAuditChain_TimeoutSurfacesAsRed proves a wedged verify is
+// bounded: a deadline kill (exit -1) surfaces a non-zero code (default 1) and
+// returns promptly, never hanging.
+func TestInvokeVerifyAuditChain_TimeoutSurfacesAsRed(t *testing.T) {
+	prev := procxRunFn
+	defer func() { procxRunFn = prev }()
+	procxRunFn = func(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
+		// Simulate a wedged uv: sleep far past a tiny deadline -> SIGKILL.
+		return procx.Run(ctx, 20*time.Millisecond, "sleep", "10")
+	}
+
+	start := time.Now()
+	stream, code, _ := invokeVerifyAuditChain(context.Background(), "/repo")
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("not bounded: took %v", elapsed)
+	}
+	if stream != "mcp" {
+		t.Errorf("failedStream = %q, want mcp", stream)
+	}
+	if code == 0 {
+		t.Errorf("a killed/timed-out verify must surface a non-zero code; got 0")
+	}
+}
+
 // Smoke: verify the resolveVaultAIRepoRoot fallback chain works.
 func TestResolveVaultAIRepoRoot(t *testing.T) {
 	t.Setenv("VAULT_AI_REPO_ROOT", "/tmp/explicit-override")
@@ -309,5 +407,27 @@ func TestResolveVaultAIRepoRoot(t *testing.T) {
 	got := resolveVaultAIRepoRoot()
 	if !strings.HasSuffix(got, filepath.Join("projects", "vault-ai")) && got != "." {
 		t.Errorf("expected fallback to ~/projects/vault-ai or '.'; got %q", got)
+	}
+}
+
+// TestRunVaultStatus_AbortsOnCancelledContext: an interrupted status run must
+// bubble up the cancellation rather than emit a spurious health verdict. With
+// no VAULT_AI_TOKEN the spawn fails, but a cancelled ctx must still
+// short-circuit to context.Canceled (not a degraded mcpDownReport).
+func TestRunVaultStatus_AbortsOnCancelledContext(t *testing.T) {
+	// Force the spawn to fail fast at the token check regardless of the ambient
+	// environment, so the test exercises the cancellation short-circuit rather
+	// than a live subprocess spawn.
+	t.Setenv("VAULT_AI_TOKEN", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	root := &cobra.Command{}
+	root.Version = "test"
+
+	_, err := runVaultStatus(ctx, root)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled status run: err = %v, want context.Canceled", err)
 	}
 }

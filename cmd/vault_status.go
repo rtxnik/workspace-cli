@@ -23,6 +23,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/procx"
 	"github.com/spf13/cobra"
 )
 
@@ -72,11 +74,21 @@ var vaultStatusRunFn = runVaultStatus
 // runVaultStatus is the production gatherer: spawn MCP client, run all 6
 // signal collectors, return the assembled report.
 func runVaultStatus(ctx context.Context, root *cobra.Command) (*statusReport, error) {
+	// Make the status roundtrips + the 8 verify shell-outs cancellable by
+	// Ctrl-C (see signalContext in vault_client.go).
+	ctx, stopSig := signalContext(ctx)
+	defer stopSig()
+
 	cl, err := mcp.NewClient(ctx, mcp.Options{
 		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
 		Version:         root.Version,
 	})
 	if err != nil {
+		// If the operator interrupted the spawn, abort cleanly instead of
+		// reporting a spurious MCP-down verdict.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		// MCP unreachable — return a degraded report with signal-1 red.
 		// Other signals can't be collected without the client; surface as
 		// "skipped (MCP down)" so the operator sees what's missing.
@@ -113,6 +125,13 @@ func runVaultStatus(ctx context.Context, root *cobra.Command) (*statusReport, er
 		costSignal,
 		dedupSignal,
 		drSignal,
+	}
+
+	// If the operator interrupted mid-collection, the cancelled ctx turned the
+	// MCP/shell-out signals into spurious failures — abort with the cancellation
+	// rather than emit a false-positive RED health verdict.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	return assembleReport(signals), nil
 }
@@ -187,6 +206,17 @@ func collectVaultHealthSignal(ctx context.Context, cl *mcp.Client) statusSignal 
 // any captured stderr first line for diagnostic output.
 var verifyAuditChainFn = invokeVerifyAuditChain
 
+// verifyAuditChainTimeout bounds each per-stream verify shell-out so a single
+// wedged `uv run` cannot hang `ws vault status`. Generous upper bound: a
+// healthy per-stream verify is sub-second, but `uv run` may pay cold
+// venv-resolution cost on first invocation, so 60s leaves ample margin.
+const verifyAuditChainTimeout = 60 * time.Second
+
+// procxRunFn is a package-level seam: production runs the bounded-exec
+// primitive; tests inject a fake to exercise the per-stream loop and error
+// extraction without spawning uv.
+var procxRunFn = procx.Run
+
 // invokeVerifyAuditChain runs `uv run --project <repo>/_tooling/mcp --
 // python -m vault_ai.tooling.verify_audit_chain verify --month YYYY-MM
 // --stream <s> --strict` for each of the 8 streams declared in
@@ -211,16 +241,22 @@ func invokeVerifyAuditChain(ctx context.Context, repoRoot string) (failedStream 
 			"--stream", s,
 			"--strict",
 		}
-		cmd := exec.CommandContext(ctx, "uv", args...)
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		if err != nil {
+		if _, err := procxRunFn(ctx, verifyAuditChainTimeout, "uv", args...); err != nil {
+			// Bounded-exec returns stdlib Output() semantics unwrapped: a
+			// non-zero exit or a deadline/parent-cancel kill surfaces as
+			// *exec.ExitError with captured stderr in .Stderr. A kill has no
+			// clean exit code (-1); keep the default 1 in that case so the
+			// operator sees "chain broken (exit 1)" rather than -1.
 			exitCode := 1
-			if ee, ok := err.(*exec.ExitError); ok {
-				exitCode = ee.ExitCode()
+			var stderrBytes []byte
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				if ec := ee.ExitCode(); ec >= 0 {
+					exitCode = ec
+				}
+				stderrBytes = ee.Stderr
 			}
-			line := strings.TrimSpace(strings.SplitN(stderr.String(), "\n", 2)[0])
+			line := strings.TrimSpace(strings.SplitN(string(stderrBytes), "\n", 2)[0])
 			return s, exitCode, line
 		}
 	}
