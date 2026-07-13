@@ -23,6 +23,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/procx"
 	"github.com/spf13/cobra"
 )
 
@@ -197,6 +199,17 @@ var verifyAuditChainFn = invokeVerifyAuditChain
 //
 // Returns (failedStream, exitCode, stderrFirstLine). failedStream=="" on
 // all-green; otherwise it's the first stream that failed.
+// verifyAuditChainTimeout bounds each per-stream verify shell-out so a single
+// wedged `uv run` cannot hang `ws vault status`. Generous upper bound: a
+// healthy per-stream verify is sub-second, but `uv run` may pay cold
+// venv-resolution cost on first invocation, so 60s leaves ample margin.
+const verifyAuditChainTimeout = 60 * time.Second
+
+// procxRunFn is a package-level seam: production runs the bounded-exec
+// primitive; tests inject a fake to exercise the per-stream loop and error
+// extraction without spawning uv.
+var procxRunFn = procx.Run
+
 func invokeVerifyAuditChain(ctx context.Context, repoRoot string) (failedStream string, code int, stderrFirstLine string) {
 	streams := []string{"mcp", "search", "visibility", "cost", "embedder", "dedup", "triage", "watcher"}
 	month := time.Now().UTC().Format("2006-01")
@@ -211,16 +224,22 @@ func invokeVerifyAuditChain(ctx context.Context, repoRoot string) (failedStream 
 			"--stream", s,
 			"--strict",
 		}
-		cmd := exec.CommandContext(ctx, "uv", args...)
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		if err != nil {
+		if _, err := procxRunFn(ctx, verifyAuditChainTimeout, "uv", args...); err != nil {
+			// Bounded-exec returns stdlib Output() semantics unwrapped: a
+			// non-zero exit or a deadline/parent-cancel kill surfaces as
+			// *exec.ExitError with captured stderr in .Stderr. A kill has no
+			// clean exit code (-1); keep the default 1 in that case so the
+			// operator sees "chain broken (exit 1)" rather than -1.
 			exitCode := 1
-			if ee, ok := err.(*exec.ExitError); ok {
-				exitCode = ee.ExitCode()
+			var stderrBytes []byte
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				if ec := ee.ExitCode(); ec >= 0 {
+					exitCode = ec
+				}
+				stderrBytes = ee.Stderr
 			}
-			line := strings.TrimSpace(strings.SplitN(stderr.String(), "\n", 2)[0])
+			line := strings.TrimSpace(strings.SplitN(string(stderrBytes), "\n", 2)[0])
 			return s, exitCode, line
 		}
 	}
