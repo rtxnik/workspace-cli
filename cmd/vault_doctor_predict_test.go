@@ -14,11 +14,13 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/pflag"
 )
 
@@ -206,5 +208,71 @@ func TestPredictMCPError(t *testing.T) {
 	combined := out.String() + errOut.String() + err.Error()
 	if !strings.Contains(combined, "MCP server not running") {
 		t.Errorf("expected error message about MCP failure; got: %q", combined)
+	}
+}
+
+// TestPredictEnvelopeErrorCarriesMappedExit checks that a non-OK envelope
+// with a known error code is turned into a *cliErrorWithExit carrying the
+// mapped exit code, not flattened into a bare error (which would exit 1).
+func TestPredictEnvelopeErrorCarriesMappedExit(t *testing.T) {
+	orig := predictCallToolFn
+	t.Cleanup(func() { predictCallToolFn = orig })
+	predictCallToolFn = func(_ context.Context, _, _ string, _ any) (*mcp.Envelope, error) {
+		return &mcp.Envelope{OK: false, Error: &mcp.EnvelopeError{Code: "DEDUP_BLOCKED", Message: "too similar"}}, nil
+	}
+
+	_, err := predictMCPCallImpl(5)
+	if err == nil {
+		t.Fatal("expected an error on a non-OK envelope")
+	}
+	var ce *cliErrorWithExit
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected *cliErrorWithExit carrying the mapped code; got %T (%v)", err, err)
+	}
+	if want := mcp.MapErrorCodeToExitCode("DEDUP_BLOCKED"); ce.code != want {
+		t.Errorf("envelope error exit code = %d; want %d (mapped), not a flat 1", ce.code, want)
+	}
+}
+
+// TestPredictEnvelopeErrorRoutesExitCodeEndToEnd drives the whole command
+// and asserts Execute() would route the mapped exit code rather than 1.
+func TestPredictEnvelopeErrorRoutesExitCodeEndToEnd(t *testing.T) {
+	origTool := predictCallToolFn
+	t.Cleanup(func() { predictCallToolFn = origTool })
+	predictCallToolFn = func(_ context.Context, _, _ string, _ any) (*mcp.Envelope, error) {
+		return &mcp.Envelope{OK: false, Error: &mcp.EnvelopeError{Code: "BUDGET_EXCEEDED", Message: "over budget"}}, nil
+	}
+	// Pin the production impl so a mock leaked from another test cannot mask routing.
+	origFn := predictMCPCallFn
+	predictMCPCallFn = predictMCPCallImpl
+	t.Cleanup(func() { predictMCPCallFn = origFn })
+	t.Cleanup(func() { resetVaultDoctorPredictFlags(t) })
+
+	var out, errOut bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	rootCmd.SetArgs([]string{"vault", "predict-bulk-load", "5"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected a non-nil error on an envelope failure")
+	}
+	var ce *cliErrorWithExit
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected *cliErrorWithExit; got %T (%v)", err, err)
+	}
+	if ce.code != 2 {
+		t.Errorf("BUDGET_EXCEEDED must route to exit 2; got %d", ce.code)
+	}
+	// The operator must still SEE the failure reason: predict does not set
+	// SilenceErrors, so cobra prints "Error: <msg>" to stderr before the exit
+	// code is routed. Guard against a future regression that would swallow it.
+	if !strings.Contains(errOut.String(), "BUDGET_EXCEEDED") {
+		t.Errorf("failure reason must reach stderr; errOut=%q", errOut.String())
 	}
 }
