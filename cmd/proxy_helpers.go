@@ -9,21 +9,28 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/fsutil"
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 )
+
+// xrayConfigRoots is the set of directories a legitimate xray-config write may
+// land in: the config file's own directory and the profiles directory (which
+// XRAY_PROFILES_DIR may place outside the config directory).
+func xrayConfigRoots(cfg config.Config) []string {
+	return []string{filepath.Dir(cfg.XrayConfig), cfg.XrayProfilesDir}
+}
 
 // setXrayLogLevel rewrites the loglevel of the active xray config.
 //
-// configPath is normally the active-profile symlink (~/.config/xray/config.json
-// -> profiles/<name>.json, D-07 layout). The path is resolved BEFORE writing:
-// fsutil.WriteFile renames a temp file over the path it is given; aimed at
-// the symlink itself, that write would replace the symlink with a regular
-// file and silently destroy the active-profile pointer. Writing the resolved target
-// keeps the pointer intact, and the rename keeps the rewrite atomic for the
-// running proxy that reads the same file through the whole-directory bind
-// mount (a plain os.WriteFile here risked a torn read).
-func setXrayLogLevel(configPath, level string) error {
-	resolved, err := filepath.EvalSymlinks(configPath)
+// cfg.XrayConfig is normally the active-profile symlink (config.json ->
+// profiles/<name>.json, D-07 layout). The path is resolved BEFORE writing so
+// the write lands on the resolved profile file and the symlink is preserved;
+// resolution refuses a target that escapes the config directories. A missing or
+// dangling config surfaces an error and creates nothing (the read below fails
+// before any write).
+func setXrayLogLevel(cfg config.Config, level string) error {
+	resolved, _, err := xrayconf.ResolveConfigTarget(cfg.XrayConfig, xrayConfigRoots(cfg))
 	if err != nil {
 		return fmt.Errorf("resolve config path: %w", err)
 	}
@@ -33,19 +40,19 @@ func setXrayLogLevel(configPath, level string) error {
 		return fmt.Errorf("read config: %w", err)
 	}
 
-	var cfg map[string]any
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
 		return fmt.Errorf("parse config: %w", err)
 	}
 
-	log, ok := cfg["log"].(map[string]any)
+	log, ok := m["log"].(map[string]any)
 	if !ok {
 		log = make(map[string]any)
-		cfg["log"] = log
+		m["log"] = log
 	}
 	log["loglevel"] = level
 
-	out, err := json.MarshalIndent(cfg, "", "  ")
+	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 	"github.com/rtxnik/workspace-cli/internal/vless"
+	"github.com/rtxnik/workspace-cli/internal/xrayconf"
 	"github.com/spf13/cobra"
 )
 
@@ -345,7 +346,7 @@ var proxyDebugCmd = &cobra.Command{
 			output.Die("usage: ws proxy debug <on|off>")
 		}
 
-		if err := setXrayLogLevel(cfg.XrayConfig, level); err != nil {
+		if err := setXrayLogLevel(cfg, level); err != nil {
 			output.Die(err.Error())
 		}
 		output.Success(fmt.Sprintf("Log level set to %q", level))
@@ -447,7 +448,11 @@ var proxyInitCmd = &cobra.Command{
 			if err != nil {
 				output.Die(err.Error())
 			}
-			if err := vless.WriteNewConfig(cfg.XrayConfig, parsed); err != nil {
+			target, _, rerr := xrayconf.ResolveConfigTarget(cfg.XrayConfig, xrayConfigRoots(cfg))
+			if rerr != nil {
+				output.Die(rerr.Error())
+			}
+			if err := vless.WriteNewConfig(target, parsed); err != nil {
 				output.Die(err.Error())
 			}
 			output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))
@@ -460,7 +465,11 @@ var proxyInitCmd = &cobra.Command{
 			if parsed.AllowInsecure && parsed.PinSHA256 == "" {
 				output.Warn("hysteria2 'insecure' is unsupported on xray-core v26.2.6; ignoring. For a self-signed endpoint, pin the cert: add ?pinSHA256=<sha256> (run 'ws proxy doctor' to print it).")
 			}
-			if err := hysteria2.WriteNewConfig(cfg.XrayConfig, parsed); err != nil {
+			target, _, rerr := xrayconf.ResolveConfigTarget(cfg.XrayConfig, xrayConfigRoots(cfg))
+			if rerr != nil {
+				output.Die(rerr.Error())
+			}
+			if err := hysteria2.WriteNewConfig(target, parsed); err != nil {
 				output.Die(err.Error())
 			}
 			output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/rtxnik/workspace-cli/internal/config"
 )
 
 // assertLogLevel fails the test unless the file at path is valid JSON whose
@@ -77,7 +79,8 @@ func TestSetXrayLogLevelPreservesSymlink(t *testing.T) {
 		t.Fatalf("seed symlink: %v", err)
 	}
 
-	if err := setXrayLogLevel(linkPath, "debug"); err != nil {
+	cfg := config.Config{XrayConfig: linkPath, XrayProfilesDir: profilesDir}
+	if err := setXrayLogLevel(cfg, "debug"); err != nil {
 		t.Fatalf("setXrayLogLevel: %v", err)
 	}
 
@@ -121,7 +124,8 @@ func TestSetXrayLogLevelLegacyRegularFile(t *testing.T) {
 	if err := os.WriteFile(cfgPath, []byte(`{}`), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := setXrayLogLevel(cfgPath, "debug"); err != nil {
+	cfg := config.Config{XrayConfig: cfgPath, XrayProfilesDir: filepath.Join(root, "profiles")}
+	if err := setXrayLogLevel(cfg, "debug"); err != nil {
 		t.Fatalf("setXrayLogLevel: %v", err)
 	}
 	info, err := os.Lstat(cfgPath)
@@ -139,18 +143,44 @@ func TestSetXrayLogLevelLegacyRegularFile(t *testing.T) {
 // both surface an error and never silently create a config.
 func TestSetXrayLogLevelMissingConfig(t *testing.T) {
 	root := t.TempDir()
-	if err := setXrayLogLevel(filepath.Join(root, "config.json"), "debug"); err == nil {
+	missingCfg := config.Config{XrayConfig: filepath.Join(root, "config.json"), XrayProfilesDir: filepath.Join(root, "profiles")}
+	if err := setXrayLogLevel(missingCfg, "debug"); err == nil {
 		t.Fatal("expected error for missing config, got nil")
 	}
 	link := filepath.Join(root, "dangling.json")
 	if err := os.Symlink(filepath.Join("profiles", "gone.json"), link); err != nil {
 		t.Fatalf("seed symlink: %v", err)
 	}
-	if err := setXrayLogLevel(link, "debug"); err == nil {
+	danglingCfg := config.Config{XrayConfig: link, XrayProfilesDir: filepath.Join(root, "profiles")}
+	if err := setXrayLogLevel(danglingCfg, "debug"); err == nil {
 		t.Fatal("expected error for dangling symlink, got nil")
 	}
 	// The failed calls created nothing.
 	assertOnlyEntries(t, root, "dangling.json")
+}
+
+// TestSetXrayLogLevelRefusesEscapingSymlink pins containment: a config symlink
+// that resolves OUTSIDE the config directories must be refused, and the outside
+// file must be left untouched.
+func TestSetXrayLogLevelRefusesEscapingSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim.json")
+	if err := os.WriteFile(victim, []byte(`{"keep":true}`), 0o600); err != nil {
+		t.Fatalf("seed victim: %v", err)
+	}
+	link := filepath.Join(root, "config.json")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatalf("seed symlink: %v", err)
+	}
+	cfg := config.Config{XrayConfig: link, XrayProfilesDir: filepath.Join(root, "profiles")}
+
+	if err := setXrayLogLevel(cfg, "debug"); err == nil {
+		t.Fatal("expected containment refusal for a symlink escaping the config dirs")
+	}
+	if got, _ := os.ReadFile(victim); string(got) != `{"keep":true}` {
+		t.Errorf("escaping symlink target was written: %q", got)
+	}
 }
 
 // swapXrayReleaseURL points fetchLatestXrayVersion at a test server and

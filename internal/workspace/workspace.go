@@ -143,7 +143,10 @@ func readProfile(cfg config.Config, name string) string {
 		return ""
 	}
 	// Strip JSONC comments for parsing.
-	cleaned := stripJSONCComments(string(data))
+	cleaned, err := stripJSONCComments(string(data))
+	if err != nil {
+		return ""
+	}
 	var dc struct {
 		ContainerEnv map[string]string `json:"containerEnv"`
 	}
@@ -165,7 +168,10 @@ func hasProxyNetwork(cfg config.Config, name string) bool {
 	if err != nil {
 		return false
 	}
-	cleaned := stripJSONCComments(string(data))
+	cleaned, err := stripJSONCComments(string(data))
+	if err != nil {
+		return false
+	}
 	var dc struct {
 		RunArgs []string `json:"runArgs"`
 	}
@@ -180,27 +186,80 @@ func hasProxyNetwork(cfg config.Config, name string) bool {
 	return false
 }
 
-// stripJSONCComments removes single-line // comments from JSONC.
-func stripJSONCComments(s string) string {
+// stripJSONCComments converts a JSONC document to strict JSON: it removes // and
+// /* */ comments and elides a trailing comma before } or ], while preserving
+// every byte inside a JSON string literal verbatim. String detection tracks the
+// parity of the backslash run, so an escaped quote (\") and an escaped
+// backslash pair (\\) are handled correctly. It returns an error for an
+// unterminated block comment, so a malformed document is never silently
+// rewritten into valid JSON.
+func stripJSONCComments(s string) (string, error) {
 	var b strings.Builder
+	b.Grow(len(s))
 	inString := false
+	pendingComma := false
 	for i := 0; i < len(s); i++ {
-		if s[i] == '"' && (i == 0 || s[i-1] != '\\') {
-			inString = !inString
+		c := s[i]
+		if inString {
+			b.WriteByte(c)
+			if c == '\\' { // emit the escaped byte verbatim; it cannot end the string
+				if i+1 < len(s) {
+					b.WriteByte(s[i+1])
+					i++
+				}
+				continue
+			}
+			if c == '"' {
+				inString = false
+			}
+			continue
 		}
-		if !inString && i+1 < len(s) && s[i] == '/' && s[i+1] == '/' {
-			// Skip to end of line.
+		switch {
+		case c == '"':
+			if pendingComma {
+				b.WriteByte(',')
+				pendingComma = false
+			}
+			b.WriteByte(c)
+			inString = true
+		case c == '/' && i+1 < len(s) && s[i+1] == '/':
 			for i < len(s) && s[i] != '\n' {
 				i++
 			}
 			if i < len(s) {
 				b.WriteByte('\n')
 			}
-			continue
+		case c == '/' && i+1 < len(s) && s[i+1] == '*':
+			i += 2
+			for i+1 < len(s) && (s[i] != '*' || s[i+1] != '/') {
+				i++
+			}
+			if i+1 >= len(s) {
+				return "", fmt.Errorf("unterminated block comment")
+			}
+			i++ // consume the '*'; the loop's i++ consumes the '/'
+		case c == ',':
+			pendingComma = true // deferred; dropped if the next token closes a container
+		case c == '}' || c == ']':
+			pendingComma = false
+			b.WriteByte(c)
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			b.WriteByte(c) // preserve whitespace; a pending comma stays pending
+		default:
+			if pendingComma {
+				b.WriteByte(',')
+				pendingComma = false
+			}
+			b.WriteByte(c)
 		}
-		b.WriteByte(s[i])
 	}
-	return b.String()
+	if pendingComma {
+		// A comma still pending at end of input was NOT before a } or ]; write it
+		// back so malformed input (e.g. `{"a":1},`) stays invalid JSON rather than
+		// being silently rewritten into a valid document.
+		b.WriteByte(',')
+	}
+	return b.String(), nil
 }
 
 // parseDevpodStatus extracts the status from devpod status output.
@@ -231,7 +290,10 @@ func patchProxyNetwork(dcPath, proxyNetwork, proxyIP string) error {
 		return err
 	}
 
-	cleaned := stripJSONCComments(string(data))
+	cleaned, err := stripJSONCComments(string(data))
+	if err != nil {
+		return err
+	}
 	var dc map[string]any
 	if err := json.Unmarshal([]byte(cleaned), &dc); err != nil {
 		return err
