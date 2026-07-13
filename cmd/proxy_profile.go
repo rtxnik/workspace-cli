@@ -194,12 +194,10 @@ var profileRmCmd = &cobra.Command{
 		cfg := config.Load()
 		name := args[0]
 		force, _ := cmd.Flags().GetBool("force")
-		if !force {
-			desc := fmt.Sprintf("Profile file %s will be deleted.", filepath.Join(cfg.XrayProfilesDir, name+".json"))
-			if !output.Confirm(fmt.Sprintf("Remove profile %q?", name), desc) {
-				output.Info("Aborted")
-				return
-			}
+		desc := fmt.Sprintf("Profile file %s will be deleted.", filepath.Join(cfg.XrayProfilesDir, name+".json"))
+		if !confirmDestructiveFn(force, fmt.Sprintf("Remove profile %q?", name), desc) {
+			output.Info("Aborted")
+			return
 		}
 		if err := xray.RemoveProfile(cfg, name); err != nil {
 			output.Die(err.Error())

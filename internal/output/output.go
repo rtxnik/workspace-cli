@@ -55,3 +55,15 @@ func Confirm(title string, description string) bool {
 	}
 	return confirmed
 }
+
+// ConfirmDestructive gates a destructive action behind an interactive
+// confirmation unless force is set. When force is true it returns true
+// immediately without prompting; otherwise it defers to Confirm (default No).
+// A false return means the operator declined — callers treat that as a
+// successful no-op, not an error.
+func ConfirmDestructive(force bool, title, description string) bool {
+	if force {
+		return true
+	}
+	return Confirm(title, description)
+}

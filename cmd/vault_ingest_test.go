@@ -8,9 +8,10 @@ package cmd
 //   - TestVaultIngestDedupBlockedNoForce — mock returns DEDUP_BLOCKED envelope;
 //     assert exit 6
 //   - TestVaultIngestDedupForceRequiresYes — --dedup-force without --yes
-//     triggers Confirm gate; when Confirm returns false → exit 1 + Aborted,
+//     triggers Confirm gate; when Confirm returns false → exit 0 + Aborted,
 //     create_note NOT called (operator-controlled-mutation discipline per
-//     Phase 22 D-09/D-10 + memory feedback_no_auto_state_mutation)
+//     Phase 22 D-09/D-10 + memory feedback_no_auto_state_mutation; declining
+//     is a safe operator choice, not an error)
 //   - TestVaultIngestDedupForceWithYes — --dedup-force --yes skips Confirm;
 //     create_note called with ConfirmDedupOverride=true + Reason populated
 //   - TestVaultIngestDedupForceRequiresReason — --dedup-force without --reason
@@ -191,22 +192,13 @@ func TestVaultIngestDedupForceRequiresYes(t *testing.T) {
 		resetVaultIngestFlags(t)
 	})
 
-	err := rootCmd.Execute()
-	if err == nil {
-		t.Fatal("expected non-zero exit when operator declines Confirm prompt")
-	}
-	var cerr *cliErrorWithExit
-	if !errors.As(err, &cerr) {
-		t.Fatalf("expected *cliErrorWithExit; got %T", err)
-	}
-	if cerr.code != 1 {
-		t.Errorf("expected exit 1 on Aborted; got %d", cerr.code)
+	var err error
+	quietStderr(t, func() { err = rootCmd.Execute() })
+	if err != nil {
+		t.Fatalf("declining the override must exit 0 (decline is not an error); got %v", err)
 	}
 	if callCount != 0 {
-		t.Errorf("create_note must NOT be called when Confirm denies (got %d calls)", callCount)
-	}
-	if !strings.Contains(strings.ToLower(cerr.msg+errOut.String()), "abort") {
-		t.Errorf("expected 'aborted' in diagnostic; got msg=%q stderr=%q", cerr.msg, errOut.String())
+		t.Errorf("create_note must NOT be called when the operator declines (got %d calls)", callCount)
 	}
 }
 

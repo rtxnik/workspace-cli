@@ -32,3 +32,11 @@ func TestValidateName(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateName_RejectsUnsafeNames(t *testing.T) {
+	for _, name := range []string{"", "a", "..", "../x", "a/b", "-foo", "--foo", "foo-", "UPPER"} {
+		if err := ValidateName(name); err == nil {
+			t.Errorf("ValidateName(%q) = nil; expected rejection", name)
+		}
+	}
+}
