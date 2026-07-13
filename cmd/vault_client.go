@@ -11,10 +11,33 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
 )
+
+// signalContext derives a context cancelled on SIGINT (Ctrl-C) or SIGTERM, so
+// an in-flight MCP roundtrip (the library's CallTool honors ctx) aborts
+// promptly instead of hanging until the subprocess answers.
+//
+// It is installed ONLY around MCP client work — never process-wide at the root
+// command. A global signal.NotifyContext suppresses the default terminate for
+// every command, which regresses Ctrl-C on the by-design streaming leaves
+// (`ws logs -f`, interactive `ws ssh`): their child shares the foreground
+// process group and dies on the terminal's signal, and the surviving parent
+// would fall through to its error-fallback instead of exiting. Scoping the
+// binding to the MCP call sites yields interruptible MCP calls with zero blast
+// radius on the streaming commands.
+//
+// This coexists with mcp.InstallSignalForward, which independently forwards the
+// signal to the subprocess group: on Ctrl-C both fire — this cancels the
+// Go-side wait, that tears down the child. The extra group-signal is a harmless
+// no-op on an already-terminating group. Defer the returned stop func.
+func signalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+}
 
 // vaultErrExit maps an MCP envelope error to the leaf-level cliErrorWithExit,
 // preserving the "<leaf>: <code>: <message>" convention every vault leaf uses
@@ -58,6 +81,10 @@ func vaultRenderResult(cmd *cobra.Command, leaf string, env *mcp.Envelope, err e
 // bulk-load did — this is the fix). Generic over the collector's return type T.
 func withVaultClient[T any](ctx context.Context, version string, fn func(context.Context, *mcp.Client) (T, error)) (T, error) {
 	var zero T
+	// Make the MCP roundtrip cancellable by Ctrl-C (see signalContext).
+	ctx, stopSig := signalContext(ctx)
+	defer stopSig()
+
 	cl, err := mcp.NewClient(ctx, mcp.Options{
 		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
 		Version:         version,

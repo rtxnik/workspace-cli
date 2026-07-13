@@ -74,11 +74,21 @@ var vaultStatusRunFn = runVaultStatus
 // runVaultStatus is the production gatherer: spawn MCP client, run all 6
 // signal collectors, return the assembled report.
 func runVaultStatus(ctx context.Context, root *cobra.Command) (*statusReport, error) {
+	// Make the status roundtrips + the 8 verify shell-outs cancellable by
+	// Ctrl-C (see signalContext in vault_client.go).
+	ctx, stopSig := signalContext(ctx)
+	defer stopSig()
+
 	cl, err := mcp.NewClient(ctx, mcp.Options{
 		VaultAIRepoRoot: os.Getenv("VAULT_AI_REPO_ROOT"),
 		Version:         root.Version,
 	})
 	if err != nil {
+		// If the operator interrupted the spawn, abort cleanly instead of
+		// reporting a spurious MCP-down verdict.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		// MCP unreachable — return a degraded report with signal-1 red.
 		// Other signals can't be collected without the client; surface as
 		// "skipped (MCP down)" so the operator sees what's missing.
@@ -115,6 +125,13 @@ func runVaultStatus(ctx context.Context, root *cobra.Command) (*statusReport, er
 		costSignal,
 		dedupSignal,
 		drSignal,
+	}
+
+	// If the operator interrupted mid-collection, the cancelled ctx turned the
+	// MCP/shell-out signals into spurious failures — abort with the cancellation
+	// rather than emit a false-positive RED health verdict.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	return assembleReport(signals), nil
 }

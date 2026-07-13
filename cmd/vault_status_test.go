@@ -409,3 +409,25 @@ func TestResolveVaultAIRepoRoot(t *testing.T) {
 		t.Errorf("expected fallback to ~/projects/vault-ai or '.'; got %q", got)
 	}
 }
+
+// TestRunVaultStatus_AbortsOnCancelledContext: an interrupted status run must
+// bubble up the cancellation rather than emit a spurious health verdict. With
+// no VAULT_AI_TOKEN the spawn fails, but a cancelled ctx must still
+// short-circuit to context.Canceled (not a degraded mcpDownReport).
+func TestRunVaultStatus_AbortsOnCancelledContext(t *testing.T) {
+	// Force the spawn to fail fast at the token check regardless of the ambient
+	// environment, so the test exercises the cancellation short-circuit rather
+	// than a live subprocess spawn.
+	t.Setenv("VAULT_AI_TOKEN", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	root := &cobra.Command{}
+	root.Version = "test"
+
+	_, err := runVaultStatus(ctx, root)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled status run: err = %v, want context.Canceled", err)
+	}
+}
