@@ -405,19 +405,8 @@ func assembleReport(signals []statusSignal) *statusReport {
 	}
 	return &statusReport{
 		OverallBand: worst,
-		ExitCode:    bandExitCode(worst),
+		ExitCode:    mcp.HealthBandExitCode(string(worst)),
 		Signals:     signals,
-	}
-}
-
-func bandExitCode(b statusBand) int {
-	switch b {
-	case bandGreen:
-		return 0
-	case bandYellow:
-		return 1
-	default:
-		return 2
 	}
 }
 

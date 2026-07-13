@@ -16,6 +16,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -36,24 +37,35 @@ type predictResult struct {
 // unit tests overwrite this to inject mocked MCP responses.
 var predictMCPCallFn = predictMCPCallImpl
 
+// predictCallToolFn is a package-level seam so unit tests can exercise the
+// envelope-handling branch without spawning a live MCP subprocess.
+var predictCallToolFn = callVaultTool
+
 // predictMCPCallImpl is the production implementation that calls the
 // predict_bulk_load MCP tool via the stdio transport.
 func predictMCPCallImpl(count int) (*predictResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	env, err := callVaultTool(ctx, "ws-vault-predict-bulk-load", "predict_bulk_load", map[string]any{
+	env, err := predictCallToolFn(ctx, "ws-vault-predict-bulk-load", "predict_bulk_load", map[string]any{
 		"count": count,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("MCP call predict_bulk_load: %w", err)
 	}
+	if env == nil {
+		return nil, fmt.Errorf("MCP call predict_bulk_load: nil envelope")
+	}
 	if !env.OK {
-		msg := "unknown error"
+		// Preserve the envelope's error code through the documented 0-7 exit
+		// mapping instead of collapsing every failure to a bare exit 1.
 		if env.Error != nil {
-			msg = fmt.Sprintf("%s: %s", env.Error.Code, env.Error.Message)
+			return nil, vaultErrExit("predict-bulk-load", env.Error)
 		}
-		return nil, fmt.Errorf("MCP error: %s", msg)
+		return nil, &cliErrorWithExit{
+			code: env.ExitCode(),
+			msg:  "predict-bulk-load: backend reported failure without error details",
+		}
 	}
 	result := &predictResult{}
 	if err := json.Unmarshal(env.Data, result); err != nil {
@@ -81,6 +93,14 @@ func newVaultDoctorPredictCmd() *cobra.Command {
 
 			result, err := predictMCPCallFn(count)
 			if err != nil {
+				// An envelope error already carries a leaf-prefixed
+				// *cliErrorWithExit with the mapped exit code; return it
+				// unwrapped so Execute() routes the code and the leaf name is
+				// not duplicated. Transport/parse errors are plain — prefix them.
+				var coded *cliErrorWithExit
+				if errors.As(err, &coded) {
+					return err
+				}
 				return fmt.Errorf("predict-bulk-load: %w", err)
 			}
 
