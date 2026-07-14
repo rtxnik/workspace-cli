@@ -3,11 +3,38 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 )
+
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// everything written to it. Needed because output.Info/Die write directly to
+// os.Stderr rather than through the cobra command's configured error writer.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = orig })
+
+	fn()
+
+	os.Stderr = orig
+	_ = w.Close()
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("drain stderr pipe: %v", err)
+	}
+	_ = r.Close()
+	return buf.String()
+}
 
 func TestProxyRecreateHappyPath(t *testing.T) {
 	orig := proxyRecreateCmdFn
@@ -99,8 +126,8 @@ func TestProxyRecreateRegistered(t *testing.T) {
 }
 
 func TestProxyRecreateWarnGate_DeclineAborts(t *testing.T) {
-	// Connected workspaces present + operator declines -> recreate must abort
-	// with errAborted and must NOT touch the container.
+	// Connected workspaces present + operator declines -> recreate exits
+	// cleanly (nil error, not errAborted) and must NOT touch the container.
 	origConn := proxyConnectedContainersFn
 	origConfirm := warnConfirmFn
 	origRecreate := proxyRecreateCmdFn
@@ -132,12 +159,18 @@ func TestProxyRecreateWarnGate_DeclineAborts(t *testing.T) {
 		cmd.SetErr(nil)
 	})
 
-	err := cmd.Execute()
-	if !errors.Is(err, errAborted) {
-		t.Fatalf("expected errAborted on operator decline; got %v (stderr=%q)", err, errOut.String())
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+	if execErr != nil {
+		t.Fatalf("declined confirm must exit cleanly with nil error; got %v (cmd stderr=%q)", execErr, errOut.String())
 	}
 	if called != 0 {
 		t.Errorf("recreate must not run after a decline; got called=%d", called)
+	}
+	if !strings.Contains(stderr, "Aborted") {
+		t.Errorf("expected 'Aborted' to be printed on decline; got %q", stderr)
 	}
 }
 

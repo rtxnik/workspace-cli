@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -29,6 +31,10 @@ comes up.`,
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
 			if err := warnProxyConnected(cfg); err != nil {
+				if errors.Is(err, errAborted) {
+					output.Info("Aborted")
+					return nil
+				}
 				cmd.SilenceUsage = true
 				return err
 			}
