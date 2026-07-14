@@ -217,7 +217,7 @@ func TestProxyRecreate_CommitSurfacesRouteFixFailures(t *testing.T) {
 	defer withMock(mock)()
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 	restore, _ := withFixRouteExec(func(string, string) error { return errors.New("exit status 1") })
@@ -249,7 +249,7 @@ func TestProxyRecreate_RollbackSurfacesRouteFixFailures(t *testing.T) {
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
 	calls := 0
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		calls++
 		if calls == 1 {
 			return false, false, errors.New("proxy container is unhealthy") // NEW unhealthy

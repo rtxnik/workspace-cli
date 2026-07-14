@@ -73,7 +73,7 @@ var proxyDownCmd = &cobra.Command{
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			warnProxyConnected(cfg)
+			warnProxyConnectedRun(cfg)
 		}
 
 		if err := output.RunWithSpinner("Stopping proxy", func() error {
@@ -224,7 +224,7 @@ var proxyRebuildCmd = &cobra.Command{
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			warnProxyConnected(cfg)
+			warnProxyConnectedRun(cfg)
 		}
 		allowDrift, _ := cmd.Flags().GetBool("allow-drift")
 
@@ -334,6 +334,10 @@ var proxyDebugCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			warnProxyConnectedRun(cfg)
+		}
 		mode := args[0]
 
 		var level string
@@ -369,6 +373,10 @@ var proxyUpdateCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			warnProxyConnectedRun(cfg)
+		}
 
 		version := ""
 		if len(args) > 0 {
@@ -480,18 +488,53 @@ var proxyInitCmd = &cobra.Command{
 	},
 }
 
-// warnProxyConnected checks for workspaces sharing the proxy network
-// and asks for confirmation before proceeding. Exits if user declines.
-func warnProxyConnected(cfg config.Config) {
-	names, err := docker.ProxyConnectedContainers(cfg)
-	if err != nil || len(names) == 0 {
-		return
+// warnConfirmFn is the confirmation seam: production wires to output.Confirm;
+// tests override it to decide the operator's answer without a TTY. The
+// connected-workspace enumeration reuses the package's existing
+// proxyConnectedContainersFn seam (declared in proxy_doctor.go) — it is NOT
+// redeclared here.
+var warnConfirmFn = output.Confirm
+
+// errAborted signals the operator declined a mutation at the connected-workspace
+// prompt. RunE mutators return it verbatim so cobra keeps a clean exit (no usage
+// dump); Run mutators translate it back to the interactive exit(0) no-op.
+var errAborted = errors.New("aborted by user")
+
+// warnProxyConnected gates a mutating proxy operation on operator confirmation
+// when workspaces still share the proxy network.
+//
+//   - genuine enumeration error -> fail-closed: return the error so the mutator
+//     aborts rather than silently proceeding past an unknown blast radius.
+//   - no connected workspaces (nil/empty) -> nil: proceed, no prompt.
+//   - connected workspaces + operator declines -> errAborted.
+//   - connected workspaces + operator confirms -> nil: proceed.
+func warnProxyConnected(cfg config.Config) error {
+	names, err := proxyConnectedContainersFn(cfg)
+	if err != nil {
+		return fmt.Errorf("cannot determine connected workspaces: %w", err)
+	}
+	if len(names) == 0 {
+		return nil
 	}
 
 	desc := fmt.Sprintf("Active workspaces: %s\nThis will interrupt network for these workspaces.", strings.Join(names, ", "))
-	if !output.Confirm("Continue?", desc) {
-		output.Info("Aborted")
-		os.Exit(0)
+	if !warnConfirmFn("Continue?", desc) {
+		return errAborted
+	}
+	return nil
+}
+
+// warnProxyConnectedRun adapts warnProxyConnected to the cobra Run (non-error)
+// mutators: an operator decline is a clean exit(0) no-op, a genuine enumeration
+// failure is fail-closed via output.Die (non-zero). RunE mutators call
+// warnProxyConnected directly and return the sentinel instead.
+func warnProxyConnectedRun(cfg config.Config) {
+	if err := warnProxyConnected(cfg); err != nil {
+		if errors.Is(err, errAborted) {
+			output.Info("Aborted")
+			os.Exit(0)
+		}
+		output.Die(err.Error())
 	}
 }
 
@@ -500,6 +543,10 @@ func init() {
 	proxyDownCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 	proxyRebuildCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 	proxyRebuildCmd.Flags().Bool("allow-drift", false, "Build even if the proxy recipe differs from the pinned known-good recipe")
+	proxyRestartCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
+	proxyRecreateCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
+	proxyUpdateCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
+	proxyDebugCmd.Flags().BoolP("force", "f", false, "Skip confirmation for connected workspaces")
 	proxyCmd.AddCommand(proxyUpCmd)
 	proxyCmd.AddCommand(proxyDownCmd)
 	proxyCmd.AddCommand(proxyStatusCmd)

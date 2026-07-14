@@ -394,10 +394,16 @@ func checkNetworkSubnet(cfg config.Config) CheckOutcome {
 // checkDefaultRoute: HARD. At least one dev-container on the proxy network must
 // route its default via the proxy IP (cfg.ProxyIP). When no workspace is
 // connected this is informational (nothing to route yet) rather than a failure.
-// The connected-container enumeration is shared with checkWorkspaceV6FailClosed.
+// An enumeration failure fails closed -- an unreadable proxy network must not be
+// mistaken for an empty one. The connected-container enumeration is shared with
+// checkWorkspaceV6FailClosed.
 func checkDefaultRoute(cfg config.Config, cl containerList) CheckOutcome {
 	if cl.err != nil {
-		return CheckOutcome{OK: false, Fix: "Could not list connected workspaces: " + cl.err.Error()}
+		return CheckOutcome{
+			OK:     false,
+			Detail: fmt.Sprintf("could not enumerate connected workspaces: %v", cl.err),
+			Fix:    "Ensure the Docker daemon is reachable, then re-run: ws proxy doctor",
+		}
 	}
 	containers := cl.names
 	if len(containers) == 0 {
@@ -549,12 +555,17 @@ func v6FailClosedOutcome(names []string, verdicts []docker.WorkspaceV6Verdict) C
 // checkWorkspaceV6FailClosed asserts every workspace container on the proxy
 // network is IPv6 fail-closed (SEC2-04): the v4 TPROXY capture does not cover
 // IPv6, so a workspace with a global v6 default route can egress v6 directly
-// around the proxy. The connected-container enumeration is shared with
+// around the proxy. An enumeration failure fails closed rather than reporting a
+// green "nothing connected". The connected-container enumeration is shared with
 // checkDefaultRoute; the per-container v6 probe stays separate. The aggregation
 // is pure (v6FailClosedOutcome).
 func checkWorkspaceV6FailClosed(cl containerList) CheckOutcome {
 	if cl.err != nil {
-		return CheckOutcome{OK: false, Fix: "Could not list connected workspaces: " + cl.err.Error()}
+		return CheckOutcome{
+			OK:     false,
+			Detail: fmt.Sprintf("could not enumerate connected workspaces: %v", cl.err),
+			Fix:    "Ensure the Docker daemon is reachable, then re-run: ws proxy doctor",
+		}
 	}
 	names := cl.names
 	verdicts := make([]docker.WorkspaceV6Verdict, len(names))

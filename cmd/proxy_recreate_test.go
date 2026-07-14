@@ -3,15 +3,45 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 )
 
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// everything written to it. Needed because output.Info/Die write directly to
+// os.Stderr rather than through the cobra command's configured error writer.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = orig })
+
+	fn()
+
+	os.Stderr = orig
+	_ = w.Close()
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("drain stderr pipe: %v", err)
+	}
+	_ = r.Close()
+	return buf.String()
+}
+
 func TestProxyRecreateHappyPath(t *testing.T) {
 	orig := proxyRecreateCmdFn
 	t.Cleanup(func() { proxyRecreateCmdFn = orig })
+	origConn := proxyConnectedContainersFn
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { proxyConnectedContainersFn = origConn })
 	var called int
 	proxyRecreateCmdFn = func(_ config.Config) error {
 		called++
@@ -43,6 +73,9 @@ func TestProxyRecreateHappyPath(t *testing.T) {
 func TestProxyRecreateFailure(t *testing.T) {
 	orig := proxyRecreateCmdFn
 	t.Cleanup(func() { proxyRecreateCmdFn = orig })
+	origConn := proxyConnectedContainersFn
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { proxyConnectedContainersFn = origConn })
 	proxyRecreateCmdFn = func(_ config.Config) error {
 		return errors.New("docker daemon unreachable")
 	}
@@ -89,5 +122,145 @@ func TestProxyRecreateRegistered(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("`ws proxy recreate` not registered as a subcommand of `ws proxy`")
+	}
+}
+
+func TestProxyRecreateWarnGate_DeclineAborts(t *testing.T) {
+	// Connected workspaces present + operator declines -> recreate exits
+	// cleanly (nil error, not errAborted) and must NOT touch the container.
+	origConn := proxyConnectedContainersFn
+	origConfirm := warnConfirmFn
+	origRecreate := proxyRecreateCmdFn
+	t.Cleanup(func() {
+		proxyConnectedContainersFn = origConn
+		warnConfirmFn = origConfirm
+		proxyRecreateCmdFn = origRecreate
+		_ = proxyRecreateCmd.Flags().Set("force", "false")
+	})
+
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
+		return []string{"ws-alpha"}, nil
+	}
+	warnConfirmFn = func(_, _ string) bool { return false } // operator declines
+	var called int
+	proxyRecreateCmdFn = func(_ config.Config) error { called++; return nil }
+	if err := proxyRecreateCmd.Flags().Set("force", "false"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := rootCmd
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"proxy", "recreate"})
+	t.Cleanup(func() {
+		cmd.SetArgs(nil)
+		cmd.SetOut(nil)
+		cmd.SetErr(nil)
+	})
+
+	var execErr error
+	stderr := captureStderr(t, func() {
+		execErr = cmd.Execute()
+	})
+	if execErr != nil {
+		t.Fatalf("declined confirm must exit cleanly with nil error; got %v (cmd stderr=%q)", execErr, errOut.String())
+	}
+	if called != 0 {
+		t.Errorf("recreate must not run after a decline; got called=%d", called)
+	}
+	if !strings.Contains(stderr, "Aborted") {
+		t.Errorf("expected 'Aborted' to be printed on decline; got %q", stderr)
+	}
+}
+
+func TestProxyRecreateWarnGate_ForceSkipsPrompt(t *testing.T) {
+	// --force proceeds even with connected workspaces, without prompting.
+	origConn := proxyConnectedContainersFn
+	origConfirm := warnConfirmFn
+	origRecreate := proxyRecreateCmdFn
+	t.Cleanup(func() {
+		proxyConnectedContainersFn = origConn
+		warnConfirmFn = origConfirm
+		proxyRecreateCmdFn = origRecreate
+		_ = proxyRecreateCmd.Flags().Set("force", "false")
+	})
+
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
+		return []string{"ws-alpha"}, nil
+	}
+	var confirmCalls int
+	warnConfirmFn = func(_, _ string) bool { confirmCalls++; return false }
+	var called int
+	proxyRecreateCmdFn = func(_ config.Config) error { called++; return nil }
+
+	cmd := rootCmd
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"proxy", "recreate", "--force"})
+	t.Cleanup(func() {
+		cmd.SetArgs(nil)
+		cmd.SetOut(nil)
+		cmd.SetErr(nil)
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("--force must proceed without error; got %v (stderr=%q)", err, errOut.String())
+	}
+	if confirmCalls != 0 {
+		t.Errorf("--force must not prompt; confirm called %d times", confirmCalls)
+	}
+	if called != 1 {
+		t.Errorf("expected recreate to run once under --force; got %d", called)
+	}
+}
+
+func TestProxyRecreateWarnGate_EnumErrorFailsClosed(t *testing.T) {
+	// A genuine enumeration failure must fail closed: recreate aborts with the
+	// error and does NOT silently proceed, nor report a user abort.
+	origConn := proxyConnectedContainersFn
+	origConfirm := warnConfirmFn
+	origRecreate := proxyRecreateCmdFn
+	t.Cleanup(func() {
+		proxyConnectedContainersFn = origConn
+		warnConfirmFn = origConfirm
+		proxyRecreateCmdFn = origRecreate
+		_ = proxyRecreateCmd.Flags().Set("force", "false")
+	})
+
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
+		return nil, errors.New("docker daemon unreachable")
+	}
+	warnConfirmFn = func(_, _ string) bool { return true } // would confirm, but must never be asked
+	var called int
+	proxyRecreateCmdFn = func(_ config.Config) error { called++; return nil }
+	if err := proxyRecreateCmd.Flags().Set("force", "false"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := rootCmd
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"proxy", "recreate"})
+	t.Cleanup(func() {
+		cmd.SetArgs(nil)
+		cmd.SetOut(nil)
+		cmd.SetErr(nil)
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("genuine enumeration error must fail closed (non-nil error)")
+	}
+	if errors.Is(err, errAborted) {
+		t.Fatalf("enumeration failure must not be reported as a user abort; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "connected workspaces") {
+		t.Errorf("expected fail-closed error to mention connected-workspace enumeration; got %v", err)
+	}
+	if called != 0 {
+		t.Errorf("recreate must not run when enumeration failed; got called=%d", called)
 	}
 }

@@ -37,7 +37,7 @@ func writeTempXrayConfig(t *testing.T) string {
 	return p
 }
 
-func swapVerify(fn func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error)) func() {
+func swapVerify(fn func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error)) func() {
 	orig := verifyHealthyFn
 	verifyHealthyFn = fn
 	return func() { verifyHealthyFn = orig }
@@ -71,7 +71,7 @@ func TestVerifyHealthy_Healthy(t *testing.T) {
 			State: &types.ContainerState{Running: true, Health: &types.Health{Status: "healthy"}}},
 			Config: &container.Config{}}, nil
 	}}
-	ok, weak, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout)
+	ok, weak, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
 	if err != nil || !ok || weak {
 		t.Fatalf("want ok=true weak=false err=nil, got ok=%v weak=%v err=%v", ok, weak, err)
 	}
@@ -84,7 +84,7 @@ func TestVerifyHealthy_Unhealthy(t *testing.T) {
 			State: &types.ContainerState{Running: true, Health: &types.Health{Status: "unhealthy"}}},
 			Config: &container.Config{}}, nil
 	}}
-	ok, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout)
+	ok, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
 	if ok || err == nil {
 		t.Fatalf("want unhealthy failure, got ok=%v err=%v", ok, err)
 	}
@@ -98,7 +98,7 @@ func TestVerifyHealthy_Timeout(t *testing.T) {
 			Config: &container.Config{}}, nil
 	}}
 	start := time.Now()
-	ok, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout)
+	ok, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
 	if ok || err == nil {
 		t.Fatalf("want timeout failure, got ok=%v err=%v", ok, err)
 	}
@@ -114,7 +114,7 @@ func TestVerifyHealthy_NilHealthIsWeak(t *testing.T) {
 			State: &types.ContainerState{Running: true, Health: nil}},
 			Config: &container.Config{}}, nil
 	}}
-	ok, weak, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout)
+	ok, weak, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
 	if err != nil || !ok || !weak {
 		t.Fatalf("want ok=true weak=true err=nil, got ok=%v weak=%v err=%v", ok, weak, err)
 	}
@@ -128,7 +128,7 @@ func TestVerifyHealthy_FastExitWhenNotRunning(t *testing.T) {
 			Config: &container.Config{}}, nil
 	}}
 	start := time.Now()
-	ok, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout)
+	ok, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
 	if ok || err == nil {
 		t.Fatalf("want fast-exit failure, got ok=%v err=%v", ok, err)
 	}
@@ -142,8 +142,25 @@ func TestVerifyHealthy_InspectError(t *testing.T) {
 	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
 		return types.ContainerJSON{}, errors.New("daemon down")
 	}}
-	if _, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout); err == nil {
+	if _, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace); err == nil {
 		t.Fatal("want inspect error propagated")
+	}
+}
+
+// TestVerifyHealthy_NilStateIsOwnedError guards a malformed/partial inspect
+// response (State == nil) -- it must return an owned error, not panic on a
+// nil-pointer dereference.
+func TestVerifyHealthy_NilStateIsOwnedError(t *testing.T) {
+	shrinkHealthTimers(t)
+	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+		return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{State: nil}}, nil
+	}}
+	_, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
+	if err == nil {
+		t.Fatal("want a non-nil error for a nil State, not a panic")
+	}
+	if !strings.Contains(err.Error(), "no state") {
+		t.Fatalf("expected error to mention the missing state, got: %v", err)
 	}
 }
 
@@ -192,7 +209,7 @@ func TestProxyRecreate_HappyCommitOrderAndStaticIP(t *testing.T) {
 	defer withMock(mock)()
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 
@@ -314,7 +331,7 @@ func TestProxyRecreate_ColdCreateNoRename(t *testing.T) {
 	defer withMock(mock)()
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 
@@ -360,7 +377,7 @@ func TestProxyRecreate_WeakHealthCommitsWithBackupDropped(t *testing.T) {
 	defer withMock(mock)()
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, true, nil
 	})()
 
@@ -406,7 +423,7 @@ func TestProxyRecreate_CommitBestEffort_RemoveBackupFails(t *testing.T) {
 	defer withMock(mock)()
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 
@@ -442,7 +459,7 @@ func TestProxyRecreate_StaleBackupCaseA_RemovesGarbage(t *testing.T) {
 	defer withMock(mock)()
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 
@@ -555,7 +572,7 @@ func TestProxyRecreate_CreateFails_RollsBackInOrder(t *testing.T) {
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
 	// restored-backup re-verify (Task-4 hardened rollback step 6) is healthy.
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 
@@ -607,7 +624,7 @@ func TestProxyRecreate_StartNewFails_RollsBack(t *testing.T) {
 	defer withMock(mock)()
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 
@@ -649,7 +666,7 @@ func TestProxyRecreate_NewExited_RollsBack(t *testing.T) {
 	cfg.XrayConfig = writeTempXrayConfig(t)
 	// NEW verify reports an exited container; restored-backup re-verify is healthy.
 	calls := 0
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		calls++
 		if calls == 1 {
 			return false, false, errors.New("proxy container exited before becoming healthy")
@@ -694,7 +711,7 @@ func TestProxyRecreate_Unhealthy_RollsBackToHealthyBackup(t *testing.T) {
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
 	calls := 0
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		calls++
 		if calls == 1 {
 			return false, false, errors.New("proxy container is unhealthy") // NEW unhealthy
@@ -766,7 +783,7 @@ func TestProxyRecreate_RestoredBackupAlsoUnhealthy_HonestRV(t *testing.T) {
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
 	// both NEW verify and restored-backup re-verify are unhealthy.
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return false, false, errors.New("proxy container is unhealthy")
 	})()
 
@@ -817,7 +834,7 @@ func TestProxyRecreate_ContextBudget_NoFalseRollbackVerifyOutlivesMutateCtx(t *t
 	defer withMock(mock)()
 	cfg := testCfg()
 	cfg.XrayConfig = writeTempXrayConfig(t)
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		time.Sleep(40 * time.Millisecond) // outlives the 5ms mutating budget
 		return true, false, nil
 	})()

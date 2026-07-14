@@ -345,6 +345,43 @@ func TestProxyConnectedContainers(t *testing.T) {
 	}
 }
 
+func TestProxyConnectedContainers_NetworkInspectError(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{}, errors.New("network inspect failed")
+		},
+	}
+	defer withMock(mock)()
+
+	names, err := ProxyConnectedContainers(testCfg())
+	if err == nil {
+		t.Fatal("a genuine NetworkInspect failure must propagate, got nil error")
+	}
+	if names != nil {
+		t.Errorf("expected nil names on error, got %v", names)
+	}
+	if !strings.Contains(err.Error(), "inspect proxy network") {
+		t.Errorf("error must be owned with context, got %q", err.Error())
+	}
+}
+
+func TestProxyConnectedContainers_NetworkNotFoundTolerated(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{}, errdefs.NotFound(errors.New("no such network: ws-proxy"))
+		},
+	}
+	defer withMock(mock)()
+
+	names, err := ProxyConnectedContainers(testCfg())
+	if err != nil {
+		t.Fatalf("a missing proxy network must be tolerated as zero connected containers, got error: %v", err)
+	}
+	if len(names) != 0 {
+		t.Errorf("expected zero connected containers when the network is absent, got %v", names)
+	}
+}
+
 // --- ProxyFixRoutes tests ---
 
 // withFixRouteExec overrides fixRouteExecFn, recording every container name
@@ -541,7 +578,9 @@ func TestWaitForHealth_Healthy(t *testing.T) {
 			return types.ContainerJSON{
 				ContainerJSONBase: &types.ContainerJSONBase{
 					State: &types.ContainerState{
-						Health: &types.Health{Status: "healthy"},
+						Running: true,
+						Status:  "running",
+						Health:  &types.Health{Status: "healthy"},
 					},
 				},
 				Config: &container.Config{},
@@ -560,7 +599,7 @@ func TestWaitForHealth_NoHealthCheck(t *testing.T) {
 		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
 			return types.ContainerJSON{
 				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Health: nil},
+					State: &types.ContainerState{Running: true, Status: "running", Health: nil},
 				},
 				Config: &container.Config{},
 			}, nil
@@ -568,7 +607,9 @@ func TestWaitForHealth_NoHealthCheck(t *testing.T) {
 	}
 	defer withMock(mock)()
 
-	if err := WaitForHealth(testCfg(), 5*time.Second); err != nil {
+	var err error
+	_ = captureStderr(t, func() { err = WaitForHealth(testCfg(), 5*time.Second) })
+	if err != nil {
 		t.Fatalf("expected nil for container without health check, got: %v", err)
 	}
 }
@@ -579,7 +620,9 @@ func TestWaitForHealth_Unhealthy(t *testing.T) {
 			return types.ContainerJSON{
 				ContainerJSONBase: &types.ContainerJSONBase{
 					State: &types.ContainerState{
-						Health: &types.Health{Status: "unhealthy"},
+						Running: true,
+						Status:  "running",
+						Health:  &types.Health{Status: "unhealthy"},
 					},
 				},
 				Config: &container.Config{},
@@ -594,6 +637,89 @@ func TestWaitForHealth_Unhealthy(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unhealthy") {
 		t.Errorf("expected unhealthy error, got: %v", err)
+	}
+}
+
+// --- U-F: unified crash-aware WaitForHealth (superset of verifyHealthy) ---
+
+// (a) GUARD: a container that lingers in a non-terminal "created" state before
+// it reports healthy must be tolerated under an up/rebuild-style budget, NOT
+// aborted as a crash. Fails if a future fold passes the tight recreate grace
+// (healthStartGrace, shrunk to 0 here) into WaitForHealth instead of the budget.
+func TestWaitForHealth_SlowCreatedStartTolerated(t *testing.T) {
+	shrinkHealthTimers(t)
+	var polls int
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			polls++
+			if polls <= 2 {
+				// Still coming up: not running, non-terminal, healthcheck "starting".
+				return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+					State: &types.ContainerState{Running: false, Status: "created",
+						Health: &types.Health{Status: "starting"}}},
+					Config: &container.Config{}}, nil
+			}
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true, Status: "running",
+					Health: &types.Health{Status: "healthy"}}},
+				Config: &container.Config{}}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	if err := WaitForHealth(testCfg(), 5*time.Second); err != nil {
+		t.Fatalf("a slow 'created' start under an up/rebuild budget must be tolerated, got: %v", err)
+	}
+	if polls < 3 {
+		t.Fatalf("expected the poll loop to wait through the 'created' phase; polls=%d", polls)
+	}
+}
+
+// (b) RED: a container in a terminal "exited" state (a real crash) must fail,
+// and fail FAST — well before the timeout — instead of reporting healthy.
+func TestWaitForHealth_ExitedFailsFast(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			// Crashed: terminal "exited", no healthcheck ever reported.
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: false, Status: "exited", Health: nil}},
+				Config: &container.Config{}}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	start := time.Now()
+	err := WaitForHealth(testCfg(), 30*time.Second)
+	if err == nil {
+		t.Fatal("an exited (crashed) container must fail, not report healthy")
+	}
+	if !strings.Contains(err.Error(), "exited") {
+		t.Fatalf("error should name the terminal state, got: %v", err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("must fail fast on a terminal state, not wait out the timeout; took %s", time.Since(start))
+	}
+}
+
+// (c) RED: a running container with no HEALTHCHECK must surface an operator
+// warning (liveness unverified) instead of returning a silent green.
+func TestWaitForHealth_NoHealthcheckSurfacesWarning(t *testing.T) {
+	mock := &mockClient{
+		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
+				State: &types.ContainerState{Running: true, Status: "running", Health: nil}},
+				Config: &container.Config{}}, nil
+		},
+	}
+	defer withMock(mock)()
+
+	var err error
+	out := captureStderr(t, func() { err = WaitForHealth(testCfg(), 5*time.Second) })
+	if err != nil {
+		t.Fatalf("no healthcheck is not a failure, got: %v", err)
+	}
+	if !strings.Contains(out, "liveness unverified") {
+		t.Fatalf("a container with no HEALTHCHECK must surface a warning, not a silent green; stderr=%q", out)
 	}
 }
 
@@ -1200,7 +1326,7 @@ func TestProxyRestart_HealthyNoSwapOps(t *testing.T) {
 		},
 	}
 	defer withMock(mock)()
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 
@@ -1227,7 +1353,7 @@ func TestProxyRestart_UnhealthyHonestNoMutation(t *testing.T) {
 		},
 	}
 	defer withMock(mock)()
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return false, false, errors.New("proxy container is unhealthy")
 	})()
 
@@ -1262,7 +1388,7 @@ func TestProxyRestart_MissingContainerComesUp(t *testing.T) {
 		},
 	}
 	defer withMock(mock)()
-	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration) (bool, bool, error) {
+	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		return true, false, nil
 	})()
 
