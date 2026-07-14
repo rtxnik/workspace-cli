@@ -70,11 +70,11 @@ func TestClassifyRouteProtection(t *testing.T) {
 
 // TestWorkspaceRouteProtection_PropagatesEnumerationError recreates the review
 // finding: an uninspectable proxy network must surface as an error, never a
-// silent empty result. Before the fix, WorkspaceRouteProtection delegated to
-// ProxyConnectedContainers, which swallows a NetworkInspect error into
-// (nil, nil) -- an empty scan with no error renders as a false "all clear" in
-// `ws proxy status` instead of UNKNOWN. This test fails red against that
-// behavior and must pass once enumeration failure propagates.
+// silent empty result. WorkspaceRouteProtection runs its own NetworkInspect
+// scan (historically because ProxyConnectedContainers swallowed inspect errors
+// into (nil, nil) -- an empty scan with no error rendered as a false "all clear"
+// in `ws proxy status` instead of UNKNOWN; that swallow is now fixed too). This
+// test pins that an enumeration failure surfaces as an error, never a silent scan.
 func TestWorkspaceRouteProtection_PropagatesEnumerationError(t *testing.T) {
 	mock := &mockClient{networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
 		return network.Inspect{}, errors.New("network gone")

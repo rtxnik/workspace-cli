@@ -92,11 +92,8 @@ func classifyRouteProtection(via string, lookupErr error, proxyIP string) RouteP
 
 // WorkspaceRouteProtection reports, READ-ONLY, whether each workspace container
 // on the proxy network routes its default via the proxy. It performs its own
-// endpoint enumeration (the same NetworkInspect scan ProxyFixRoutes uses,
-// rather than delegating to ProxyConnectedContainers, whose NetworkInspect
-// error is swallowed into (nil, nil) -- an empty scan with no error would
-// render `ws proxy status` as a silent "all clear" when the true state is
-// UNKNOWN, violating the sweeping fail-open invariant) and the same read-only
+// endpoint enumeration (the same NetworkInspect scan ProxyFixRoutes uses) and
+// the same read-only
 // `ip route show default` lookup as the doctor's default-route check
 // (DefaultRouteOf); it NEVER mutates a route (no `ip route replace` -- that is
 // ProxyFixRoutes' job, DR-SH1-4). A container whose route cannot be read is
@@ -104,9 +101,10 @@ func classifyRouteProtection(via string, lookupErr error, proxyIP string) RouteP
 // error so the caller renders UNKNOWN rather than an empty, falsely
 // reassuring scan.
 //
-// NOTE (U6): this is a third read-only reader of the proxy-network route
-// topology (checkDefaultRoute and ProxyFixRoutes are the others); consolidating
-// the three into one compute-once scan is U6's scope, not this change's.
+// NOTE: this is a third read-only reader of the proxy-network route topology
+// (checkDefaultRoute and ProxyFixRoutes are the others); now that
+// ProxyConnectedContainers propagates its enumeration errors, folding the three
+// readers into one scan is a viable follow-up.
 func WorkspaceRouteProtection(cfg config.Config) ([]RouteProtection, error) {
 	cli, err := newClientFunc()
 	if err != nil {
