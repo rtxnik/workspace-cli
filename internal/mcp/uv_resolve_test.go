@@ -97,6 +97,11 @@ func TestResolveUV_RejectsSymlinkToWorldWritableTarget(t *testing.T) {
 	if err := os.Mkdir(evil, 0o777); err != nil {
 		t.Fatal(err)
 	}
+	// Chmod after Mkdir so the directory is truly world-writable regardless of
+	// the process umask (Mkdir's mode is masked; Chmod's is not).
+	if err := os.Chmod(evil, 0o777); err != nil {
+		t.Fatal(err)
+	}
 	target := makeExecFile(t, evil, "uv")
 	safe := filepath.Join(base, "safe")
 	if err := os.Mkdir(safe, 0o755); err != nil {
