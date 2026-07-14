@@ -27,8 +27,12 @@ func backupName(cfg config.Config) string {
 // 15s SwitchTo liveness budget would spuriously time it out (spec §3).
 var proxyHealthTimeout = 60 * time.Second
 
-// Poll cadence and the grace window before a not-yet-running container is judged
-// crashed. Vars so tests can shrink them.
+// Poll cadence and the fast-fail grace window. healthStartGrace is how long a
+// not-yet-running, non-terminal container (e.g. "created"/"restarting") is
+// tolerated before recreate/restart judge it failed; the WaitForHealth wrapper
+// passes its full budget instead so a slow start under load is not aborted. A
+// terminal state ("exited"/"dead") fails fast regardless of the grace. Vars so
+// tests can shrink them.
 var (
 	healthPollInterval = 1 * time.Second
 	healthStartGrace   = 2 * time.Second
@@ -46,11 +50,13 @@ var verifyHealthyFn = verifyHealthy
 var recreateMutateTimeout = timeoutWrite
 
 // verifyHealthy polls ContainerInspect until cfg.ProxyContainer is healthy,
-// fails, or the timeout elapses (spec §3). Returns:
+// fails, or the timeout elapses (spec §3). crashGrace bounds how long a
+// not-yet-running, non-terminal container is tolerated before it is judged
+// failed; a terminal state ("exited"/"dead") fails fast regardless. Returns:
 //   - ok=true, weak=false  : State.Health.Status == "healthy"
 //   - ok=true, weak=true   : State.Health == nil (no HEALTHCHECK) + Running
-//   - ok=false, err!=nil   : unhealthy, crashed (Running==false past grace), or timeout
-func verifyHealthy(ctx context.Context, cli DockerClient, cfg config.Config, timeout time.Duration) (ok bool, weak bool, err error) {
+//   - ok=false, err!=nil   : unhealthy, crashed/terminal, not-running past crashGrace, or timeout
+func verifyHealthy(ctx context.Context, cli DockerClient, cfg config.Config, timeout, crashGrace time.Duration) (ok bool, weak bool, err error) {
 	deadline := time.Now().Add(timeout)
 	start := time.Now()
 	ticker := time.NewTicker(healthPollInterval)
@@ -59,12 +65,31 @@ func verifyHealthy(ctx context.Context, cli DockerClient, cfg config.Config, tim
 	for {
 		info, ierr := cli.ContainerInspect(ctx, cfg.ProxyContainer)
 		if ierr != nil {
+			// A ctx timeout landing inside the inspect call must read as the
+			// semantic timeout, not a raw inspect error, so a single timeout
+			// event yields one consistent message (requires "errors" + "context").
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return false, false, fmt.Errorf("proxy health check timed out after %s", timeout)
+			}
 			return false, false, fmt.Errorf("inspect proxy: %w", ierr)
 		}
+		if info.State == nil {
+			// A malformed/partial inspect response carries no State — own the
+			// error instead of dereferencing nil and panicking.
+			return false, false, fmt.Errorf("proxy container inspect returned no state")
+		}
 		switch {
+		case info.State.Status == "exited" || info.State.Status == "dead":
+			// Terminal state = a real crash. Fail fast regardless of the grace so
+			// a broken on-disk config is surfaced (and rolled back) immediately
+			// instead of waiting out the full budget.
+			return false, false, fmt.Errorf("proxy container %s before becoming healthy", info.State.Status)
 		case !info.State.Running:
-			if time.Since(start) >= healthStartGrace {
-				return false, false, fmt.Errorf("proxy container exited before becoming healthy")
+			// Non-terminal and not yet running ("created"/"restarting"): still
+			// coming up. Tolerate it up to crashGrace so a slow start under load
+			// is not mistaken for a crash.
+			if time.Since(start) >= crashGrace {
+				return false, false, fmt.Errorf("proxy container did not start within %s (state %q)", crashGrace, info.State.Status)
 			}
 		case info.State.Health == nil:
 			return true, true, nil
@@ -164,7 +189,7 @@ func proxyRecreate(cfg config.Config) error {
 	// --- VERIFY (own ctx, §5 phase b) ---
 	vctx, vcancel := context.WithTimeout(context.Background(), proxyHealthTimeout)
 	defer vcancel()
-	ok, weak, verr := verifyHealthyFn(vctx, cli, cfg, proxyHealthTimeout)
+	ok, weak, verr := verifyHealthyFn(vctx, cli, cfg, proxyHealthTimeout, healthStartGrace)
 	if verr != nil {
 		return rollbackToBackup(cli, cfg, fmt.Errorf("%w -- rolled back. Likely a broken on-disk xray config (run 'ws proxy doctor'/'upgrade-config')", verr))
 	}
@@ -197,7 +222,7 @@ func proxyRecreate(cfg config.Config) error {
 func verifyNew(cli DockerClient, cfg config.Config) error {
 	vctx, cancel := context.WithTimeout(context.Background(), proxyHealthTimeout)
 	defer cancel()
-	ok, weak, verr := verifyHealthyFn(vctx, cli, cfg, proxyHealthTimeout)
+	ok, weak, verr := verifyHealthyFn(vctx, cli, cfg, proxyHealthTimeout, healthStartGrace)
 	if verr != nil {
 		return fmt.Errorf("new proxy failed health check: %w", verr)
 	}
@@ -286,7 +311,7 @@ func rollbackToBackup(cli DockerClient, cfg config.Config, origErr error) error 
 	// 6: best-effort verify of the restored backup + fix routes.
 	vctx, vcancel := context.WithTimeout(context.Background(), proxyHealthTimeout)
 	defer vcancel()
-	ok, _, verr := verifyHealthyFn(vctx, cli, cfg, proxyHealthTimeout)
+	ok, _, verr := verifyHealthyFn(vctx, cli, cfg, proxyHealthTimeout, healthStartGrace)
 	if rep, ferr := ProxyFixRoutes(cfg); ferr != nil {
 		output.Warn(fmt.Sprintf("route fix skipped: %v -- run 'ws proxy fix-routes'", ferr))
 	} else {
