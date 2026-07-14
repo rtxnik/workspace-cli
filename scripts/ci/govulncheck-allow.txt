@@ -1,0 +1,25 @@
+# govulncheck allowlist — (OSV-ID  module) pairs that the CI gate tolerates.
+#
+# Every entry is a called (symbol-reachable) advisory that is acceptable ONLY
+# for the recorded module. The gate fails if a called vulnerability is not
+# listed here, OR if a listed OSV surfaces under a DIFFERENT module (i.e. the
+# same advisory reached through a path this CLI actually drives).
+#
+# All entries below are daemon-side github.com/docker/docker advisories: their
+# vulnerable code is the Docker daemon's archive-extraction / cp / authz-plugin
+# / plugin-privilege paths. This CLI is a client that talks to a local daemon
+# the operator already controls; it links the client library (hence the graph
+# reachability through package init + generic client calls) but never drives
+# those daemon paths. No fixed version is available upstream.
+#
+# Review cadence: revisit whenever a Docker client bump or an upstream fix lands
+# — drop pairs that no longer appear, and never add a non-daemon-side advisory
+# without an equivalent justification.
+#
+# Format: <OSV-ID>  <module>   (one per line; # comments and blanks ignored)
+
+GO-2026-4883  github.com/docker/docker
+GO-2026-4887  github.com/docker/docker
+GO-2026-5617  github.com/docker/docker
+GO-2026-5668  github.com/docker/docker
+GO-2026-5746  github.com/docker/docker

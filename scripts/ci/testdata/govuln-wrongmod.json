@@ -1,0 +1,2 @@
+{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck","scanner_version":"v1.5.0","scan_level":"symbol","scan_mode":"source"}}
+{"finding":{"osv":"GO-2026-4883","trace":[{"module":"stdlib","version":"go1.26.5","package":"crypto/tls","function":"Conn.Handshake"}]}}
