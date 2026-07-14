@@ -330,6 +330,49 @@ func TestDoctorMemo_LazyNotComputedAfterEarlyHardFail(t *testing.T) {
 	}
 }
 
+// TestDoctorFailsClosedOnEnumerationError proves that when proxy-network
+// enumeration returns a genuine error, both workspace-facing HARD checks refuse
+// to report a green "nothing connected" and instead fail closed (OK=false) with
+// an enumerate-scoped Detail and a remediation. Guards against a silent
+// regression to the swallowing (nil,nil) behavior. No live daemon: the reused
+// proxyConnectedContainersFn seam is overridden to return the error the callee
+// now propagates, and its (names,err) is folded into a containerList exactly as
+// the doctor's run-once memo does before threading it into the checks.
+func TestDoctorFailsClosedOnEnumerationError(t *testing.T) {
+	orig := proxyConnectedContainersFn
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
+		return nil, errors.New("inspect proxy network: daemon unreachable")
+	}
+	defer func() { proxyConnectedContainersFn = orig }()
+
+	cfg := config.Config{ProxyContainer: "ws-proxy", ProxyNetwork: "ws-proxy", ProxyIP: "172.30.0.2"}
+
+	names, err := proxyConnectedContainersFn(cfg)
+	cl := containerList{names: names, err: err}
+
+	for _, tc := range []struct {
+		name string
+		run  func() CheckOutcome
+	}{
+		{"checkDefaultRoute", func() CheckOutcome { return checkDefaultRoute(cfg, cl) }},
+		{"checkWorkspaceV6FailClosed", func() CheckOutcome { return checkWorkspaceV6FailClosed(cl) }},
+	} {
+		out := tc.run()
+		if out.OK {
+			t.Errorf("%s: expected fail-closed (OK=false) on enumeration error, got OK=true (%+v)", tc.name, out)
+		}
+		if !strings.Contains(out.Detail, "could not enumerate connected workspaces") {
+			t.Errorf("%s: expected enumerate-scoped Detail, got %q", tc.name, out.Detail)
+		}
+		if strings.Contains(out.Detail, "no workspace containers connected") {
+			t.Errorf("%s: must not fall through to the green 'nothing connected' path on error", tc.name)
+		}
+		if out.Fix == "" {
+			t.Errorf("%s: expected a remediation Fix, got empty", tc.name)
+		}
+	}
+}
+
 // TestActiveProfileReadFold locks the behavior of the folded active-profile read:
 // datapathModeFrom (HARD-error policy, consumed by the datapath-contract check)
 // and inboundTproxyOutcome (advisory-skip policy) derive their original results

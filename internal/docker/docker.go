@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -548,7 +549,11 @@ func warnRouteFailures(rep FixRoutesReport) {
 }
 
 // ProxyConnectedContainers returns names of running containers on the
-// ws-proxy bridge network (excluding the proxy container itself).
+// ws-proxy bridge network (excluding the proxy container itself). A missing
+// proxy network is tolerated as zero connected containers (nil, nil), which
+// keeps `ws proxy down`/`restart` idempotent; any other NetworkInspect
+// failure is owned and propagated so callers can fail closed rather than
+// mistaking an unreadable network for an empty one (mirrors ProxyFixRoutes).
 func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
 	cli, err := newClientFunc()
 	if err != nil {
@@ -561,7 +566,10 @@ func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
 
 	info, err := cli.NetworkInspect(ctx, cfg.ProxyNetwork, network.InspectOptions{})
 	if err != nil {
-		return nil, nil
+		if errdefs.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("inspect proxy network: %w", err)
 	}
 
 	var names []string
@@ -571,6 +579,7 @@ func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
 		}
 		names = append(names, ep.Name)
 	}
+	sort.Strings(names) // deterministic order -- Go map iteration is randomized
 	return names, nil
 }
 
