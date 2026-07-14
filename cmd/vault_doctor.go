@@ -6,7 +6,7 @@ package cmd
 // checks per CONTEXT D-12 + CLI-10:
 //
 //   1. orphan-mcp-subprocess  — pgrep -fc vault_ai/adapter_stdio/server.py
-//   2. stale-lock-files       — find ~/projects/vault-ai/_tooling/state/ -name '*.lock' -mmin +60
+//   2. stale-lock-files       — find $VAULT_AI_REPO_ROOT/_tooling/state/ -name '*.lock' -mmin +60
 //   3. vault-ai-token         — os.Getenv("VAULT_AI_TOKEN") presence
 //   4. token-fd-pass          — dry-run mcp.NewClient + ListTools + Close
 //   5. xrepo-contract-parity  — exec bash check-xrepo-contract.sh; exit code
@@ -149,20 +149,21 @@ func checkOrphanMCPImpl(ctx context.Context) *doctorCheck {
 	return check
 }
 
-// checkStaleLocksImpl walks ~/projects/vault-ai/_tooling/state/ for *.lock
+// checkStaleLocksImpl walks $VAULT_AI_REPO_ROOT/_tooling/state/ (default
+// ~/projects/vault-ai) for *.lock
 // files older than 60min. Returns green if directory absent or no stale locks.
 // CONTEXT D-12 §2: yellow band; locks older than 60min are suspect (Phase 14
 // audit-chain lock pattern reference).
 func checkStaleLocksImpl(_ context.Context) *doctorCheck {
 	check := &doctorCheck{Name: "stale-lock-files"}
 
-	home, err := os.UserHomeDir()
+	root, err := mcp.ResolveRepoRoot("")
 	if err != nil {
 		check.Band = bandYellow
-		check.Detail = fmt.Sprintf("cannot resolve home dir: %v", err)
+		check.Detail = fmt.Sprintf("cannot resolve repo root: %v", err)
 		return check
 	}
-	stateDir := filepath.Join(home, "projects", "vault-ai", "_tooling", "state")
+	stateDir := filepath.Join(root, "_tooling", "state")
 	info, err := os.Stat(stateDir)
 	if err != nil || !info.IsDir() {
 		// Per verify-before-claim: if state dir absent, green + diagnostic
@@ -269,13 +270,13 @@ func checkBrokenFDPassImpl(ctx context.Context) *doctorCheck {
 func checkXrepoDriftImpl(ctx context.Context) *doctorCheck {
 	check := &doctorCheck{Name: "xrepo-contract-parity"}
 
-	home, err := os.UserHomeDir()
+	root, err := mcp.ResolveRepoRoot("")
 	if err != nil {
 		check.Band = bandYellow
-		check.Detail = fmt.Sprintf("cannot resolve home dir: %v", err)
+		check.Detail = fmt.Sprintf("cannot resolve repo root: %v", err)
 		return check
 	}
-	script := filepath.Join(home, "projects", "vault-ai", "_tooling", "lint", "check-xrepo-contract.sh")
+	script := filepath.Join(root, "_tooling", "lint", "check-xrepo-contract.sh")
 	if _, serr := os.Stat(script); serr != nil {
 		check.Band = bandYellow
 		check.Detail = fmt.Sprintf("check-xrepo-contract.sh not found at %s: %v", script, serr)
@@ -298,7 +299,7 @@ func checkXrepoDriftImpl(ctx context.Context) *doctorCheck {
 	}
 	check.Band = bandRed
 	check.Detail = fmt.Sprintf("check-xrepo-contract.sh exit: %s: %s", err.Error(), firstLine)
-	check.Remediation = "run `uv run --project ~/projects/vault-ai/_tooling/mcp -- python -m vault_ai.tooling.check_xrepo --gen-types-check` to regenerate Go types; verify tools.json contract_version"
+	check.Remediation = fmt.Sprintf("run `uv run --project %s/_tooling/mcp -- python -m vault_ai.tooling.check_xrepo --gen-types-check` to regenerate Go types; verify tools.json contract_version", root)
 	return check
 }
 

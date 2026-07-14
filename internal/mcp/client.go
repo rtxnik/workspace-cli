@@ -112,15 +112,12 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 		return nil, errMissingDepWrap("VAULT_AI_TOKEN unset; provision via chezmoi+age per ADR-ai-06")
 	}
 
-	// Resolve the vault-ai repo root with the documented fallback chain.
-	repoRoot := opts.VaultAIRepoRoot
-	if repoRoot == "" {
-		repoRoot = os.Getenv("VAULT_AI_REPO_ROOT")
-	}
-	if repoRoot == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			repoRoot = home + "/projects/vault-ai"
-		}
+	// Resolve the vault-ai repo root with the documented fallback chain
+	// (override -> $VAULT_AI_REPO_ROOT -> <home>/projects/vault-ai). Fail
+	// closed on a home-resolution error rather than leaving repoRoot empty.
+	repoRoot, err := ResolveRepoRoot(opts.VaultAIRepoRoot)
+	if err != nil {
+		return nil, err
 	}
 
 	// Resolve uv by provenance (override, then PATH, symlink-resolved, validated).
