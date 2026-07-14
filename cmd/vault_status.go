@@ -461,13 +461,14 @@ func truncate(s string, maxLen int) string {
 // fallback chain so the status command's shell-out + jsonl reads use
 // the same root the MCP subprocess will use.
 func resolveVaultAIRepoRoot() string {
-	if v := os.Getenv("VAULT_AI_REPO_ROOT"); v != "" {
-		return v
+	// Delegate to the shared resolver (CONTEXT D-08 fallback chain). The only
+	// non-nil error is an unavailable $HOME with env unset; preserve this
+	// command's historical "." sentinel for that unmockable edge.
+	root, err := mcp.ResolveRepoRoot("")
+	if err != nil {
+		return "."
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, "projects", "vault-ai")
-	}
-	return "."
+	return root
 }
 
 func newVaultStatusCmd() *cobra.Command {
