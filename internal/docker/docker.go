@@ -392,7 +392,7 @@ func ProxyRestart(cfg config.Config) error {
 	defer func() { _ = cli.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), proxyHealthTimeout)
 	defer cancel()
-	ok, weak, verr := verifyHealthyFn(ctx, cli, cfg, proxyHealthTimeout)
+	ok, weak, verr := verifyHealthyFn(ctx, cli, cfg, proxyHealthTimeout, healthStartGrace)
 	if verr != nil {
 		return fmt.Errorf("proxy restarted but is unhealthy -- %w. Likely a broken xray config; run 'ws proxy doctor'", verr)
 	}
@@ -643,8 +643,14 @@ func ImageLabels(cfg config.Config) (map[string]string, error) {
 	return parsed.Config.Labels, nil
 }
 
-// WaitForHealth polls the container health status until healthy or timeout.
-// Returns nil immediately if the container has no health check configured.
+// WaitForHealth waits until cfg.ProxyContainer is healthy, its liveness is
+// unverifiable (no HEALTHCHECK), or the timeout elapses. It is the thin,
+// client-owning wrapper over verifyHealthy used by `ws proxy up`/`rebuild` and
+// by internal/xray.SwitchTo, so those call sites keep their (cfg, timeout) shape
+// and budgets. A terminal container state ("exited"/"dead") fails fast; a
+// container still coming up is tolerated for the full budget so a slow start
+// under load is not mistaken for a crash. A missing HEALTHCHECK is surfaced as a
+// warning (liveness unverified) rather than a silent healthy result.
 func WaitForHealth(cfg config.Config, timeout time.Duration) error {
 	cli, err := newClientFunc()
 	if err != nil {
@@ -655,29 +661,17 @@ func WaitForHealth(cfg config.Config, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
-		if err != nil {
-			return fmt.Errorf("inspect proxy: %w", err)
-		}
-		if info.State.Health == nil {
-			return nil // no health check configured
-		}
-		switch info.State.Health.Status {
-		case "healthy":
-			return nil
-		case "unhealthy":
-			return fmt.Errorf("proxy container is unhealthy")
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("health check timed out after %s", timeout)
-		case <-ticker.C:
-		}
+	// crashGrace == timeout: only a terminal state fails fast here; a not-yet-
+	// running container is tolerated for the whole budget (the tight fast-fail
+	// grace is reserved for the transactional recreate/restart paths).
+	_, weak, verr := verifyHealthy(ctx, cli, cfg, timeout, timeout)
+	if verr != nil {
+		return verr
 	}
+	if weak {
+		output.Warn("proxy liveness unverified: container has no HEALTHCHECK configured")
+	}
+	return nil
 }
 
 // ProxyExec runs `docker exec <cfg.ProxyContainer> <args...>` and returns
