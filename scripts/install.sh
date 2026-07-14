@@ -1,16 +1,20 @@
 #!/bin/sh
 # install.sh — POSIX installer for workspace-cli (ws).
 #
-# Trust model (SP-2 / audit H9):
+# Trust model (fail-closed by default):
 #   * ALWAYS verifies the archive's SHA-256 against checksums.txt.
-#   * If `minisign` is on PATH and checksums.txt.minisig is present, ALSO verifies
-#     the signature against the public key embedded below (full chain of trust).
-#   * If `minisign` is absent, prints a loud WARN and continues at checksum level
-#     — UNLESS --require-signature was passed, in which case it is fatal.
+#   * By DEFAULT also REQUIRES a valid minisign signature over checksums.txt from
+#     the embedded release key below. If minisign is not installed, or a required
+#     signature asset is missing, the install REFUSES.
+#   * --allow-unsigned downgrades to checksum-only (explicit opt-out) with a loud
+#     warning. A signature that is PRESENT but INVALID is ALWAYS fatal.
+#   * checksum-only guards against corruption / MITM-beyond-TLS / a tampered
+#     mirror, but NOT against a compromised release. For the full chain install
+#     via your distro package, or run this on a host that has minisign.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/rtxnik/workspace-cli/main/scripts/install.sh | sh
-#   sh install.sh [--require-signature]
+#   sh install.sh [--allow-unsigned]
 #
 # Environment overrides:
 #   WS_VERSION    install a specific tag (e.g. v0.7.1) instead of latest
@@ -19,7 +23,7 @@
 #                 mirror path: download ws_<os>_<arch>.tar.gz, checksums.txt
 #                 and checksums.txt.minisig on a connected machine, then
 #                 WS_VERSION=vX.Y.Z WS_BASE_URL="file:///path/to/assets" \
-#                   sh install.sh --require-signature
+#                   sh install.sh
 
 set -eu
 
@@ -29,7 +33,7 @@ RELEASE_PUBKEY="RWS9SKDBxXVQRL27p1aOVmdoSffl83dqJqKtnwDO6IqEMpdoRf+AMDGL"
 
 REPO="rtxnik/workspace-cli"
 PREFIX="${PREFIX:-/usr/local}"
-REQUIRE_SIGNATURE=0
+ALLOW_UNSIGNED=0
 
 info() { printf '==> %s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
@@ -38,8 +42,12 @@ die()  { err "$@"; exit 1; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --require-signature) REQUIRE_SIGNATURE=1 ;;
-        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --allow-unsigned) ALLOW_UNSIGNED=1 ;;
+        --require-signature)
+            # Signature verification is the default now; kept as an accepted
+            # no-op alias so previously-scripted one-liners keep working.
+            info "--require-signature is the default now; flag accepted as a no-op" ;;
+        -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) die "unknown argument: $1 (try --help)" ;;
     esac
     shift
@@ -105,7 +113,8 @@ trap 'rm -rf "$workdir"' EXIT INT TERM
 # working — and the standalone signature fetch was exactly that Nth handshake.
 # One curl process reuses its connections across URLs, so the tiny .minisig
 # rides the same connection as checksums.txt instead of opening a new one.
-# Manifest-first also fails --require-signature fast, before the big download.
+# Manifest-first also fails the fail-closed signature policy fast, before the
+# big download.
 #
 # A signature failure must say WHY: "asset absent" (unsigned release) reads
 # very differently from "network failure" (retry / check connectivity).
@@ -149,20 +158,21 @@ verify_signature() {
 
 # Signature policy is decided (and the signature verified) BEFORE the archive
 # download: a fatal signature problem must not cost the big transfer first.
+# Fail-closed by default: a valid signature is REQUIRED unless --allow-unsigned.
 if command -v minisign >/dev/null 2>&1; then
     if [ "$have_sig" -eq 1 ]; then
         verify_signature
-    elif [ "$REQUIRE_SIGNATURE" -eq 1 ]; then
-        die "--require-signature was set but ${sig_reason}"
+    elif [ "$ALLOW_UNSIGNED" -eq 1 ]; then
+        warn "${sig_reason}; --allow-unsigned set — proceeding with checksum-level verification only (NOT protected against a compromised release)."
     else
-        warn "${sig_reason}; proceeding with checksum-level verification only"
+        die "${sig_reason}; refusing to install. Re-run with --allow-unsigned to accept CHECKSUM-LEVEL verification only (NOT protected against a compromised release)."
     fi
 else
-    if [ "$REQUIRE_SIGNATURE" -eq 1 ]; then
-        die "--require-signature was set but minisign is not installed: https://jedisct1.github.io/minisign/"
+    if [ "$ALLOW_UNSIGNED" -eq 1 ]; then
+        warn "minisign not found — --allow-unsigned set, CHECKSUM-LEVEL protection only (no protection against a compromised release)."
+    else
+        die "minisign is required to verify the release signature but is not installed. Install it (apt-get install minisign / brew install minisign) and re-run, or pass --allow-unsigned to accept CHECKSUM-LEVEL protection only (NOT protected against a compromised release): https://jedisct1.github.io/minisign/"
     fi
-    warn "minisign not found — CHECKSUM-LEVEL protection only (no protection against a compromised release)."
-    warn "Install minisign and re-run for the full chain of trust (apt-get install minisign / brew install minisign)."
 fi
 
 info "downloading ${archive} (${version})"
