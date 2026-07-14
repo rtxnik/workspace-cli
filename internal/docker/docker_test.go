@@ -345,6 +345,43 @@ func TestProxyConnectedContainers(t *testing.T) {
 	}
 }
 
+func TestProxyConnectedContainers_NetworkInspectError(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{}, errors.New("network inspect failed")
+		},
+	}
+	defer withMock(mock)()
+
+	names, err := ProxyConnectedContainers(testCfg())
+	if err == nil {
+		t.Fatal("a genuine NetworkInspect failure must propagate, got nil error")
+	}
+	if names != nil {
+		t.Errorf("expected nil names on error, got %v", names)
+	}
+	if !strings.Contains(err.Error(), "inspect proxy network") {
+		t.Errorf("error must be owned with context, got %q", err.Error())
+	}
+}
+
+func TestProxyConnectedContainers_NetworkNotFoundTolerated(t *testing.T) {
+	mock := &mockClient{
+		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{}, errdefs.NotFound(errors.New("no such network: ws-proxy"))
+		},
+	}
+	defer withMock(mock)()
+
+	names, err := ProxyConnectedContainers(testCfg())
+	if err != nil {
+		t.Fatalf("a missing proxy network must be tolerated as zero connected containers, got error: %v", err)
+	}
+	if len(names) != 0 {
+		t.Errorf("expected zero connected containers when the network is absent, got %v", names)
+	}
+}
+
 // --- ProxyFixRoutes tests ---
 
 // withFixRouteExec overrides fixRouteExecFn, recording every container name
