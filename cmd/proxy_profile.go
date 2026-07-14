@@ -79,48 +79,59 @@ var profileListCmd = &cobra.Command{
 	Annotations: proxyAnnotation,
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
-		profiles, err := xray.ListProfiles(cfg)
-		if err != nil {
-			output.Die(err.Error())
-		}
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		reveal, _ := cmd.Flags().GetBool("reveal")
 
-		if jsonFlag {
-			if reveal {
+		// --reveal path: parse each profile exactly once via
+		// ListProfilesDetailed (no N+1 re-parse) and expose ONLY the vless
+		// UUID. hy2 auth/obfs are never surfaced by list — the raw superset
+		// carries them, but neither the table nor the JSON row does (D-13:
+		// dp.UUID is empty for hy2, and ProfileSummary omits every secret).
+		if reveal {
+			details, err := xray.ListProfilesDetailed(cfg)
+			if err != nil {
+				output.Die(err.Error())
+			}
+			if jsonFlag {
 				type fullRow struct {
 					xray.ProfileSummary
 					UUIDFull string `json:"uuid_full,omitempty"`
 				}
-				rows := make([]fullRow, 0, len(profiles))
-				for _, p := range profiles {
-					dp, err := xray.LoadProfile(cfg, p.Name)
-					if err != nil {
-						output.Warn(fmt.Sprintf("load %s: %v", p.Name, err))
-						continue
-					}
-					rows = append(rows, fullRow{ProfileSummary: p, UUIDFull: dp.UUID})
+				rows := make([]fullRow, 0, len(details))
+				for _, dp := range details {
+					rows = append(rows, fullRow{ProfileSummary: dp.Summary(), UUIDFull: dp.UUID})
 				}
 				output.JSON(rows)
 				return
 			}
-			output.JSON(profiles)
+			t := output.NewTable([]string{"ACTIVE", "NAME", "TRANSPORT", "ADDRESS:PORT", "SNI", "UUID"})
+			for _, dp := range details {
+				active := ""
+				if dp.Active {
+					active = "*"
+				}
+				t.Row(active, dp.Name, dp.Transport, fmt.Sprintf("%s:%d", dp.Address, dp.Port), dp.SNI, dp.UUID)
+			}
+			fmt.Println(t)
 			return
 		}
 
+		// Default (masked) path.
+		profiles, err := xray.ListProfiles(cfg)
+		if err != nil {
+			output.Die(err.Error())
+		}
+		if jsonFlag {
+			output.JSON(profiles)
+			return
+		}
 		t := output.NewTable([]string{"ACTIVE", "NAME", "TRANSPORT", "ADDRESS:PORT", "SNI", "UUID"})
 		for _, p := range profiles {
 			active := ""
 			if p.Active {
 				active = "*"
 			}
-			uuid := p.UUIDMasked
-			if reveal {
-				if dp, err := xray.LoadProfile(cfg, p.Name); err == nil {
-					uuid = dp.UUID
-				}
-			}
-			t.Row(active, p.Name, p.Transport, fmt.Sprintf("%s:%d", p.Address, p.Port), p.SNI, uuid)
+			t.Row(active, p.Name, p.Transport, fmt.Sprintf("%s:%d", p.Address, p.Port), p.SNI, p.UUIDMasked)
 		}
 		fmt.Println(t)
 	},

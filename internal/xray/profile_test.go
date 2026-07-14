@@ -638,3 +638,101 @@ func TestProfileAdd_StagingInvisibleToList(t *testing.T) {
 		}
 	}
 }
+
+// TestListProfilesMaskingByteLevel is the security regression guard for the
+// unified list path: the masked ProfileSummary feed (ListProfiles / Summary)
+// must never carry a raw credential — proven byte-for-byte on the marshaled
+// output — while the raw ListProfilesDetailed feed stays the unmasked superset.
+// Fixtures are written as raw xray JSON so the exact secret bytes are under
+// test control (matches show_test.go's raw-profile convention).
+func TestListProfilesMaskingByteLevel(t *testing.T) {
+	cfg := mkTestCfg(t)
+
+	const (
+		vlessUUID     = "11111111-2222-3333-4444-555555555555"
+		vlessUUIDTail = "2222-3333-4444-555555555555" // masked tail that must never leak
+		hy2Auth       = "SECRET-AUTH"
+		hy2Obfs       = "SECRET-OBFS"
+	)
+
+	vlessProfile := `{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[
+		{"tag":"proxy-1","protocol":"vless",
+		 "settings":{"vnext":[{"address":"vless.example","port":443,
+		   "users":[{"id":"` + vlessUUID + `"}]}]},
+		 "streamSettings":{"network":"tcp","security":"tls",
+		   "tlsSettings":{"serverName":"vless.example"}}},
+		{"tag":"direct","protocol":"freedom","settings":{}}],
+		"routing":{"domainStrategy":"IPIfNonMatch","rules":[]}}`
+	if err := os.WriteFile(filepath.Join(cfg.XrayProfilesDir, "vlessp.json"), []byte(vlessProfile), 0o600); err != nil {
+		t.Fatalf("write vless profile: %v", err)
+	}
+
+	hy2Profile := `{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[
+		{"tag":"proxy-1","protocol":"hysteria","settings":{"version":2,"address":"hy2.example","port":443},
+		 "streamSettings":{"network":"hysteria","security":"tls",
+		   "tlsSettings":{"serverName":"hy2.example","allowInsecure":false},
+		   "hysteriaSettings":{"version":2,"auth":"` + hy2Auth + `"},
+		   "finalmask":{"udp":[{"type":"salamander","settings":{"password":"` + hy2Obfs + `"}}]}}},
+		{"tag":"direct","protocol":"freedom","settings":{}}],
+		"routing":{"domainStrategy":"IPIfNonMatch","rules":[]}}`
+	if err := os.WriteFile(filepath.Join(cfg.XrayProfilesDir, "hy2p.json"), []byte(hy2Profile), 0o600); err != nil {
+		t.Fatalf("write hy2 profile: %v", err)
+	}
+
+	// --- masked feed: ListProfiles masks the UUID and omits every secret ---
+	summaries, err := ListProfiles(cfg)
+	if err != nil {
+		t.Fatalf("ListProfiles: %v", err)
+	}
+	byName := make(map[string]ProfileSummary, len(summaries))
+	for _, s := range summaries {
+		byName[s.Name] = s
+	}
+	if got := byName["vlessp"].UUIDMasked; got != "11111111-****-****-****-************" {
+		t.Errorf("vless UUIDMasked = %q; want 11111111-****-****-****-************", got)
+	}
+	if got := byName["hy2p"].UUIDMasked; got != "" {
+		t.Errorf("hy2 UUIDMasked = %q; want empty", got)
+	}
+
+	blob, err := json.Marshal(summaries)
+	if err != nil {
+		t.Fatalf("marshal summaries: %v", err)
+	}
+	for _, secret := range []string{vlessUUIDTail, hy2Auth, hy2Obfs} {
+		if bytes.Contains(blob, []byte(secret)) {
+			t.Errorf("masked list output leaked secret %q:\n%s", secret, blob)
+		}
+	}
+
+	// --- raw feed: ListProfilesDetailed IS the unmasked superset, yet its
+	//     Summary() projection must still never leak a secret ---
+	details, err := ListProfilesDetailed(cfg)
+	if err != nil {
+		t.Fatalf("ListProfilesDetailed: %v", err)
+	}
+	rawByName := make(map[string]DetailedProfile, len(details))
+	for _, dp := range details {
+		rawByName[dp.Name] = dp
+	}
+	if got := rawByName["vlessp"].UUID; got != vlessUUID {
+		t.Errorf("detailed vless UUID = %q; want raw %q", got, vlessUUID)
+	}
+	if got := rawByName["hy2p"]; got.Auth != hy2Auth || got.ObfsPassword != hy2Obfs {
+		t.Errorf("detailed hy2 secrets = %q/%q; want %q/%q", got.Auth, got.ObfsPassword, hy2Auth, hy2Obfs)
+	}
+
+	projected := make([]ProfileSummary, 0, len(details))
+	for _, dp := range details {
+		projected = append(projected, dp.Summary())
+	}
+	pblob, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatalf("marshal projected summaries: %v", err)
+	}
+	for _, secret := range []string{vlessUUIDTail, hy2Auth, hy2Obfs} {
+		if bytes.Contains(pblob, []byte(secret)) {
+			t.Errorf("Summary() projection leaked secret %q:\n%s", secret, pblob)
+		}
+	}
+}
