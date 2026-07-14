@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -199,6 +200,216 @@ func TestDoctorExitCode(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := doctorExitCode(c.res); got != c.want {
 				t.Errorf("doctorExitCode(%+v) = %d, want %d", c.res, got, c.want)
+			}
+		})
+	}
+}
+
+// countingEngine is a proxyengine.Engine fake that counts Probe invocations so a
+// test can prove the doctor's live egress probe is computed once per run.
+type countingEngine struct {
+	buildCalls    int
+	validateCalls int
+	probeCalls    int
+	probeRes      proxyengine.ProbeResult
+	probeErr      error
+}
+
+func (e *countingEngine) BuildConfig(proxyengine.Profile) ([]byte, error) {
+	e.buildCalls++
+	return nil, nil
+}
+
+func (e *countingEngine) Validate(config.Config, string) error {
+	e.validateCalls++
+	return nil
+}
+
+func (e *countingEngine) Probe(config.Config) (proxyengine.ProbeResult, error) {
+	e.probeCalls++
+	return e.probeRes, e.probeErr
+}
+
+// runCheckByName runs the single registered check with the given name (the doctor
+// check list is stable and name-addressed elsewhere in this file).
+func runCheckByName(t *testing.T, checks []Check, name string) CheckOutcome {
+	t.Helper()
+	for _, c := range checks {
+		if c.Name == name {
+			return c.Run()
+		}
+	}
+	t.Fatalf("check %q not registered", name)
+	return CheckOutcome{}
+}
+
+// TestDoctorMemo_EachExpensiveOpRunsOnce proves the three duplicated prerequisite
+// computations are memoized: the docker prerequisite scan, the live egress probe,
+// and the connected-container enumeration each run exactly once across the two
+// checks that consume them. Fakes are wired so each consumer short-circuits before
+// any real docker/network I/O (all-passed scan; probe error; empty container list).
+func TestDoctorMemo_EachExpensiveOpRunsOnce(t *testing.T) {
+	var proxyCheckCalls int
+	origPC := doctorProxyCheckFn
+	doctorProxyCheckFn = func(config.Config) []docker.CheckResult {
+		proxyCheckCalls++
+		return []docker.CheckResult{
+			{Name: "Docker running", Passed: true},
+			{Name: "Xray config exists", Passed: true},
+			{Name: "Proxy image built", Passed: true},
+			{Name: "Proxy container running", Passed: true},
+		}
+	}
+	defer func() { doctorProxyCheckFn = origPC }()
+
+	var containerCalls int
+	origCC := proxyConnectedContainersFn
+	proxyConnectedContainersFn = func(config.Config) ([]string, error) {
+		containerCalls++
+		return nil, nil // empty: both consumers short-circuit before any per-container call
+	}
+	defer func() { proxyConnectedContainersFn = origCC }()
+
+	// Probe error: checkEgress returns before ProbeDNS, checkForwardingEgress
+	// returns before the forwarding sidecar — no real I/O, probe still counted.
+	eng := &countingEngine{probeErr: errors.New("probe unavailable in test")}
+
+	checks := proxyDoctorChecks(config.Config{}, eng)
+
+	runCheckByName(t, checks, "docker reachable")
+	runCheckByName(t, checks, "proxy image present")
+	if proxyCheckCalls != 1 {
+		t.Errorf("docker prerequisite scan ran %d time(s) across its two checks, want 1", proxyCheckCalls)
+	}
+
+	runCheckByName(t, checks, "self-egress (proxy tunnel exit-IP)")
+	runCheckByName(t, checks, "forwarding datapath (dev-container exit-IP)")
+	if eng.probeCalls != 1 {
+		t.Errorf("live egress probe ran %d time(s) across its two checks, want 1", eng.probeCalls)
+	}
+
+	runCheckByName(t, checks, "dev-container default route via proxy")
+	runCheckByName(t, checks, "workspace IPv6 fail-closed")
+	if containerCalls != 1 {
+		t.Errorf("connected-container enumeration ran %d time(s) across its two checks, want 1", containerCalls)
+	}
+}
+
+// TestDoctorMemo_LazyNotComputedAfterEarlyHardFail proves the memos are LAZY, not
+// eager: the docker-reachable check (index 0) HARD-fails, so runChecks returns
+// before any later check and neither the live egress probe nor the container
+// enumeration is ever computed. An eager memo (computing at construction) would
+// fail this.
+func TestDoctorMemo_LazyNotComputedAfterEarlyHardFail(t *testing.T) {
+	origPC := doctorProxyCheckFn
+	doctorProxyCheckFn = func(config.Config) []docker.CheckResult {
+		return []docker.CheckResult{{Name: "Docker running", Passed: false}}
+	}
+	defer func() { doctorProxyCheckFn = origPC }()
+
+	var containerCalls int
+	origCC := proxyConnectedContainersFn
+	proxyConnectedContainersFn = func(config.Config) ([]string, error) {
+		containerCalls++
+		return nil, nil
+	}
+	defer func() { proxyConnectedContainersFn = origCC }()
+
+	eng := &countingEngine{}
+
+	res := runChecks(proxyDoctorChecks(config.Config{}, eng))
+
+	if res.OK || res.FailedAt != 0 {
+		t.Fatalf("expected HARD fail at the docker-reachable check (index 0), got %+v", res)
+	}
+	if eng.probeCalls != 0 {
+		t.Errorf("live egress probe must NOT run after an earlier HARD check fails; ran %d time(s)", eng.probeCalls)
+	}
+	if containerCalls != 0 {
+		t.Errorf("container enumeration must NOT run after an earlier HARD check fails; ran %d time(s)", containerCalls)
+	}
+}
+
+// TestActiveProfileReadFold locks the behavior of the folded active-profile read:
+// datapathModeFrom (HARD-error policy, consumed by the datapath-contract check)
+// and inboundTproxyOutcome (advisory-skip policy) derive their original results
+// from a single profileTproxyProbe, per stage.
+func TestActiveProfileReadFold(t *testing.T) {
+	readErr := errors.New("boom-read")
+	parseErr := errors.New("boom-parse")
+	nameErr := errors.New("boom-name")
+
+	cases := []struct {
+		name              string
+		probe             profileTproxyProbe
+		wantMode          string
+		wantModeErrMsg    string // "" = expect nil error
+		wantInboundOK     bool
+		wantInboundDetail string
+	}{
+		{
+			name:              "no active profile name",
+			probe:             profileTproxyProbe{nameErr: nameErr},
+			wantModeErrMsg:    "no active profile",
+			wantInboundOK:     true,
+			wantInboundDetail: "no active profile (skipped)",
+		},
+		{
+			name:              "empty active profile name",
+			probe:             profileTproxyProbe{name: ""},
+			wantModeErrMsg:    "no active profile",
+			wantInboundOK:     true,
+			wantInboundDetail: "no active profile (skipped)",
+		},
+		{
+			name:              "read error",
+			probe:             profileTproxyProbe{name: "p", readErr: readErr},
+			wantModeErrMsg:    `read active profile "p": boom-read`,
+			wantInboundOK:     true,
+			wantInboundDetail: "could not read active profile (skipped)",
+		},
+		{
+			name:              "parse error",
+			probe:             profileTproxyProbe{name: "p", parseErr: parseErr},
+			wantModeErrMsg:    `parse active profile "p": boom-parse`,
+			wantInboundOK:     true,
+			wantInboundDetail: "could not parse active profile (skipped)",
+		},
+		{
+			name:              "tproxy present",
+			probe:             profileTproxyProbe{name: "p", tproxy: true},
+			wantMode:          "tproxy",
+			wantInboundOK:     true,
+			wantInboundDetail: "sockopt.tproxy=tproxy present",
+		},
+		{
+			name:              "redirect (no tproxy)",
+			probe:             profileTproxyProbe{name: "p", tproxy: false},
+			wantMode:          "redirect",
+			wantInboundOK:     true,
+			wantInboundDetail: "ADVISORY: active profile inbound missing sockopt.tproxy (TPROXY mode may not work)",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mode, err := datapathModeFrom(c.probe)
+			if c.wantModeErrMsg == "" {
+				if err != nil {
+					t.Errorf("datapathModeFrom unexpected err: %v", err)
+				}
+			} else if err == nil || err.Error() != c.wantModeErrMsg {
+				t.Errorf("datapathModeFrom err = %v, want %q", err, c.wantModeErrMsg)
+			}
+			if mode != c.wantMode {
+				t.Errorf("datapathModeFrom mode = %q, want %q", mode, c.wantMode)
+			}
+
+			out := inboundTproxyOutcome(c.probe)
+			if out.OK != c.wantInboundOK {
+				t.Errorf("inboundTproxyOutcome OK = %v, want %v", out.OK, c.wantInboundOK)
+			}
+			if out.Detail != c.wantInboundDetail {
+				t.Errorf("inboundTproxyOutcome Detail = %q, want %q", out.Detail, c.wantInboundDetail)
 			}
 		})
 	}
