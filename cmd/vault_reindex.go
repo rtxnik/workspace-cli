@@ -20,10 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 
+	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -79,13 +79,8 @@ func newVaultReindexCmd() *cobra.Command {
 			}
 
 			// Resolve vault-ai repo root per CONTEXT D-08 fallback chain.
-			repoRoot := os.Getenv("VAULT_AI_REPO_ROOT")
-			if repoRoot == "" {
-				if home, err := os.UserHomeDir(); err == nil {
-					repoRoot = filepath.Join(home, "projects", "vault-ai")
-				}
-			}
-			if repoRoot == "" {
+			repoRoot, err := mcp.ResolveRepoRoot("")
+			if err != nil {
 				return &cliErrorWithExit{code: 4, msg: "reindex: VAULT_AI_REPO_ROOT unset and $HOME unavailable"}
 			}
 

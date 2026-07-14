@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
@@ -52,13 +53,11 @@ type backupVerifyEntry struct {
 // resolveBackupVerifyLogDir returns the directory backup-verify-*.jsonl logs
 // live in per CONTEXT D-26. Honors VAULT_AI_REPO_ROOT then $HOME/projects/vault-ai.
 func resolveBackupVerifyLogDir() (string, error) {
-	root := os.Getenv("VAULT_AI_REPO_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		root = filepath.Join(home, "projects", "vault-ai")
+	// Shared resolver (CONTEXT D-08). Propagate the resolver's home-unavailable
+	// error (wrapped with context); the log-dir subpath contract is unchanged.
+	root, err := mcp.ResolveRepoRoot("")
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(root, "_tooling", "logs"), nil
 }
