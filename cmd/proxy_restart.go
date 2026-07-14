@@ -25,6 +25,13 @@ swapped the symlink but the auto-reload failed. For container-level changes
 	Annotations: proxyAnnotation,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := config.Load()
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			if err := warnProxyConnected(cfg); err != nil {
+				cmd.SilenceUsage = true
+				return err
+			}
+		}
 		if err := proxyRestartCmdFn(cfg); err != nil {
 			cmd.SilenceUsage = true
 			return fmt.Errorf("proxy restart failed: %w", err)

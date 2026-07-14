@@ -12,6 +12,9 @@ import (
 func TestProxyRestartHappyPath(t *testing.T) {
 	orig := proxyRestartCmdFn
 	t.Cleanup(func() { proxyRestartCmdFn = orig })
+	origConn := proxyConnectedContainersFn
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { proxyConnectedContainersFn = origConn })
 	var called int
 	proxyRestartCmdFn = func(_ config.Config) error {
 		called++
@@ -43,6 +46,9 @@ func TestProxyRestartHappyPath(t *testing.T) {
 func TestProxyRestartFailure(t *testing.T) {
 	orig := proxyRestartCmdFn
 	t.Cleanup(func() { proxyRestartCmdFn = orig })
+	origConn := proxyConnectedContainersFn
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { proxyConnectedContainersFn = origConn })
 	proxyRestartCmdFn = func(_ config.Config) error {
 		return errors.New("docker daemon unreachable")
 	}
