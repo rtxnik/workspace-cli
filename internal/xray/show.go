@@ -198,3 +198,23 @@ func loadHysteria(dp *DetailedProfile, ob xrayconf.Outbound) error {
 	}
 	return nil
 }
+
+// Summary projects a DetailedProfile onto the list-safe ProfileSummary shape.
+// It is a PURE allowlist: only the non-secret display fields are copied and the
+// UUID is masked via MaskUUID (D-13). The secret-bearing fields — Auth, Obfs,
+// ObfsPassword, PublicKey, ShortID, SpiderX, PinSHA256 — are intentionally NOT
+// copied, so a ProfileSummary can never carry a raw credential into `list`
+// output. This is the single projection point behind ListProfiles.
+func (dp DetailedProfile) Summary() ProfileSummary {
+	return ProfileSummary{
+		Name:       dp.Name,
+		Active:     dp.Active,
+		Protocol:   dp.Protocol,
+		Transport:  dp.Transport,
+		Address:    dp.Address,
+		Port:       dp.Port,
+		Security:   dp.Security,
+		SNI:        dp.SNI,
+		UUIDMasked: MaskUUID(dp.UUID),
+	}
+}

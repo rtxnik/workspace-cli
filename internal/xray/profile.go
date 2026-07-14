@@ -173,11 +173,17 @@ func writeProfileValidated(cfg config.Config, name, target string, data []byte) 
 	return nil
 }
 
-// ListProfiles enumerates cfg.XrayProfilesDir/*.json, resolves the active
-// profile via os.Readlink(cfg.XrayConfig), and returns a slice sorted by
-// Name. Profiles whose JSON cannot be parsed are logged via output.Warn
-// (stderr) and skipped — list never errors on a single bad profile.
-func ListProfiles(cfg config.Config) ([]ProfileSummary, error) {
+// ListProfilesDetailed enumerates cfg.XrayProfilesDir/*.json and parses each
+// file exactly once via LoadProfile into a raw DetailedProfile (secrets
+// UNMASKED), returning the slice sorted by Name. Profiles whose name is invalid
+// (ValidateProfileName, run inside LoadProfile) or whose JSON cannot be parsed
+// are logged via output.Warn (stderr) and skipped — enumeration never errors on
+// a single bad profile.
+//
+// This is the raw superset feed for the --reveal path; callers rendering to a
+// human MUST project via DetailedProfile.Summary (or mask each field) unless
+// --reveal is explicitly set (D-13).
+func ListProfilesDetailed(cfg config.Config) ([]DetailedProfile, error) {
 	if err := os.MkdirAll(cfg.XrayProfilesDir, 0o700); err != nil {
 		return nil, fmt.Errorf("ensure profiles dir: %w", err)
 	}
@@ -187,21 +193,42 @@ func ListProfiles(cfg config.Config) ([]ProfileSummary, error) {
 		return nil, fmt.Errorf("glob profiles: %w", err)
 	}
 
-	activeName, _ := ReadActiveProfileName(cfg)
-
-	out := make([]ProfileSummary, 0, len(matches))
+	out := make([]DetailedProfile, 0, len(matches))
 	for _, p := range matches {
 		name := strings.TrimSuffix(filepath.Base(p), ".json")
-		summary, perr := summarizeProfile(p, name)
+		dp, perr := LoadProfile(cfg, name)
 		if perr != nil {
 			output.Warn(fmt.Sprintf("skip profile %q: %v", name, perr))
 			continue
 		}
-		summary.Active = (name == activeName)
-		out = append(out, summary)
+		out = append(out, dp)
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// ListProfiles enumerates cfg.XrayProfilesDir/*.json and returns the list-safe
+// (masked) ProfileSummary rows, sorted by Name. It parses each profile exactly
+// once through ListProfilesDetailed and projects every row via
+// DetailedProfile.Summary (D-13: list never emits raw secrets). Profiles that
+// fail to parse are warned + skipped — list never errors on a single bad
+// profile. Active is decided by a single ReadActiveProfileName read compared
+// against each profile name.
+func ListProfiles(cfg config.Config) ([]ProfileSummary, error) {
+	details, err := ListProfilesDetailed(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	activeName, _ := ReadActiveProfileName(cfg)
+
+	out := make([]ProfileSummary, 0, len(details))
+	for _, dp := range details {
+		summary := dp.Summary()
+		summary.Active = (dp.Name == activeName)
+		out = append(out, summary)
+	}
 	return out, nil
 }
 
@@ -255,109 +282,6 @@ func RemoveProfile(cfg config.Config, name string) error {
 	if err := os.Remove(target); err != nil {
 		return fmt.Errorf("remove profile %q at %s: %w", name, target, err)
 	}
-	return nil
-}
-
-// summarizeProfile reads a profile JSON and extracts the first proxy outbound
-// (vless or hysteria) into a ProfileSummary (secrets masked/omitted per D-13).
-func summarizeProfile(path, name string) (ProfileSummary, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ProfileSummary{}, fmt.Errorf("read: %w", err)
-	}
-	var xc xrayconf.XrayConfig
-	if err := json.Unmarshal(data, &xc); err != nil {
-		return ProfileSummary{}, fmt.Errorf("parse: %w", err)
-	}
-	s := ProfileSummary{Name: name}
-	for _, ob := range xc.Outbounds {
-		switch ob.Protocol {
-		case "vless":
-			var settings struct {
-				Vnext []struct {
-					Address string `json:"address"`
-					Port    int    `json:"port"`
-					Users   []struct {
-						ID string `json:"id"`
-					} `json:"users"`
-				} `json:"vnext"`
-			}
-			if err := json.Unmarshal(ob.Settings, &settings); err != nil {
-				return ProfileSummary{}, fmt.Errorf("parse settings: %w", err)
-			}
-			if len(settings.Vnext) == 0 {
-				return ProfileSummary{}, fmt.Errorf("no vnext in VLESS outbound")
-			}
-			s.Address = settings.Vnext[0].Address
-			s.Port = settings.Vnext[0].Port
-			if len(settings.Vnext[0].Users) > 0 {
-				s.UUIDMasked = MaskUUID(settings.Vnext[0].Users[0].ID)
-			} else {
-				s.UUIDMasked = MaskUUID("")
-			}
-			var ss struct {
-				Network         string `json:"network"`
-				Security        string `json:"security"`
-				RealitySettings struct {
-					ServerName string `json:"serverName"`
-				} `json:"realitySettings"`
-				TLSSettings struct {
-					ServerName string `json:"serverName"`
-				} `json:"tlsSettings"`
-			}
-			if len(ob.StreamSettings) > 0 {
-				if err := json.Unmarshal(ob.StreamSettings, &ss); err != nil {
-					return ProfileSummary{}, fmt.Errorf("parse stream: %w", err)
-				}
-			}
-			s.Transport = ss.Network
-			s.Security = ss.Security
-			switch ss.Security {
-			case "reality":
-				s.SNI = ss.RealitySettings.ServerName
-			case "tls":
-				s.SNI = ss.TLSSettings.ServerName
-			}
-			return s, nil
-		case "hysteria":
-			if err := summarizeHysteria(&s, ob); err != nil {
-				return ProfileSummary{}, err
-			}
-			return s, nil
-		}
-	}
-	return ProfileSummary{}, fmt.Errorf("no proxy outbound")
-}
-
-// summarizeHysteria fills s from a hysteria (hy2) outbound. UUIDMasked stays
-// empty (hy2 has no UUID); secrets are never placed on a ProfileSummary (D-13).
-func summarizeHysteria(s *ProfileSummary, ob xrayconf.Outbound) error {
-	var settings struct {
-		Address string `json:"address"`
-		Port    int    `json:"port"`
-	}
-	if err := json.Unmarshal(ob.Settings, &settings); err != nil {
-		return fmt.Errorf("parse hysteria settings: %w", err)
-	}
-	s.Protocol = "hysteria2"
-	s.Transport = "hysteria"
-	s.Address = settings.Address
-	s.Port = settings.Port
-	s.UUIDMasked = ""
-
-	var ss struct {
-		Security    string `json:"security"`
-		TLSSettings struct {
-			ServerName string `json:"serverName"`
-		} `json:"tlsSettings"`
-	}
-	if len(ob.StreamSettings) > 0 {
-		if err := json.Unmarshal(ob.StreamSettings, &ss); err != nil {
-			return fmt.Errorf("parse hysteria stream: %w", err)
-		}
-	}
-	s.Security = ss.Security
-	s.SNI = ss.TLSSettings.ServerName
 	return nil
 }
 
