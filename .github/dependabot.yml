@@ -1,0 +1,40 @@
+version: 2
+
+updates:
+  # Go module dependencies: one grouped PR per week.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      go-deps:
+        patterns:
+          - "*"
+    # Version updates wait for a package to settle; security updates bypass this.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+
+  # GitHub Actions pinned in workflows: one grouped PR per week.
+  # Dependabot bumps the SHA pin AND refreshes the trailing "# vX.Y.Z" comment;
+  # it does not un-pin.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    # semver-major-days is unsupported for the github-actions ecosystem
+    # (Dependabot schema); actions updates use the default cooldown only.
+    cooldown:
+      default-days: 7

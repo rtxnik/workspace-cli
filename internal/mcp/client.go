@@ -67,6 +67,11 @@ type Options struct {
 	// Initialize handshake's ClientInfo.Version (so the server can log
 	// "ws-vault/v1.2.3 connected" for forensic traceability).
 	Version string
+
+	// UVPath, when set, pins the absolute path to the `uv` binary and skips
+	// PATH resolution. If empty, NewClient falls back to $WS_UV_PATH and
+	// finally PATH lookup; whatever is chosen must pass resolveUV's checks.
+	UVPath string
 }
 
 // Client wraps the mark3labs/mcp-go client and holds a reference to the
@@ -118,13 +123,9 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 		}
 	}
 
-	// Resolve uv via the test-overridable seam.
-	uvPath, err := lookPathFn("uv")
+	// Resolve uv by provenance (override, then PATH, symlink-resolved, validated).
+	uvPath, err := resolveUV(opts)
 	if err != nil {
-		return nil, errMissingDepWrap(fmt.Sprintf("uv not on PATH: %v", err))
-	}
-	// Pitfall 5 / golang/go #66654 guard.
-	if err := CheckUVPath(uvPath); err != nil {
 		return nil, err
 	}
 

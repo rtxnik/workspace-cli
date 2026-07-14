@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"syscall"
 )
 
 // ErrMissingDependency is the package-level sentinel returned (wrapped) by
@@ -76,6 +78,69 @@ func CheckUVPath(uvPath string) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("uv at non-regular path %q (mode=%s) — fd-3 collision risk per golang/go #66654", uvPath, info.Mode())
+	}
+	return nil
+}
+
+// resolveUV picks the `uv` binary by provenance, not by path string. A
+// "canonical" user-writable location (uv installs to ~/.local/bin by default)
+// is not intrinsically more trusted than PATH, so preferring one would not stop
+// a hijack. Order: explicit override -> PATH seam -> symlink-resolved
+// validation. The returned path is the resolved real binary.
+func resolveUV(opts Options) (string, error) {
+	override := opts.UVPath
+	if override == "" {
+		override = os.Getenv("WS_UV_PATH")
+	}
+	var candidate string
+	if override != "" {
+		if !filepath.IsAbs(override) {
+			return "", fmt.Errorf("uv override %q must be an absolute path", override)
+		}
+		candidate = override
+	} else {
+		p, err := lookPathFn("uv")
+		if err != nil {
+			return "", errMissingDepWrap(fmt.Sprintf("uv not on PATH: %v", err))
+		}
+		if !filepath.IsAbs(p) {
+			return "", fmt.Errorf("uv resolved to a relative path %q — PATH-hijack risk; pin it via WS_UV_PATH", p)
+		}
+		candidate = p
+	}
+	// Resolve symlinks so the provenance checks apply to the REAL target binary
+	// and its REAL directory (a symlink in a safe dir must not launder a target
+	// in a world-writable one), and to avoid a validate-then-exec symlink swap.
+	real, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", fmt.Errorf("uv path %q: %w", candidate, err)
+	}
+	if err := CheckUVPath(real); err != nil {
+		return "", err
+	}
+	if err := validateUVDir(real); err != nil {
+		return "", err
+	}
+	return real, nil
+}
+
+// validateUVDir rejects a uv whose containing directory is writable by group or
+// other, or is owned by neither the current user nor root — the realistic
+// PATH-hijack surface. Callers pass the symlink-resolved path so the check
+// applies to the real target's directory.
+func validateUVDir(uvPath string) error {
+	dir := filepath.Dir(uvPath)
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("uv directory %q: %w", dir, err)
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("uv directory %q is writable by group/other (mode %o) — PATH-hijack risk; pin uv via WS_UV_PATH or fix the directory permissions", dir, fi.Mode().Perm())
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		if st.Uid != uint32(os.Getuid()) && st.Uid != 0 {
+			return fmt.Errorf("uv directory %q is owned by uid %d (not you or root) — PATH-hijack risk; pin uv via WS_UV_PATH", dir, st.Uid)
+		}
 	}
 	return nil
 }

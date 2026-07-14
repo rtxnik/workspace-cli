@@ -18,10 +18,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
-          go-version: "1.25.5"
+          go-version: "1.26.5"
       - run: go vet ./...
       - name: assert-ran guard self-test (H7 anti-false-green guard-of-the-guard)
         run: bash scripts/ci/assert-ran_test.sh
+      - name: govulncheck gate self-test
+        run: bash scripts/ci/govulncheck-gate_test.sh
       - run: go test -race -coverprofile=coverage.out ./...
       - name: Check coverage threshold
         run: |
@@ -45,7 +47,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
-          go-version: "1.25.5"
+          go-version: "1.26.5"
       - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa  # v7.0.1
         with:
           version: v2.12.2
@@ -95,7 +97,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
-          go-version: "1.25.5"
+          go-version: "1.26.5"
       - name: Preflight — load TPROXY kernel modules
         run: |
           sudo modprobe xt_TPROXY xt_socket || {
@@ -176,7 +178,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
-          go-version: "1.25.5"
+          go-version: "1.26.5"
           cache: false
       - name: Install minisign
         run: |
@@ -214,3 +216,18 @@ jobs:
           ls dist/*.sbom.json >/dev/null 2>&1 || { echo "::error::no SBOM artifacts produced"; exit 1; }
       - name: Exercise the verified installer
         run: sh scripts/install_test.sh
+
+  govulncheck:
+    name: govulncheck (module-bound allowlist gate)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version: "1.26.5"
+      - name: Run govulncheck gate
+        run: bash scripts/ci/govulncheck-gate.sh

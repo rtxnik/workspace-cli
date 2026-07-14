@@ -1,9 +1,9 @@
 #!/bin/sh
-# install_test.sh — exercises scripts/install.sh against a local fake "release"
-# served via file://. Verifies: (1) a good archive+checksum installs; (2) a
-# tampered checksums.txt is rejected; (3) an upgrade replaces the binary on a
-# new inode; (4) --require-signature failures state a reason; (5) a binary that
-# cannot execute fails the install. No network and no minisign required.
+# install_test.sh — exercises scripts/install.sh against a local fake "release".
+# Fail-closed default: a valid signature is REQUIRED unless --allow-unsigned.
+# A stub minisign on PATH stands in for the real tool (its exit code decides
+# verify pass/fail); branches are driven by the .minisig asset's presence, so
+# the suite does NOT depend on the runner's real minisign state.
 set -eu
 
 # shellcheck disable=SC1007
@@ -16,86 +16,97 @@ os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m); case "$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
 archive="ws_${os}_${arch}.tar.gz"
 
-# Build a fake release dir.
-dist="${work}/dist"; mkdir -p "$dist"
-printf '#!/bin/sh\necho fake-ws\n' > "${work}/ws"; chmod +x "${work}/ws"
-tar -C "$work" -czf "${dist}/${archive}" ws
-# shellcheck disable=SC2015
-( cd "$dist" && { command -v sha256sum >/dev/null 2>&1 && sha256sum "$archive" || shasum -a 256 "$archive"; } > checksums.txt )
+mkgood() { # dir
+    d="$1"; mkdir -p "$d"
+    printf '#!/bin/sh\necho fake-ws\n' > "${work}/ws"; chmod +x "${work}/ws"
+    tar -C "$work" -czf "${d}/${archive}" ws
+    # shellcheck disable=SC2015
+    ( cd "$d" && { command -v sha256sum >/dev/null 2>&1 && sha256sum "$archive" || shasum -a 256 "$archive"; } > checksums.txt )
+}
 
-prefix="${work}/root"
+# Signed dist (has .minisig); unsigned dist (no .minisig).
+dist="${work}/dist";       mkgood "$dist";       printf 'fake-sig\n' > "${dist}/checksums.txt.minisig"
+distnosig="${work}/nosig"; mkgood "$distnosig"
 
-# Case 1: good install.
-WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist}" PREFIX="$prefix" sh "$installer"
-test -x "${prefix}/bin/ws" || { echo "FAIL: ws not installed"; exit 1; }
-echo "PASS: good install"
+# Stub minisign that VERIFIES (exit 0) and one that FAILS (exit 1).
+okbin="${work}/ok";   mkdir -p "$okbin";  printf '#!/bin/sh\nexit 0\n' > "${okbin}/minisign";  chmod +x "${okbin}/minisign"
+badbin="${work}/bad"; mkdir -p "$badbin"; printf '#!/bin/sh\nexit 1\n' > "${badbin}/minisign"; chmod +x "${badbin}/minisign"
 
-# Case 2: tampered checksum is rejected.
-echo "0000000000000000000000000000000000000000000000000000000000000000  ${archive}" > "${dist}/checksums.txt"
-if WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist}" PREFIX="${work}/root2" sh "$installer" 2>/dev/null; then
-    echo "FAIL: tampered checksum was accepted"; exit 1
+# Case 1: default install, verifying minisign + signature present -> OK.
+p="${work}/root1"
+PATH="${okbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist}" PREFIX="$p" sh "$installer"
+test -x "${p}/bin/ws" || { echo "FAIL: default signed install did not install"; exit 1; }
+echo "PASS: default signed install"
+
+# Case 2 (RED for the flip): default, minisign present but NO signature asset, no opt-out -> REFUSE.
+e="${work}/c2.err"
+if PATH="${okbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${distnosig}" PREFIX="${work}/root2" sh "$installer" 2>"$e"; then
+    echo "FAIL: fail-closed default installed without a signature"; exit 1
+fi
+grep -q 'refusing to install' "$e" || { echo "FAIL: fail-closed refusal missing reason:"; cat "$e"; exit 1; }
+echo "PASS: fail-closed default refuses an unsigned release"
+
+# Case 3: --allow-unsigned with no signature -> installs (checksum-only) + warn.
+p3="${work}/root3"; e3="${work}/c3.err"
+PATH="${okbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${distnosig}" PREFIX="$p3" sh "$installer" --allow-unsigned 2>"$e3"
+test -x "${p3}/bin/ws" || { echo "FAIL: --allow-unsigned did not install"; exit 1; }
+grep -q 'checksum-level' "$e3" || { echo "FAIL: --allow-unsigned did not warn checksum-level:"; cat "$e3"; exit 1; }
+echo "PASS: --allow-unsigned downgrades to checksum-only"
+
+# Case 4: --require-signature accepted as a no-op alias (still installs when signed).
+p4="${work}/root4"; o4="${work}/c4.out"
+PATH="${okbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist}" PREFIX="$p4" sh "$installer" --require-signature >"$o4" 2>&1
+test -x "${p4}/bin/ws" || { echo "FAIL: --require-signature alias broke a signed install"; exit 1; }
+grep -q 'no-op' "$o4" || { echo "FAIL: --require-signature did not report no-op:"; cat "$o4"; exit 1; }
+echo "PASS: --require-signature accepted as no-op alias"
+
+# Case 5: PRESENT but INVALID signature is fatal (stub exits 1).
+e5="${work}/c5.err"
+if PATH="${badbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist}" PREFIX="${work}/root5" sh "$installer" 2>"$e5"; then
+    echo "FAIL: invalid signature accepted"; exit 1
+fi
+grep -q 'verification of checksums.txt FAILED' "$e5" || { echo "FAIL: invalid-sig message missing:"; cat "$e5"; exit 1; }
+echo "PASS: present-but-invalid signature is fatal"
+
+# Case 6: tampered checksum rejected (signature verifies, checksum mismatches).
+tamp="${work}/tamp"; mkdir -p "$tamp"; cp "${dist}/${archive}" "$tamp/"; cp "${dist}/checksums.txt.minisig" "$tamp/"
+echo "0000000000000000000000000000000000000000000000000000000000000000  ${archive}" > "${tamp}/checksums.txt"
+if PATH="${okbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${tamp}" PREFIX="${work}/root6" sh "$installer" 2>/dev/null; then
+    echo "FAIL: tampered checksum accepted"; exit 1
 fi
 echo "PASS: tampered checksum rejected"
 
-# Restore a good checksums.txt for the upgrade case.
-# shellcheck disable=SC2015
-( cd "$dist" && { command -v sha256sum >/dev/null 2>&1 && sha256sum "$archive" || shasum -a 256 "$archive"; } > checksums.txt )
+# Case 7: upgrade lands on a NEW inode.
+# shellcheck disable=SC2012
+ib=$(ls -i "${p4}/bin/ws" | awk '{print $1}')
+PATH="${okbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist}" PREFIX="$p4" sh "$installer" >/dev/null 2>&1
+# shellcheck disable=SC2012
+ia=$(ls -i "${p4}/bin/ws" | awk '{print $1}')
+[ "$ib" != "$ia" ] || { echo "FAIL: upgrade reused inode"; exit 1; }
+echo "PASS: upgrade replaced binary on a new inode"
 
-# Case 3: upgrading over an existing binary lands on a NEW inode. An in-place
-# copy reuses the inode, which leaves a stale per-inode code-signature cache on
-# macOS (every exec of the upgraded binary is SIGKILLed).
-inode_before=$(ls -i "${prefix}/bin/ws" | awk '{print $1}')
-WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist}" PREFIX="$prefix" sh "$installer"
-inode_after=$(ls -i "${prefix}/bin/ws" | awk '{print $1}')
-if [ "$inode_before" = "$inode_after" ]; then
-    echo "FAIL: upgrade reused the destination inode (in-place overwrite)"; exit 1
-fi
-echo "PASS: upgrade replaced the binary on a new inode"
-
-# Case 4: --require-signature with no minisig asset fails with a reason, not a
-# bare "not available". A stub minisign on PATH exercises the signature-required
-# branch without needing the real tool.
-stub="${work}/stub"; mkdir -p "$stub"
-printf '#!/bin/sh\nexit 0\n' > "${stub}/minisign"; chmod +x "${stub}/minisign"
-err="${work}/case4.err"
-if PATH="${stub}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist}" PREFIX="${work}/root4" sh "$installer" --require-signature 2>"$err"; then
-    echo "FAIL: missing minisig accepted under --require-signature"; exit 1
-fi
-if ! grep -Eq 'no checksums\.txt\.minisig asset|could not download checksums\.txt\.minisig' "$err"; then
-    echo "FAIL: missing-minisig error does not state a reason:"; cat "$err"; exit 1
-fi
-echo "PASS: missing minisig under --require-signature fails with a reason"
-
-# Case 5: a binary that installs but cannot execute must fail the install
-# (post-install smoke check), not report success.
-dist5="${work}/dist5"; mkdir -p "$dist5"
+# Case 8: non-executing binary fails the post-install smoke check.
+d8="${work}/d8"; mkdir -p "$d8"
 printf '#!/bin/sh\nexit 7\n' > "${work}/ws"; chmod +x "${work}/ws"
-tar -C "$work" -czf "${dist5}/${archive}" ws
+tar -C "$work" -czf "${d8}/${archive}" ws
 # shellcheck disable=SC2015
-( cd "$dist5" && { command -v sha256sum >/dev/null 2>&1 && sha256sum "$archive" || shasum -a 256 "$archive"; } > checksums.txt )
-err5="${work}/case5.err"
-if WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist5}" PREFIX="${work}/root5" sh "$installer" 2>"$err5"; then
-    echo "FAIL: non-executing binary reported as installed"; exit 1
+( cd "$d8" && { command -v sha256sum >/dev/null 2>&1 && sha256sum "$archive" || shasum -a 256 "$archive"; } > checksums.txt )
+printf 'fake-sig\n' > "${d8}/checksums.txt.minisig"
+e8="${work}/c8.err"
+if PATH="${okbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${d8}" PREFIX="${work}/root8" sh "$installer" 2>"$e8"; then
+    echo "FAIL: non-executing binary reported installed"; exit 1
 fi
-if ! grep -q 'failed to execute' "$err5"; then
-    echo "FAIL: smoke-check failure message missing:"; cat "$err5"; exit 1
-fi
-echo "PASS: non-executing binary fails the post-install smoke check"
+grep -q 'failed to execute' "$e8" || { echo "FAIL: smoke-check message missing:"; cat "$e8"; exit 1; }
+echo "PASS: non-executing binary fails the smoke check"
 
-# Case 6: a fatal signature problem is decided BEFORE the archive download —
-# the dist has checksums.txt but neither a signature nor the archive, so an
-# installer that fetches the archive first dies with the wrong error.
-dist6="${work}/dist6"; mkdir -p "$dist6"
-cp "${dist}/checksums.txt" "${dist6}/checksums.txt"
-err6="${work}/case6.err"
-if PATH="${stub}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${dist6}" PREFIX="${work}/root6" sh "$installer" --require-signature 2>"$err6"; then
-    echo "FAIL: missing minisig accepted under --require-signature"; exit 1
+# Case 9: signature policy decided BEFORE the archive download.
+d9="${work}/d9"; mkdir -p "$d9"; cp "${dist}/checksums.txt" "${d9}/checksums.txt"
+e9="${work}/c9.err"
+if PATH="${okbin}:${PATH}" WS_VERSION=v0.0.0-test WS_BASE_URL="file://${d9}" PREFIX="${work}/root9" sh "$installer" 2>"$e9"; then
+    echo "FAIL: missing signature accepted under fail-closed default"; exit 1
 fi
-if grep -q "failed to download ${archive}" "$err6"; then
-    echo "FAIL: archive was fetched before the signature policy was decided:"; cat "$err6"; exit 1
-fi
-if ! grep -Eq 'no checksums\.txt\.minisig asset|could not download checksums\.txt\.minisig' "$err6"; then
-    echo "FAIL: missing-minisig error does not state a reason:"; cat "$err6"; exit 1
-fi
+grep -q "failed to download ${archive}" "$e9" && { echo "FAIL: archive fetched before signature policy:"; cat "$e9"; exit 1; }
+grep -Eq 'no checksums\.txt\.minisig asset|could not download checksums\.txt\.minisig' "$e9" || { echo "FAIL: missing-minisig reason absent:"; cat "$e9"; exit 1; }
 echo "PASS: signature policy decided before the archive download"
+
 echo "ALL PASS"
