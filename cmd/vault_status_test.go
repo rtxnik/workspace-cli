@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -397,16 +396,21 @@ func TestInvokeVerifyAuditChain_TimeoutSurfacesAsRed(t *testing.T) {
 	}
 }
 
-// Smoke: verify the resolveVaultAIRepoRoot fallback chain works.
+// TestResolveVaultAIRepoRoot pins the status resolver contract after it was
+// unified onto mcp.ResolveRepoRoot: env override wins verbatim, and with env
+// unset the default equals the shared resolver's output byte-for-byte.
 func TestResolveVaultAIRepoRoot(t *testing.T) {
 	t.Setenv("VAULT_AI_REPO_ROOT", "/tmp/explicit-override")
 	if got := resolveVaultAIRepoRoot(); got != "/tmp/explicit-override" {
 		t.Errorf("expected env override; got %q", got)
 	}
 	t.Setenv("VAULT_AI_REPO_ROOT", "")
-	got := resolveVaultAIRepoRoot()
-	if !strings.HasSuffix(got, filepath.Join("projects", "vault-ai")) && got != "." {
-		t.Errorf("expected fallback to ~/projects/vault-ai or '.'; got %q", got)
+	want, err := mcp.ResolveRepoRoot("")
+	if err != nil {
+		t.Skipf("home dir unavailable in this environment: %v", err)
+	}
+	if got := resolveVaultAIRepoRoot(); got != want {
+		t.Errorf("default case: resolveVaultAIRepoRoot()=%q, want shared resolver %q", got, want)
 	}
 }
 
