@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -26,6 +28,17 @@ comes up.`,
 	Annotations: proxyAnnotation,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := config.Load()
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			if err := warnProxyConnected(cfg); err != nil {
+				if errors.Is(err, errAborted) {
+					output.Info("Aborted")
+					return nil
+				}
+				cmd.SilenceUsage = true
+				return err
+			}
+		}
 		if err := proxyRecreateCmdFn(cfg); err != nil {
 			cmd.SilenceUsage = true
 			return fmt.Errorf("proxy recreate failed: %w", err)
