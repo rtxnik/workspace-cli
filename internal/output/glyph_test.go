@@ -24,11 +24,16 @@ var glyphModeCases = []struct {
 	{"empty environment", map[string]string{}, GlyphASCII},
 	{"explicit opt-in", map[string]string{"WS_ASCII": "1", "LC_ALL": "en_US.UTF-8"}, GlyphASCII},
 	{"ambiguous-wide opt-in", map[string]string{"RUNEWIDTH_EASTASIAN": "1", "LC_ALL": "en_US.UTF-8"}, GlyphASCII},
+	// RUNEWIDTH_EASTASIAN also accepts "true" case-insensitively (strings.EqualFold);
+	// the "1" row above never exercises that half of the condition.
+	{"ambiguous-wide opt-in, true", map[string]string{"RUNEWIDTH_EASTASIAN": "TrUe", "LC_ALL": "en_US.UTF-8"}, GlyphASCII},
 	{"utf-8 western", map[string]string{"LC_ALL": "en_US.UTF-8"}, GlyphUTF8},
 	{"utf-8 western, lc_ctype", map[string]string{"LC_CTYPE": "en_GB.UTF-8"}, GlyphUTF8},
 	{"utf-8 western, lang only", map[string]string{"LANG": "de_DE.utf8"}, GlyphUTF8},
 	{"non-utf-8", map[string]string{"LC_ALL": "en_US.ISO-8859-1"}, GlyphASCII},
 	{"japanese", map[string]string{"LC_ALL": "ja_JP.UTF-8"}, GlyphASCII},
+	// isCJKLocale also strips an "@modifier" suffix; nothing above carries one.
+	{"japanese with modifier", map[string]string{"LC_ALL": "ja_JP.UTF-8@cjknarrow"}, GlyphASCII},
 	{"simplified chinese", map[string]string{"LC_ALL": "zh_CN.UTF-8"}, GlyphASCII},
 	{"chinese with script tag", map[string]string{"LANG": "zh-Hans-CN.UTF-8"}, GlyphASCII},
 	{"korean", map[string]string{"LC_CTYPE": "ko_KR.UTF-8"}, GlyphASCII},

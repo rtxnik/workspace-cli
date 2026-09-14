@@ -85,6 +85,27 @@ func TestStateVocabularyIsFixed(t *testing.T) {
 	if got := widestStateWord(); got != 8 { // "degraded"
 		t.Errorf("widestStateWord() = %d, want 8 — the Checks floor depends on it", got)
 	}
+
+	// allStates is the layer's own enumeration order; fxStateVocabulary above
+	// is the independent fixture. Nothing so far ties the two together, so a
+	// state dropped from allStates (or duplicated in it) would silently
+	// narrow every loop elsewhere that ranges over allStates — the width
+	// census in TestGlyphWidths, the retired-glyph check below — while this
+	// loop, which ranges over fxStateVocabulary, would stay green. Assert the
+	// two enumerate the same set: equal length, and every fixture key present
+	// in allStates exactly once.
+	if got, want := len(allStates), len(fxStateVocabulary); got != want {
+		t.Errorf("len(allStates) = %d, len(fxStateVocabulary) = %d, want equal", got, want)
+	}
+	seen := make(map[State]int, len(allStates))
+	for _, st := range allStates {
+		seen[st]++
+	}
+	for st := range fxStateVocabulary {
+		if seen[st] != 1 {
+			t.Errorf("allStates enumerates %v %d time(s), want exactly 1", st, seen[st])
+		}
+	}
 }
 
 // The retired glyphs must not come back: `●` meant running, healthy AND
