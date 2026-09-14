@@ -264,6 +264,43 @@ var probeResolveWidth = contractProbe{
 
 // ------------------------------------------- §4.1 / §6.6 one stream per fd
 
+// TWO PACKAGE-WIDE INVARIANTS ARE ESTABLISHED HERE. Both are environmental
+// rather than behavioural, so neither is visible in a diff that breaks them.
+//
+// 1. NO TEST IN THIS PACKAGE MAY CALL t.Parallel().
+//
+// withStdStreams reassigns os.Stdout and os.Stderr, which are process-global.
+// This probe runs inside it and so does TestStreamMemoisationIsRaceFree, which
+// additionally fans out to 64 goroutines. Two tests running concurrently while
+// one of them swaps those variables is a data race on the swap itself, and the
+// tests that lose the race assert against a descriptor another test has
+// already pointed elsewhere.
+//
+// Half of that is caught for free and half is not, which is the part worth
+// knowing. Measured by planting t.Parallel() in each place:
+//
+//   - in THIS probe's subtest it panics immediately — "testing: test using
+//     t.Setenv, t.Chdir, or cryptotest.SetGlobalRandom can not use
+//     t.Parallel". That is the Go runtime's t.Setenv rule, not anything this
+//     package does, and it only fires because this probe happens to call
+//     t.Setenv.
+//   - in TestStreamMemoisationIsRaceFree, which swaps the same globals but
+//     calls no t.Setenv, it is ACCEPTED SILENTLY: the package stayed green
+//     under -race. Nothing rejects it.
+//
+// So a future test that swaps these globals in parallel fails intermittently,
+// under a different test's name, with no message naming this cause. Measured
+// at this commit: t.Parallel() appears zero times in the whole repository.
+//
+// 2. /dev/ptmx IS A HARD REQUIREMENT OF THIS PACKAGE'S TEST SUITE.
+//
+// From this file on, a runner without a pty fails rather than skips: this
+// probe calls r.fail and TestNoColourEmitsNoEscapes calls t.Fatalf. That is
+// deliberate. Both halves of a pipe/pipe pair resolve to ColourNone whatever
+// the code does, so a quiet skip would silently remove the one assertion in
+// the suite that can discriminate per-fd colour probing — the defect §4.1
+// exists to close — and leave the suite green while proving nothing.
+
 // probeStreamIdentity is §6.6's layer-level rows. Out() and Err() are two
 // streams over two file descriptors, each carrying the properties of its OWN
 // fd, and each resolved once and memoised.
