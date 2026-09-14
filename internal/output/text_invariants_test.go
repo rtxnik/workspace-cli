@@ -388,6 +388,31 @@ func TestSanitise(t *testing.T) {
 		// single-byte CSI introducer) are what a mis-decoded latin-1 stream
 		// emits, and they are as capable of moving a cursor as an ESC pair.
 		{"c1 controls", "a\u0085b\u009bc", "abc"},
+		// A bare ESC that begins no valid sequence: the §4.8 shape, where a
+		// child process's stderr is captured mid-write or a read ends inside a
+		// sequence. These rows pin ansi.Strip rather than the switch beneath
+		// it. Measured, ansi.Strip consumes EVERY ESC — 0 of 1851 ESC-bearing
+		// inputs, over every structural byte role in the grammar, leave one
+		// behind — so the C0 arm of Sanitise never sees 0x1b at all, and adding
+		// `case r == 0x1b:` to the keep-list above is an EQUIVALENT MUTANT that
+		// no fixture can kill. Do not add rows hoping to catch it; the arm is
+		// unreachable for ESC by construction, not under-tested.
+		//
+		// The first shape is pinned because it is surprising and costs data:
+		// ESC followed by a plain letter is a complete two-byte sequence, so
+		// the LETTER IS CONSUMED WITH IT and "a\x1bb" sanitises to "a", not
+		// "ab". A stray ESC in captured output eats the character after it.
+		// That row goes red if the ansi.Strip call is dropped, which is what
+		// makes it an assertion rather than a note.
+		//
+		// The second shape — ESC as the last byte, a read that ended inside a
+		// sequence — is NOT falsifiable by any single change to Sanitise: drop
+		// ansi.Strip and the C0 arm still removes the trailing ESC. It is kept
+		// as a pin on x/ansi rather than on this package: if an upgrade ever
+		// stopped consuming a trailing lone ESC, this row is the only thing
+		// here that would notice.
+		{"bare esc takes the next character with it", "a\x1bb", "a"},
+		{"bare esc at end of string", "go\x1b", "go"},
 		{"tab survives", "go\tnode\tpython", "go\tnode\tpython"},
 		{"newline survives", "line one\nline two", "line one\nline two"},
 		{"carriage return does not", "line one\rline two", "line oneline two"},
