@@ -59,6 +59,40 @@ func TestGlyphModeFromEnv(t *testing.T) {
 	}
 }
 
+// isCJKLocale strips an optional "@modifier" suffix before splitting on
+// "_"/"-" for the primary language subtag. "ja@cjknarrow" is the minimal
+// input that actually exercises the "@" branch of that first split: it has
+// no "." and no territory subtag, so nothing upstream of "@" truncates the
+// tag first. A realistic locale such as "ja_JP.UTF-8@cjknarrow" (covered by
+// glyphModeCases above) does NOT discriminate — its "." at index 5 is matched
+// before the "@" at index 11, so the same result comes back whether or not
+// "@" is in the cutset. Testing isCJKLocale directly here, rather than
+// through glyphModeFromEnv, also sidesteps a second trap: a non-UTF-8 locale
+// short-circuits glyphModeFromEnv's `!isUTF8Locale(locale) ||
+// isCJKLocale(locale)` clause on its first disjunct regardless of what
+// isCJKLocale returns.
+var isCJKLocaleCases = []struct {
+	name   string
+	locale string
+	want   bool
+}{
+	{"minimal cjk with modifier, no other separator", "ja@cjknarrow", true},
+	{"full locale with codeset", "ja_JP.UTF-8", true},
+	{"script-tagged locale", "zh-Hans-CN.UTF-8", true},
+	{"lc_ctype-style, no codeset", "ko_KR", true},
+	{"non-cjk", "en_US.UTF-8", false},
+}
+
+func TestIsCJKLocale(t *testing.T) {
+	for _, c := range isCJKLocaleCases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isCJKLocale(c.locale); got != c.want {
+				t.Errorf("isCJKLocale(%q) = %v, want %v", c.locale, got, c.want)
+			}
+		})
+	}
+}
+
 // §4.5 and §6.4: every glyph the layer emits must be width 1 in its mode, and
 // the ASCII marker is THREE cells — the number the allocator's step-5(b) floor
 // depends on. At this task markerWidth is defined as exactly
