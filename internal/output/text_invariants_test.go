@@ -68,8 +68,13 @@ const cutMaxBudget = 40
 // losing the ability to fail is reported the day it happens. It is not a claim
 // about the other two: cut_prefix and cut_utf8 hold for the rune-stepped
 // control as well as for the shipped one, and no control in this file reddens
-// them — catching a defect in those would need a byte-slicing control, which
-// is a fixture this file does not have.
+// them. They are NOT the same case, and one fixture does not cover both.
+// cut_utf8 would redden under a byte-slicing control (`s[:w]`, the shape of
+// the defect this layer replaces), which this file does not have. cut_prefix
+// would not: a byte-slicing cut still returns a prefix of its source, and so
+// does anything else that returns a SUBSTRING, so no cut whatsoever can
+// falsify it — reddening cut_prefix needs a control that re-encodes, reorders
+// or inserts.
 
 type cutPair struct {
 	name   string
@@ -405,9 +410,24 @@ func TestSanitise(t *testing.T) {
 	}
 }
 
-// Sanitise must leave no ESC byte behind, whatever the input: this is the
-// property that stops the layer laundering control sequences captured from a
-// child process into the operator's session (§4.4, §4.8).
+// Sanitise must reduce a wrapped string to exactly what it produces for the
+// payload alone: the wrapper contributes NOTHING. That is the property that
+// stops the layer laundering control sequences captured from a child process
+// into the operator's session (§4.4, §4.8), because it is a property of
+// ansi.Strip removing the sequence payload rather than of the C0 branch
+// dropping the ESC byte.
+//
+// The equality is stated because the two absolute checks beside it CANNOT
+// carry that claim: ESC is below 0x20, so the C0 branch drops it for every
+// input and neither check can see ansi.Strip go missing. Measured over the 48
+// corpus x wrapper combinations, with ansi.Strip deleted from Sanitise: the
+// equality fails 48 times, the ESC check 0, the UTF-8 check 0.
+//
+// All three are kept, because none is redundant with the others. The equality
+// is a RELATIVE property and is blind to any defect that mangles both sides
+// alike; measured, an emit that truncates multi-byte runes to a single byte is
+// caught only by utf8.ValidString (36 of 48), and a Sanitise that appends an
+// escape of its own to every result is caught only by the ESC check (48 of 48).
 func TestSanitiseLeavesNoEscapes(t *testing.T) {
 	for _, c := range cutCorpus {
 		for _, wrapper := range []string{
@@ -417,6 +437,10 @@ func TestSanitiseLeavesNoEscapes(t *testing.T) {
 		} {
 			in := fmt.Sprintf(wrapper, c.s)
 			got := Sanitise(in)
+			if got != Sanitise(c.s) {
+				t.Errorf("Sanitise(%q) = %q, want the wrapper to contribute nothing: %q",
+					in, got, Sanitise(c.s))
+			}
 			if strings.ContainsRune(got, 0x1b) {
 				t.Errorf("Sanitise(%q) left an ESC byte: %q", in, got)
 			}

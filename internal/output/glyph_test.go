@@ -95,9 +95,14 @@ func TestIsCJKLocale(t *testing.T) {
 
 // §4.5 and §6.4: every glyph the layer emits must be width 1 in its mode, and
 // the ASCII marker is THREE cells — the number the allocator's step-5(b) floor
-// depends on. At this task markerWidth is defined as exactly
-// ansi.StringWidth(marker(mode)), so the consistency loop below cannot fail;
-// the two literal assertions against 1 and 3 are what carry the test.
+// depends on.
+//
+// The consistency loop below was a tautology when this file was written, because
+// markerWidth was then defined as exactly ansi.StringWidth(marker(mode)). It is
+// not one any more: markerWidth now measures through the package's own W, so the
+// loop is a live cross-check that W has not diverged from ansi.StringWidth. Do
+// not delete it as dead code — that divergence is precisely what Task 11's width
+// mutant plants.
 func TestGlyphWidths(t *testing.T) {
 	if got := markerWidth(GlyphUTF8); got != 1 {
 		t.Errorf("markerWidth(GlyphUTF8) = %d, want 1", got)
