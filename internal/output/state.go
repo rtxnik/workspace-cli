@@ -1,7 +1,5 @@
 package output
 
-import "github.com/charmbracelet/x/ansi"
-
 // §4.5 State vocabulary.
 //
 // Six states. Every mark was verified to have display width 1 under both
@@ -71,7 +69,7 @@ func stateRole(st State) Role { return stateDefs[st].role }
 func widestStateWord() int {
 	widest := 0
 	for _, def := range stateDefs {
-		if w := ansi.StringWidth(def.word); w > widest {
+		if w := W(def.word); w > widest {
 			widest = w
 		}
 	}

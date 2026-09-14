@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // §4.5 Glyph mode.
@@ -45,7 +44,7 @@ func marker(mode GlyphMode) string {
 // markerWidth is the display width of the truncation marker in this mode.
 // It is also the floor of §4.3 step 5(b): a column narrower than its own
 // marker could not place it and would either overflow or silently clip.
-func markerWidth(mode GlyphMode) int { return ansi.StringWidth(marker(mode)) }
+func markerWidth(mode GlyphMode) int { return W(marker(mode)) }
 
 // asciiBorder is the ASCII counterpart of lipgloss.RoundedBorder():
 // `- | + + + + + + + + +` for the eleven Ambiguous box-drawing glyphs.
