@@ -390,10 +390,21 @@ func TestSanitise(t *testing.T) {
 		{"c1 controls", "a\u0085b\u009bc", "abc"},
 		// A bare ESC that begins no valid sequence: the §4.8 shape, where a
 		// child process's stderr is captured mid-write or a read ends inside a
-		// sequence. These rows pin ansi.Strip rather than the switch beneath
-		// it. Measured, ansi.Strip consumes EVERY ESC — 0 of 1851 ESC-bearing
-		// inputs, over every structural byte role in the grammar, leave one
-		// behind — so the C0 arm of Sanitise never sees 0x1b at all, and adding
+		// sequence. The FIRST row pins ansi.Strip rather than the switch
+		// beneath it; the second is a different case, described below.
+		//
+		// Measured by exhausting every string of length 1 to 3 over an alphabet
+		// carrying each structural byte role — ESC, the CSI/OSC/DCS/SOS/PM/APC
+		// introducers, the parameter, intermediate and final byte ranges, ST,
+		// BEL, CAN, SUB, NUL, ordinary text and an invalid UTF-8 byte: ansi.Strip
+		// consumes EVERY ESC and no input leaves one behind. Re-measured over a
+		// second, independently chosen alphabet with the same result. The
+		// absolute number of inputs is a property of the alphabet and is
+		// deliberately not pinned here, because a reader who re-derives it with
+		// any other alphabet would get a different one and could not tell
+		// agreement from drift.
+		//
+		// So the C0 arm of Sanitise never sees 0x1b at all, and adding
 		// `case r == 0x1b:` to the keep-list above is an EQUIVALENT MUTANT that
 		// no fixture can kill. Do not add rows hoping to catch it; the arm is
 		// unreachable for ESC by construction, not under-tested.
@@ -453,7 +464,14 @@ func TestSanitise(t *testing.T) {
 // alike; measured, an emit that truncates multi-byte runes to a single byte is
 // caught only by utf8.ValidString (36 of 48), and a Sanitise that appends an
 // escape of its own to every result is caught only by the ESC check (48 of 48).
-func TestSanitiseLeavesNoEscapes(t *testing.T) {
+//
+// PRECONDITION on the corpus, which is shared with the cut sweep and declared
+// there as "the hostile material": no cutCorpus entry carries a C0, C1 or DEL
+// byte (measured, 0 of 16), so no entry can complete, terminate or truncate a
+// wrapper's escape sequence. A hostile row added later for CUT reasons that does
+// carry one would surface here as a puzzling inequality — that would be this
+// precondition breaking, not Sanitise.
+func TestSanitiseWrapperContributesNothing(t *testing.T) {
 	for _, c := range cutCorpus {
 		for _, wrapper := range []string{
 			"\x1b[1;31m%s\x1b[0m",

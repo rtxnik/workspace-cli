@@ -100,9 +100,15 @@ func TestIsCJKLocale(t *testing.T) {
 // The consistency loop below was a tautology when this file was written, because
 // markerWidth was then defined as exactly ansi.StringWidth(marker(mode)). It is
 // not one any more: markerWidth now measures through the package's own W, so the
-// loop is a live cross-check that W has not diverged from ansi.StringWidth. Do
-// not delete it as dead code — that divergence is precisely what Task 11's width
-// mutant plants.
+// loop is a live cross-check that W agrees with ansi.StringWidth ON THESE TWO
+// MARKERS. Do not delete it as dead code.
+//
+// What it catches is narrower than "any divergence in W", because the only two
+// strings it measures are the markers themselves. A W that returned BYTE LENGTH
+// reddens it: len("…") is 3 against a width of 1. A W that returned a RUNE COUNT
+// does not — measured, both markers have exactly as many runes as cells (1 and 1,
+// 3 and 3) — so a rune-versus-cell divergence is caught by the fixtures whose
+// rune count is not their cell width, and never here.
 func TestGlyphWidths(t *testing.T) {
 	if got := markerWidth(GlyphUTF8); got != 1 {
 		t.Errorf("markerWidth(GlyphUTF8) = %d, want 1", got)
