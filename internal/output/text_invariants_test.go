@@ -64,10 +64,12 @@ const cutMaxBudget = 40
 // Keeping the control in the test file rather than behind a switch in text.go
 // means it stays permanently available: TestCutInvariantsRejectRuneStepping
 // runs the same invariant bodies over it on every run and asserts that
-// cut_budget and cut_boundary both go red, so either of THOSE TWO losing the
-// ability to fail is reported the day it happens. It is not a claim about the
-// other three: cut_prefix and cut_utf8 hold for the rune-stepped control as
-// well as for the shipped one, and no control in this file reddens them.
+// cut_budget, cut_boundary and cut_maximal all go red, so any of THOSE THREE
+// losing the ability to fail is reported the day it happens. It is not a claim
+// about the other two: cut_prefix and cut_utf8 hold for the rune-stepped
+// control as well as for the shipped one, and no control in this file reddens
+// them — catching a defect in those would need a byte-slicing control, which
+// is a fixture this file does not have.
 
 type cutPair struct {
 	name   string
@@ -174,7 +176,9 @@ func clusterOffsets(s string) map[int]bool {
 //
 // The invariants, and the concrete code change each one exists to catch:
 //
-//	cut_budget    — W(cut) <= w. Red when a cut steps by rune over a multi-rune
+//	cut_budget    — ansi.StringWidth(cut) <= w, and never W(cut): an invariant
+//	                measured with the function under test would agree with a
+//	                defect in it. Red when a cut steps by rune over a multi-rune
 //	                cluster, or when a stepper stops subtracting what it ate.
 //	cut_prefix    — cutAt returns a prefix of s and cutAtEnd a suffix of it.
 //	                Red when a cut reorders, re-encodes or inserts anything.
@@ -319,13 +323,14 @@ func TestCutCorpusIsPotent(t *testing.T) {
 }
 
 // TestCutInvariantsRejectRuneStepping is the permanent control: the same
-// invariant bodies run over the rune-stepping primitives above, and cut_budget
-// and cut_boundary MUST go red. Without it, "every invariant holds" is equally
-// consistent with invariants that hold for any primitive whatsoever.
+// invariant bodies run over the rune-stepping primitives above, and cut_budget,
+// cut_boundary and cut_maximal MUST all go red. Without it, "every invariant
+// holds" is equally consistent with invariants that hold for any primitive
+// whatsoever.
 func TestCutInvariantsRejectRuneStepping(t *testing.T) {
 	v := newViolations()
 	sweepCutInvariants(runeCuts(), v)
-	for _, want := range []string{"cut_budget", "cut_boundary"} {
+	for _, want := range []string{"cut_budget", "cut_boundary", "cut_maximal"} {
 		if v.count[want] == 0 {
 			t.Errorf("with rune-stepped cuts, %s stayed green; that invariant cannot fail", want)
 		}
