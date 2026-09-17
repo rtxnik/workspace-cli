@@ -122,12 +122,20 @@ func (s stdWriter) Write(p []byte) (int, error) {
 	return os.Stdout.Write(p)
 }
 
-// newStdStream probes f once and then points the Stream at the late-bound
-// writer for that descriptor.
+// newStdStream probes f once and then builds the Stream over the late-bound
+// writer for that descriptor — BOTH the Write path and the lipgloss renderer,
+// so no field of the returned struct retains f.
+//
+// Swapping only s.w would leave the renderer's termenv output wrapping the
+// file the stream was probed from, which makes "the destination is not
+// memoised" true of Write and false of the struct. Measured when this was
+// repointed: the SGR is byte-identical at every role and every colour level
+// (56 level x glyph-mode x role renders, 0 differences, and 0 of 7 on the real
+// NewStream path), because NewStreamAt sets the colour profile explicitly
+// instead of letting the renderer probe its own writer.
 func newStdStream(f *os.File, err bool) *Stream {
-	s := NewStream(f)
-	s.w = stdWriter{err: err}
-	return s
+	probed := NewStream(f)
+	return NewStreamAt(stdWriter{err: err}, probed.width, probed.tty, probed.level, probed.mode == GlyphASCII)
 }
 
 // Out is stdout: the answer. Resolved once per process and memoised (§4.1);

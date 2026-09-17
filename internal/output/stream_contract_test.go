@@ -3,6 +3,7 @@ package output
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -95,6 +96,14 @@ func (r *results) report(t *testing.T) {
 // corpus harness, and for the same reason: a mutation that perturbs nothing
 // cannot be killed by anything, and reporting it as killed would be the
 // harness certifying coverage it does not have.
+//
+// A DIGEST MUST THEREFORE DEPEND ONLY ON BEHAVIOUR. Anything a digest reports
+// that can move on its own — a kernel-allocated fd, a colour level that
+// follows the runner's TERM or COLORTERM — turns a mutant that changed nothing
+// into one that looks killed. Both exposures were found and closed here:
+// resolve_width emits ownfd as a bool rather than the fd number, and
+// stream_identity pins TERM, NO_COLOR, CLICOLOR and COLORTERM. Any probe added
+// later owes the same check, and so does any assertion added to these two.
 type contractProbe struct {
 	name string
 	spec string
@@ -248,7 +257,10 @@ var probeResolveWidth = contractProbe{
 			sawFd = fd
 			return 77, nil
 		})
-		digest = append(digest, fmt.Sprintf("newStream fd=%d width=%d tty=%t", sawFd, s.Width(), s.IsTTY()))
+		// ownfd, not the number: the fd is kernel-allocated and moves between
+		// runs (6 and 7 were both observed), and a digest that moves for
+		// environmental reasons reports a vacuous mutant as non-vacuous.
+		digest = append(digest, fmt.Sprintf("newStream ownfd=%t width=%d tty=%t", sawFd == f.Fd(), s.Width(), s.IsTTY()))
 		if sawFd != f.Fd() {
 			r.fail("resolve_width", "newStream probed fd %d for a file whose own fd is %d", sawFd, f.Fd())
 		}
@@ -333,10 +345,26 @@ var probeStreamIdentity = contractProbe{
 			r.fail("stream_identity", "/dev/ptmx is not reported as a terminal; the probe cannot discriminate")
 			return "no-pty"
 		}
-		// TERM has to name a capable terminal or every profile collapses to the
-		// no-colour case and the two levels agree for the wrong reason.
+		// The whole colour environment is pinned, not just TERM. Each of these
+		// collapses a pty to the no-colour profile on its own, and a collapse
+		// here does not look like an environment problem — it trips "both
+		// streams resolved to colour level 0", a true-looking accusation
+		// against correct code. COLORTERM is pinned for the opposite reason:
+		// it does not collapse anything, it RAISES the level, and an ambient
+		// COLORTERM=truecolor would move this probe's digest from outlevel=2
+		// to outlevel=3 without any behaviour changing.
+		//
+		// Measured on a live /dev/ptmx, termenv v0.16.0, as profile -> level:
+		//
+		//	TERM="xterm-256color"  -> 1 (ANSI256)   -> 2 (Colour256)
+		//	TERM unset             -> 3 (Ascii)     -> 0 (ColourNone)
+		//	TERM="dumb"            -> 3 (Ascii)     -> 0 (ColourNone)
+		//	CLICOLOR="0"           -> 3 (Ascii)     -> 0 (ColourNone)
+		//	COLORTERM="truecolor"  -> 0 (TrueColor) -> 3 (ColourTrue)
 		t.Setenv("TERM", "xterm-256color")
 		t.Setenv("NO_COLOR", "")
+		t.Setenv("CLICOLOR", "")
+		t.Setenv("COLORTERM", "")
 
 		pipeR, pipeW, err := os.Pipe()
 		if err != nil {
@@ -493,6 +521,29 @@ func TestStreamContract(t *testing.T) {
 	}
 }
 
+// The two width constants are pinned to their literal values, because nothing
+// else in the suite does.
+//
+// Every other assertion is written in terms of the constants, so it moves with
+// them. probeResolveWidth's table does bound MinWidth to {29, 30} — the
+// "28 -> MinWidth" row forces it to at least 29 and the "30 -> 30" row forces
+// it to at most 30 — but MinWidth = 30 passes the whole suite, and
+// WidthUnbounded is only ever asserted against itself.
+//
+// 29 is a product commitment, not an implementation detail: it is the
+// narrowest terminal the CLI undertakes to serve, and the constant's own
+// comment defends that number against being mistaken for the natural floor of
+// the widest block. A commitment that no test states can be edited by anyone
+// who finds it inconvenient.
+func TestWidthConstantsArePinnedToTheirValues(t *testing.T) {
+	if MinWidth != 29 {
+		t.Errorf("MinWidth = %d, want the committed product floor 29", MinWidth)
+	}
+	if WidthUnbounded != math.MaxInt32 {
+		t.Errorf("WidthUnbounded = %d, want math.MaxInt32 (%d)", WidthUnbounded, math.MaxInt32)
+	}
+}
+
 // Width() reports the resolved number unclamped; the MinWidth floor belongs to
 // the render budget. Keeping them separate is what lets a caller see that the
 // terminal really is 20 columns while every render still lays out at 29.
@@ -512,12 +563,48 @@ func TestBudgetFloorIsSeparateFromWidth(t *testing.T) {
 
 // A stream with no colour emits no SGR for any role, and NO_COLOR alone is
 // enough to produce one even on a terminal (§4.6).
+//
+// THE ENVIRONMENT IS PINNED AND THERE IS A CONTROL. Neither is decoration.
+//
+// Both assertions below expect ColourNone. Delete either guard from
+// probeColour and the call falls through to termenv, which resolves even a
+// pty to the no-colour profile whenever TERM is unset, "dumb", or names no
+// colour capability — and .github/workflows/ci.yml sets no TERM at all, so CI
+// is exactly that case. The assertions would then be satisfied by the runner
+// rather than by the code.
+//
+// That is not a worry, it is measured. With TERM unset, against the version of
+// this test that did not pin it: deleting the NO_COLOR guard, deleting the
+// !tty guard, and deleting the whole clause ALL left this test green. The same
+// three mutations are killed once TERM is pinned. The identical hazard is
+// spelled out at probeStreamIdentity, which has always pinned TERM; this test
+// did not, and inherited its result from the developer's shell.
+//
+// The control is what keeps the pin honest. It asserts that colour IS
+// reachable on this fd in this environment before the two suppression
+// assertions run, so a pin that stops working reddens the control with a
+// message naming that cause, instead of quietly making the rest vacuous.
+//
+// Shipped behaviour was never at risk: with getenv == os.Getenv and a real
+// *os.File, termenv enforces NO_COLOR and the non-TTY case independently of
+// probeColour's own guards. The defect was in this assertion's power.
 func TestNoColourEmitsNoEscapes(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("CLICOLOR", "")
+	t.Setenv("COLORTERM", "")
+
 	pty, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("no pty available: %v", err)
 	}
 	defer func() { _ = pty.Close() }()
+
+	if got := probeColour(pty, true, func(string) string { return "" }); got == ColourNone {
+		t.Fatalf("control: a TTY with TERM=xterm-256color and no suppressing variable resolved to " +
+			"ColourNone, so this environment cannot produce colour at all and the two assertions " +
+			"below would pass without the code doing anything")
+	}
 
 	if got := probeColour(pty, true, func(k string) string {
 		if k == "NO_COLOR" {
