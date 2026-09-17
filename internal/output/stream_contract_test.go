@@ -99,11 +99,22 @@ func (r *results) report(t *testing.T) {
 //
 // A DIGEST MUST THEREFORE DEPEND ONLY ON BEHAVIOUR. Anything a digest reports
 // that can move on its own — a kernel-allocated fd, a colour level that
-// follows the runner's TERM or COLORTERM — turns a mutant that changed nothing
-// into one that looks killed. Both exposures were found and closed here:
-// resolve_width emits ownfd as a bool rather than the fd number, and
-// stream_identity pins TERM, NO_COLOR, CLICOLOR and COLORTERM. Any probe added
-// later owes the same check, and so does any assertion added to these two.
+// follows the runner's environment — turns a mutant that changed nothing into
+// one that looks killed.
+//
+// Three such exposures have been found so far, and the third is why this
+// paragraph no longer states a total. resolve_width emitted the fd number (now
+// a bool); stream_identity's level followed TERM and COLORTERM (now pinned);
+// and it also follows CI, which termenv consults BEFORE TERM, so a pty
+// collapses to no colour on any runner that sets it. An earlier version of
+// this comment said "both exposures were found and closed" — the count was a
+// claim, and it was wrong on the day it was written.
+//
+// ENUMERATING THE VARIABLES IS THE WRONG DISCIPLINE: the list belongs to
+// termenv and changes underneath this package. Run the probes in a hostile
+// environment and read the digest instead. CI=true is the case CI itself runs
+// and is part of this repository's acceptance gate for that reason. Any probe
+// added later owes that check, and so does any assertion added to these two.
 type contractProbe struct {
 	name string
 	spec string
@@ -345,14 +356,29 @@ var probeStreamIdentity = contractProbe{
 			r.fail("stream_identity", "/dev/ptmx is not reported as a terminal; the probe cannot discriminate")
 			return "no-pty"
 		}
-		// The whole colour environment is pinned, not just TERM. Each of these
-		// collapses a pty to the no-colour profile on its own, and a collapse
-		// here does not look like an environment problem — it trips "both
-		// streams resolved to colour level 0", a true-looking accusation
-		// against correct code. COLORTERM is pinned for the opposite reason:
-		// it does not collapse anything, it RAISES the level, and an ambient
-		// COLORTERM=truecolor would move this probe's digest from outlevel=2
-		// to outlevel=3 without any behaviour changing.
+		// Five variables are pinned, and the list is not claimed to be
+		// complete — see the digest-stability paragraph on contractProbe.
+		//
+		// Each suppressing variable collapses a pty to the no-colour profile
+		// on its own, and a collapse here does not look like an environment
+		// problem: it trips "both streams resolved to colour level 0", a
+		// true-looking accusation against correct code. COLORTERM is pinned
+		// for the opposite reason — it does not collapse anything, it RAISES
+		// the level, and an ambient COLORTERM=truecolor moves this probe's
+		// digest from outlevel=2 to outlevel=3 with no behaviour changing.
+		//
+		// CI is pinned last and matters most. termenv's isTTY() returns false
+		// on any NON-EMPTY CI before it ever looks at TERM, so pinning TERM
+		// does not save this probe on a runner that sets CI — GitHub Actions
+		// does, and this repository's workflows unset nothing. It is the
+		// presence of the variable and not its value: CI="false" collapses the
+		// pty exactly as CI="true" does. len("") == 0, so pinning it empty
+		// clears the short-circuit.
+		//
+		// This probe was red under CI=true from the commit that introduced it.
+		// Nothing had been pushed, so nothing was ever observed failing, and
+		// TERM — the variable that was pinned — was never the operative one.
+		// Only running the suite under CI=true found it.
 		//
 		// Measured on a live /dev/ptmx, termenv v0.16.0, as profile -> level:
 		//
@@ -361,10 +387,12 @@ var probeStreamIdentity = contractProbe{
 		//	TERM="dumb"            -> 3 (Ascii)     -> 0 (ColourNone)
 		//	CLICOLOR="0"           -> 3 (Ascii)     -> 0 (ColourNone)
 		//	COLORTERM="truecolor"  -> 0 (TrueColor) -> 3 (ColourTrue)
+		//	CI="true" / "1" / "false" -> 3 (Ascii)  -> 0 (ColourNone)
 		t.Setenv("TERM", "xterm-256color")
 		t.Setenv("NO_COLOR", "")
 		t.Setenv("CLICOLOR", "")
 		t.Setenv("COLORTERM", "")
+		t.Setenv("CI", "")
 
 		pipeR, pipeW, err := os.Pipe()
 		if err != nil {
@@ -525,10 +553,21 @@ func TestStreamContract(t *testing.T) {
 // else in the suite does.
 //
 // Every other assertion is written in terms of the constants, so it moves with
-// them. probeResolveWidth's table does bound MinWidth to {29, 30} — the
-// "28 -> MinWidth" row forces it to at least 29 and the "30 -> 30" row forces
-// it to at most 30 — but MinWidth = 30 passes the whole suite, and
-// WidthUnbounded is only ever asserted against itself.
+// them. probeResolveWidth's table does bound MinWidth to {29, 30}, but not
+// through the rows one would guess, so the citation is measured rather than
+// argued — planting each value and reading which row reddens:
+//
+//	MinWidth = 28 -> "columns exactly MinWidth" reddens (COLUMNS="29" resolved
+//	                 29, wanted 28), so that row is what forces MinWidth >= 29
+//	MinWidth = 29 -> every row green
+//	MinWidth = 30 -> every row green
+//	MinWidth = 31 -> "columns one above MinWidth" reddens (COLUMNS="30"
+//	                 resolved 31, wanted 30), forcing MinWidth <= 30
+//
+// The "28 -> MinWidth" row forces only MinWidth >= 28: at MinWidth = 28,
+// clampBudget(28) is 28, which is MinWidth, and the row passes. So MinWidth =
+// 30 passes the whole suite, and WidthUnbounded is only ever asserted against
+// itself.
 //
 // 29 is a product commitment, not an implementation detail: it is the
 // narrowest terminal the CLI undertakes to serve, and the constant's own
@@ -568,17 +607,22 @@ func TestBudgetFloorIsSeparateFromWidth(t *testing.T) {
 //
 // Both assertions below expect ColourNone. Delete either guard from
 // probeColour and the call falls through to termenv, which resolves even a
-// pty to the no-colour profile whenever TERM is unset, "dumb", or names no
-// colour capability — and .github/workflows/ci.yml sets no TERM at all, so CI
-// is exactly that case. The assertions would then be satisfied by the runner
-// rather than by the code.
+// pty to the no-colour profile under several conditions a CI runner satisfies:
+// TERM unset, "dumb", or naming no colour capability — .github/workflows/ci.yml
+// sets no TERM at all — and, before TERM is consulted at all, any non-empty CI,
+// which GitHub Actions sets for every job. The assertions would then be
+// satisfied by the runner rather than by the code.
 //
 // That is not a worry, it is measured. With TERM unset, against the version of
 // this test that did not pin it: deleting the NO_COLOR guard, deleting the
 // !tty guard, and deleting the whole clause ALL left this test green. The same
-// three mutations are killed once TERM is pinned. The identical hazard is
-// spelled out at probeStreamIdentity, which has always pinned TERM; this test
-// did not, and inherited its result from the developer's shell.
+// three mutations are killed once the environment is pinned, with or without
+// CI=true in the ambient environment.
+//
+// CI is pinned for a reason TERM cannot cover, and the two are independent:
+// termenv short-circuits on CI before reading TERM, so a TERM pin alone leaves
+// this test green and vacuous on every CI runner. See probeStreamIdentity for
+// the measurement.
 //
 // The control is what keeps the pin honest. It asserts that colour IS
 // reachable on this fd in this environment before the two suppression
@@ -593,6 +637,7 @@ func TestNoColourEmitsNoEscapes(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("CLICOLOR", "")
 	t.Setenv("COLORTERM", "")
+	t.Setenv("CI", "")
 
 	pty, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
 	if err != nil {
