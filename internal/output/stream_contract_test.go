@@ -442,17 +442,23 @@ var probeStreamIdentity = contractProbe{
 		// os.Stderr AFTER the memoised Stream already exists, because that is
 		// what a downstream package does to capture operator-facing output:
 		// internal/docker/verify_fixroutes_test.go's captureStderr swaps
-		// os.Stderr around the call and reads the pipe afterwards. Today's
-		// helpers re-read the variable per Fprintln, so the swap works; a
-		// Stream holding the original *os.File writes into the descriptor
-		// nobody is reading any more and the assertion sees an empty string.
+		// os.Stderr around the call and reads the pipe afterwards. The message
+		// helpers reach that swap through Err() now, and a Stream holding the
+		// original *os.File would write into the descriptor nobody is reading
+		// any more, leaving the assertion an empty string.
 		//
-		// Measured with the late binding removed: internal/docker stays GREEN
-		// and so does every other package, because nothing outside this
-		// package reaches Out()/Err() yet. The three assertions below are the
-		// only thing in the repository that reddens, and the digest flips to
-		// landed=out="",err="". The capturing suites become detectors too
-		// only once the message helpers route through Err().
+		// Measured with the late binding removed, at the commit that first
+		// wrote this comment: internal/docker stayed green and so did every
+		// other package, because nothing outside this package reached
+		// Out()/Err() yet, and the three assertions below were the only thing
+		// in the repository that reddened. Re-measured after the helpers moved
+		// into message.go: the same defect reddens internal/docker at 6 tests
+		// and cmd at 2 as well, so these assertions are no longer alone.
+		//
+		// They are still where the defect gets named rather than merely felt.
+		// The digest flips to landed=out="",err="" and the failures below say
+		// which descriptor a write reached; what a downstream suite reports is
+		// that a capture came back empty, which reads as a missing warning.
 		dir := t.TempDir()
 		mk := func(name string) *os.File {
 			f, err := os.Create(filepath.Join(dir, name))
