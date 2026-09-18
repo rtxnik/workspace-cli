@@ -206,6 +206,11 @@ func (s *Stream) Style(role Role) lipgloss.Style {
 // paint applies a role to already-padded text. §4.3's invariant is that style
 // is applied after allocation, never before: cells carry plain text plus a
 // role, the renderer measures the plain text and styles the padded result.
+//
+// Its tests are in message_test.go, not beside it here: TestPaintEmitsTheDeclaredSGR
+// and TestMessageCarriesItsRoleColourOnEveryWrappedLine. They arrived with
+// paint's first caller, renderMessage, because an unexported method with no
+// caller does not survive golangci-lint's `unused`.
 func (s *Stream) paint(role Role, text string) string {
 	if _, ok := colourFor(role, s.level); !ok {
 		return text
