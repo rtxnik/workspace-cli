@@ -79,3 +79,81 @@ func StatusText(status string) string {
 		return StyleDim.Render("○ " + status)
 	}
 }
+
+// §4.6 Palette.
+//
+// Colour applies to roles only. Ordinary text and table bodies use the
+// terminal's default foreground, which is what makes the light-background
+// case correct by construction instead of by maintaining a second palette.
+//
+// This file is the ONLY place in the package that may name a colour value.
+// §4.6 REQUIRES a guard asserting that `lipgloss.Color("#` appears in no
+// non-test file outside theme.go. That guard is not in this repository: it
+// lands with the acceptance harness, where the source-scanning machinery it
+// needs also lands. Until then the property holds by convention and nothing
+// goes red when it is broken, so a colour literal added elsewhere is caught
+// by review or not at all.
+//
+// The guard will owe more than a search for that one string, which is why the
+// literals and the lipgloss.Color call are kept together here: building the
+// literal somewhere else and passing it in is the same drift by a longer
+// route.
+
+// Role is the closed set of semantic roles the layer can colour.
+type Role int
+
+const (
+	RoleDefault Role = iota // terminal default — no SGR is emitted at all
+	RoleOK
+	RoleWarn
+	RoleFail
+	RoleInfo
+	RoleMuted
+	RoleAccent
+)
+
+// ColourLevel is the resolved colour capability of a Stream.
+//
+// §4.6 requires each role to declare its value explicitly per level rather
+// than relying on termenv's automatic downsample, which was measured to
+// invert the palette at 16 colours (Green renders yellow, Blue renders green).
+type ColourLevel int
+
+const (
+	ColourNone ColourLevel = iota // no SGR: NO_COLOR, a pipe, or a dumb terminal
+	Colour16
+	Colour256
+	ColourTrue
+)
+
+// roleColours holds the gruvbox hue for each role at each colour level.
+// RoleDefault is deliberately absent: it never emits SGR.
+var roleColours = map[Role]struct{ trueColour, c256, c16 string }{
+	RoleOK:     {"#b8bb26", "142", "2"},
+	RoleWarn:   {"#fabd2f", "214", "3"},
+	RoleFail:   {"#fb4934", "167", "1"},
+	RoleInfo:   {"#83a598", "109", "4"},
+	RoleMuted:  {"#928374", "245", "8"},
+	RoleAccent: {"#d3869b", "175", "5"},
+}
+
+// colourFor returns the terminal colour for a role at a colour level, and
+// false when the role must be rendered with no SGR at all.
+func colourFor(role Role, level ColourLevel) (lipgloss.TerminalColor, bool) {
+	if role == RoleDefault || level == ColourNone {
+		return nil, false
+	}
+	entry, ok := roleColours[role]
+	if !ok {
+		return nil, false
+	}
+	switch level {
+	case ColourTrue:
+		return lipgloss.Color(entry.trueColour), true
+	case Colour256:
+		return lipgloss.Color(entry.c256), true
+	case Colour16:
+		return lipgloss.Color(entry.c16), true
+	}
+	return nil, false
+}

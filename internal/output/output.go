@@ -1,42 +1,24 @@
 package output
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/charmbracelet/huh"
 )
 
+// The five message helpers moved to message.go, where they resolve their
+// stream, their colour level and their width budget per file descriptor.
+// Confirm and ConfirmDestructive below are untouched by that move.
+//
+// Three style aliases went with the helpers, because they had no other
+// caller. The three that stay each still have a caller, measured rather than
+// assumed: spinner.go:23 and :29 render through errorStyle and successStyle,
+// and SectionStyle is read from cmd (root.go x4, profile.go, vault_status.go).
+// §4.6 replaces all three, in the phase that reaches those call sites.
 var (
 	SectionStyle = StyleHeader
 
 	successStyle = StyleSuccess
 	errorStyle   = StyleError
-	warnStyle    = StyleWarning
-	infoStyle    = StyleInfo
-	detailStyle  = StyleDim
 )
-
-func Info(msg string) {
-	fmt.Fprintln(os.Stderr, infoStyle.Render("ℹ "+msg))
-}
-
-func Success(msg string) {
-	fmt.Fprintln(os.Stderr, successStyle.Render("✓ "+msg))
-}
-
-func Warn(msg string) {
-	fmt.Fprintln(os.Stderr, warnStyle.Render("⚠ "+msg))
-}
-
-func Detail(msg string) {
-	fmt.Fprintln(os.Stderr, detailStyle.Render("  "+msg))
-}
-
-func Die(msg string) {
-	fmt.Fprintln(os.Stderr, errorStyle.Render("✗ "+msg))
-	os.Exit(1)
-}
 
 // Confirm shows an interactive confirmation dialog. Returns true only if
 // the user explicitly confirms. Default is No (safe default).
