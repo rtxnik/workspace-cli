@@ -248,9 +248,16 @@ func PadLeft(s string, w int) string {
 
 // ---------------------------------------------------------------- wrapping
 
-// Wrap breaks s into lines no wider than w display columns. Existing newlines
-// are honoured as paragraph breaks, which is what a multi-line upstream error
-// needs.
+// Wrap breaks s into lines no wider than w display columns, with the one
+// exemption below. Existing newlines are honoured as paragraph breaks, which
+// is what a multi-line upstream error needs.
+//
+// THE EXEMPTION: a grapheme cluster wider than the whole budget is emitted
+// alone, at its own width. A cluster is the smallest thing a terminal draws,
+// and cutting inside it orphans a variation selector or a combining mark.
+// Measured: Wrap("<two 2-cell clusters>", 1) returns two lines of two cells.
+// TestWrapNeverExceedsBudget asserts that shape rather than tolerating any
+// over-budget line.
 //
 // WHITESPACE INSIDE A PARAGRAPH IS NOT PRESERVED. Each paragraph is split on
 // its whitespace and re-joined with one space, so every run of spaces or tabs
@@ -320,7 +327,12 @@ func Wrap(s string, w int) []string {
 }
 
 // wrapIndent wraps body into w-indent columns and prefixes every line with
-// indent spaces. Every returned line is at most w columns wide.
+// indent spaces. Every returned line is at most w columns wide, WITH THE SAME
+// EXEMPTION Wrap carries: a cluster wider than the inner budget is emitted
+// whole, so a line of indent plus that cluster is wider than w. Measured:
+// wrapIndent("<two 2-cell clusters>", 2, 3) returns two lines of four cells.
+// TestWrapIndentEmitsOversizedClusterWhole asserts it; the sweep beside it
+// cannot, because its body is ASCII and every cluster in it is one cell.
 func wrapIndent(body string, indent, w int) []string {
 	// The contract is stated in the FULL budget, so an indent that leaves no
 	// room for content is clamped rather than allowed to push every line one

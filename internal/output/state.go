@@ -17,8 +17,7 @@ const (
 	StateFail                  // failed / unreachable
 	StateBusy                  // starting / dirty / in progress
 	StateIdle                  // stopped / absent / none
-	StateUnknown               // not evaluated — new; the fix for "✗ Xray config
-	// exists" printed against a config that does exist
+	StateUnknown               // not evaluated — new; the fix for "✗ Xray config exists" printed against a config that does exist
 )
 
 // stateDef fixes one word per state. The word is fixed here rather than

@@ -87,10 +87,17 @@ func StatusText(status string) string {
 // case correct by construction instead of by maintaining a second palette.
 //
 // This file is the ONLY place in the package that may name a colour value.
-// §4.6's anti-drift guard asserts `lipgloss.Color("#` appears in no non-test
-// file outside theme.go; the guard must also reject the indirection of
-// building the literal elsewhere and passing it in, so the literals and the
-// lipgloss.Color call are kept together here.
+// §4.6 REQUIRES a guard asserting that `lipgloss.Color("#` appears in no
+// non-test file outside theme.go. That guard is not in this repository: it
+// lands with the acceptance harness, where the source-scanning machinery it
+// needs also lands. Until then the property holds by convention and nothing
+// goes red when it is broken, so a colour literal added elsewhere is caught
+// by review or not at all.
+//
+// The guard will owe more than a search for that one string, which is why the
+// literals and the lipgloss.Color call are kept together here: building the
+// literal somewhere else and passing it in is the same drift by a longer
+// route.
 
 // Role is the closed set of semantic roles the layer can colour.
 type Role int

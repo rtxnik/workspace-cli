@@ -671,6 +671,10 @@ func TestWrapKeepsParagraphs(t *testing.T) {
 // line starts with indent spaces — is a tautology against a body that builds
 // each line as prefix+l, so it could not have gone red for any implementation
 // of the clamp.
+//
+// The body here is ASCII, so every cluster in it is one cell and this sweep
+// never reaches Wrap's oversized-cluster exemption, which wrapIndent inherits.
+// That case is the one below.
 func TestWrapIndentCountsTheIndent(t *testing.T) {
 	const body = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock."
 	for w := 4; w <= 60; w++ {
@@ -680,6 +684,43 @@ func TestWrapIndentCountsTheIndent(t *testing.T) {
 					t.Errorf("wrapIndent(indent=%d, w=%d) emitted a %d-cell line: %q", indent, w, got, line)
 				}
 			}
+		}
+	}
+}
+
+// wrapIndent inherits Wrap's one exemption: a grapheme cluster wider than the
+// inner budget is emitted whole, so a line of indent plus that cluster is
+// wider than w. The sweep above cannot see it — its body is ASCII — and the
+// doc comment promised an unconditional bound until this case existed.
+//
+// The expected cell count is taken from ansi.StringWidth on the cluster
+// itself, not from the package's own W and not from a literal beside the
+// assertion, so a wrapIndent that cut inside the cluster, dropped the indent,
+// or emitted the pair on one line has nothing to satisfy it with.
+func TestWrapIndentEmitsOversizedClusterWhole(t *testing.T) {
+	const (
+		cluster = "⚠️"
+		indent  = 2
+		budget  = 3
+	)
+	cell := ansi.StringWidth(cluster)
+	if cell <= budget-indent {
+		t.Fatalf("the fixture is not oversized: %q is %d cell(s) against an inner budget of %d",
+			cluster, cell, budget-indent)
+	}
+	got := wrapIndent(cluster+cluster, indent, budget)
+	want := []string{strings.Repeat(" ", indent) + cluster, strings.Repeat(" ", indent) + cluster}
+	if len(got) != len(want) {
+		t.Fatalf("wrapIndent(two %d-cell clusters, indent=%d, w=%d) = %q, want %q",
+			cell, indent, budget, got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, got[i], want[i])
+		}
+		if w := ansi.StringWidth(got[i]); w != indent+cell {
+			t.Errorf("line %d is %d cells; the exemption is the indent plus one whole cluster, %d",
+				i, w, indent+cell)
 		}
 	}
 }
