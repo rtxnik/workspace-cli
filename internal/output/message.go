@@ -81,10 +81,12 @@ func emit(s *Stream, shape messageShape, msg string) {
 
 // renderMessage lays a message out against the stream's budget and returns it
 // without writing. It is separate from emit so §6.1 can sweep every helper at
-// every width from MinWidth to 200 — the helpers are phase 0's entire
+// every width from MinWidth to 200.
+//
+// The helpers earn that place in the corpus: they are phase 0's entire
 // deliverable and the dominant call volume, and a sweep over block types
-// alone stays green while they remain the single unwrapped Fprintln they are
-// today.
+// alone stayed green for as long as each of them was the one unwrapped
+// Fprintln it was before this file existed.
 func renderMessage(s *Stream, shape messageShape, msg string) string {
 	// Message text is frequently an upstream error string, so it travels the
 	// same sanitising path as Problem.Cause (§4.4).
