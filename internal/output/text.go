@@ -277,7 +277,12 @@ func PadLeft(s string, w int) string {
 // other invariant applies to text blocks too, not only to tables.
 func Wrap(s string, w int) []string {
 	if w < 1 {
-		w = 1 // defensive: an indent deeper than the budget must not overflow
+		// Wrap is exported and its budget comes from a caller. This is the
+		// floor for a NON-POSITIVE budget, and no longer a defence against a
+		// deep indent: wrapIndent clamps its own. Measured over indent -3..8
+		// and w -3..60, wrapIndent hands this function a budget below 1 at no
+		// positive w, and at every w <= 0.
+		w = 1
 	}
 	var out []string
 	for _, para := range strings.Split(s, "\n") {

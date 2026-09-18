@@ -32,6 +32,16 @@ import (
 // one package scope across every _test.go file, so a second declaration is a
 // compile error rather than a duplication.
 //
+// It is not the package's only failure ACCUMULATOR, and the other one stays
+// on purpose. text_invariants_test.go declares `violations`, which counts the
+// same way for the cut-primitive sweep; it landed five commits before this type
+// and its sweep uses it for something these probes never do — running the
+// same invariant bodies a second time over deliberately wrong primitives, with
+// named assertions REQUIRED to come back red. Folding the two would change no
+// assertion, would rewrite two settled files for nothing gained, and would not
+// spare a later phase's harness from knowing both shapes anyway. So the
+// duplication is declared here rather than left to look like an oversight.
+//
 // Assertions report HERE rather than into *testing.T so that a mutation
 // harness can run exactly the same assertion BODIES and ask which ones went
 // red. A *testing.T reports to the framework, not to the caller, so a harness
@@ -104,9 +114,10 @@ func (r *results) report(t *testing.T) {
 //
 // Three such exposures have been found so far, and the third is why this
 // paragraph no longer states a total. resolve_width emitted the fd number (now
-// a bool); stream_identity's level followed TERM and COLORTERM (now pinned);
-// and it also follows CI, which termenv consults BEFORE TERM, so a pty
-// collapses to no colour on any runner that sets it. An earlier version of
+// a bool); stream_identity's level followed the ambient colour environment —
+// TERM, NO_COLOR, CLICOLOR and COLORTERM, now pinned together where the probe
+// sets them; and it also follows CI, which termenv consults BEFORE TERM, so a
+// pty collapses to no colour on any runner that sets it. An earlier version of
 // this comment said "both exposures were found and closed" — the count was a
 // claim, and it was wrong on the day it was written.
 //

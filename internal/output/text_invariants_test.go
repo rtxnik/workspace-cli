@@ -134,6 +134,11 @@ func runeCutAtEnd(s string, w int) string {
 // violations collects invariant failures by name, so the same sweep bodies can
 // be run against the shipped primitives (expecting none) and against the
 // planted ones (expecting specific ones).
+//
+// It is the SECOND accumulator in this package — stream_contract_test.go's
+// `results` is the other, and that one's header explains why both stay. The
+// short version: this one is graded by its own control, which requires named
+// invariants to be red, and folding them changes no assertion.
 type violations struct {
 	count map[string]int
 	first map[string]string
@@ -301,11 +306,16 @@ func TestCutCorpusIsPotent(t *testing.T) {
 			}
 			i += len(cluster)
 		}
-		// Whether a (string, budget) pair truncates is MEASURED here rather
+		// Whether a (string, budget) pair CAN be cut is measured here rather
 		// than asked of cutAt: a potency counter that called the function
 		// under test would report the corpus as potent exactly when that
 		// function was defective, which is the failure this whole file is
 		// built to avoid.
+		//
+		// So what it counts is the PRECONDITION — the string is wider than the
+		// budget — and not the observed outcome. The outcome is what the
+		// invariants above assert, and counting it here would be asking cutAt
+		// to grade its own corpus. The log line below is worded accordingly.
 		total := ansi.StringWidth(c.s)
 		for w := 0; w <= cutMaxBudget; w++ {
 			if total > w {
@@ -320,10 +330,10 @@ func TestCutCorpusIsPotent(t *testing.T) {
 		t.Error("no cluster wider than one cell in the corpus: the budget invariant could not fail")
 	}
 	if cut == 0 {
-		t.Error("no (string, budget) pair in the corpus actually truncates: the invariants are vacuous")
+		t.Error("no string in the corpus is wider than any budget in the sweep: nothing can be cut, so the invariants are vacuous")
 	}
 	t.Logf("corpus potency: %d multi-rune clusters, %d clusters wider than one cell, "+
-		"%d of %d (string, budget) pairs actually truncate",
+		"%d of %d (string, budget) pairs have a string wider than the budget",
 		multiRune, wide, cut, len(cutCorpus)*(cutMaxBudget+1))
 }
 
