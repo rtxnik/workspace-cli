@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -400,6 +401,183 @@ func TestMessageSanitisesItsInput(t *testing.T) {
 			}
 			if !strings.Contains(stderr, "red") {
 				t.Errorf("%s dropped the text along with the escapes: %q", h.name, stderr)
+			}
+		})
+	}
+}
+
+// ------------------------------------------------- §4.6 colour through paint
+
+// fxSGR encodes one declared palette value as the introducer a terminal at
+// that colour level receives.
+//
+// It is written from the SGR rules rather than by calling lipgloss, so paint
+// is compared against what the escape sequence MEANS and not against the
+// library's own opinion of it. theme_test.go pins the declared values
+// themselves; fxSGR is how this file pins the wiring from a declared value to
+// the wire, which is the half paint owns.
+func fxSGR(t *testing.T, value string, level ColourLevel) string {
+	t.Helper()
+	switch level {
+	case ColourTrue:
+		// #rrggbb -> ESC [ 38;2;R;G;B m
+		if len(value) != 7 || value[0] != '#' {
+			t.Fatalf("a ColourTrue palette value must be #rrggbb, got %q", value)
+		}
+		var rgb [3]uint64
+		for i := range rgb {
+			n, err := strconv.ParseUint(value[1+2*i:3+2*i], 16, 8)
+			if err != nil {
+				t.Fatalf("palette value %q is not hex: %v", value, err)
+			}
+			rgb[i] = n
+		}
+		return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", rgb[0], rgb[1], rgb[2])
+	case Colour256:
+		// an index -> ESC [ 38;5;N m
+		if _, err := strconv.Atoi(value); err != nil {
+			t.Fatalf("a Colour256 palette value must be an index, got %q", value)
+		}
+		return "\x1b[38;5;" + value + "m"
+	case Colour16:
+		// 0-7 are the ordinary foregrounds at 30+n, 8-15 the bright ones at
+		// 90+(n-8). RoleMuted declares 8, so the bright arm is reached.
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > 15 {
+			t.Fatalf("a Colour16 palette value must be 0-15, got %q", value)
+		}
+		if n < 8 {
+			return fmt.Sprintf("\x1b[%dm", 30+n)
+		}
+		return fmt.Sprintf("\x1b[%dm", 90+n-8)
+	}
+	t.Fatalf("no SGR is defined for colour level %d", level)
+	return ""
+}
+
+// fxReset is the sequence that closes a painted run. It is asserted rather
+// than tolerated: an introducer with no reset does not end at the end of the
+// string, it bleeds into whatever the terminal prints next.
+const fxReset = "\x1b[0m"
+
+// paint is the seam where a role becomes SGR, and it is the only place in the
+// message path that emits any.
+//
+// Phase 0 shipped it with its colour arm unexercised. Every other assertion in
+// the package resolves ColourNone — by NO_COLOR, by a pipe, or by a stream
+// built at ColourNone — so `return text` satisfied all of them, and paint sat
+// at 66.7 % statement coverage with the half that does the work unreached.
+//
+// The expectations are derived from colourFor's DECLARED value through fxSGR,
+// not read back out of paint and not compared against "something other than
+// plain text": a difference-from-plain check is satisfied by any change at
+// all, including painting every role with the wrong colour.
+//
+// Every clause below was planted, and the counts are what the run printed
+// rather than what the arithmetic suggested:
+//
+//	paint returns `text` unchanged         -> 18 here (6 roles x 3 levels), 29 below
+//	paint applies RoleFail to every call   -> 15 here (RoleFail is correctly
+//	                                          silent at all three levels), 23 below
+//	the closing reset is trimmed           -> "emitted \x1b[32mtext", want …\x1b[0m
+//	Colour256 returns the truecolour value -> fxSGR's shape guard, naming "#b8bb26"
+//
+// The last one reddens through fxSGR rather than through the comparison: a
+// cross-LEVEL swap produces a value of the wrong SHAPE, so the encoder refuses
+// it before there is anything to compare. A swap WITHIN a level is what the
+// comparison itself catches.
+//
+// For the first two, measured over the whole repository: these two tests are
+// the only red anywhere. In particular they are not caught by
+// TestNewStreamAtTakesEveryPropertyFromItsArguments, which asserts that SOME
+// SGR was emitted — the wrong role passes that check.
+func TestPaintEmitsTheDeclaredSGR(t *testing.T) {
+	coloured := []Role{RoleOK, RoleWarn, RoleFail, RoleInfo, RoleMuted, RoleAccent}
+
+	for _, level := range []ColourLevel{Colour16, Colour256, ColourTrue} {
+		s := NewStreamAt(io.Discard, 80, true, level, false)
+		for _, role := range coloured {
+			colour, ok := colourFor(role, level)
+			if !ok {
+				t.Fatalf("role %d has no declared colour at level %d; the palette "+
+					"is what this assertion is derived from", role, level)
+			}
+			value, isColour := colour.(lipgloss.Color)
+			if !isColour {
+				t.Fatalf("role %d at level %d declared a %T; fxSGR can only encode a lipgloss.Color", role, level, colour)
+			}
+			want := fxSGR(t, string(value), level) + "text" + fxReset
+			if got := s.paint(role, "text"); got != want {
+				t.Errorf("paint(role %d) at level %d emitted %q, want %q", role, level, got, want)
+			}
+		}
+		// RoleDefault is the other arm at a level that HAS colour: §4.6 gives
+		// it the terminal's own foreground and no SGR at all.
+		if got := s.paint(RoleDefault, "text"); got != "text" {
+			t.Errorf("paint(RoleDefault) at level %d emitted %q; RoleDefault emits no SGR", level, got)
+		}
+	}
+
+	// The early return, which is what every other test in the package reaches.
+	none := NewStreamAt(io.Discard, 80, false, ColourNone, false)
+	for _, role := range append(coloured, RoleDefault) {
+		if got := none.paint(role, "text"); got != "text" {
+			t.Errorf("paint(role %d) on a ColourNone stream emitted %q, want plain text", role, got)
+		}
+	}
+}
+
+// A message carries its shape's role on EVERY line it wraps to, and closes the
+// sequence on each one.
+//
+// The per-line part is the half a single-line case cannot see. renderMessage
+// paints line by line, so an implementation that opened the sequence once and
+// closed it at the end would look identical on a message that fits and would
+// leave every intermediate newline inside a coloured run — which a pager, a
+// `head`, or a terminal reflowing the output turns into colour bleeding down
+// the screen.
+//
+// The expected role per shape is written out here rather than read from the
+// shape: a test that took shape.role would be satisfied by any self-consistent
+// re-pointing of the five shapes at one another's colours.
+func TestMessageCarriesItsRoleColourOnEveryWrappedLine(t *testing.T) {
+	const columns = 40
+	long := "workspace \"" + strings.Repeat("a", 64) + "\" could not be created: " +
+		"Cannot connect to the Docker daemon at unix:///var/run/docker.sock."
+
+	for _, c := range []struct {
+		name  string
+		shape messageShape
+		role  Role
+	}{
+		{"Info", shapeInfo, RoleInfo},
+		{"Success", shapeSuccess, RoleOK},
+		{"Warn", shapeWarn, RoleWarn},
+		{"Detail", shapeDetail, RoleMuted},
+		{"Die", shapeFail, RoleFail},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewStreamAt(io.Discard, columns, true, ColourTrue, false)
+			colour, ok := colourFor(c.role, ColourTrue)
+			if !ok {
+				t.Fatalf("role %d has no declared colour at ColourTrue", c.role)
+			}
+			intro := fxSGR(t, string(colour.(lipgloss.Color)), ColourTrue)
+
+			lines := strings.Split(renderMessage(s, c.shape, long), "\n")
+			if len(lines) < 2 {
+				t.Fatalf("%s emitted %d line(s) at a budget of %d; this case is about wrapped output",
+					c.name, len(lines), columns)
+			}
+			for i, line := range lines {
+				if want := intro + ansi.Strip(line) + fxReset; line != want {
+					t.Errorf("%s line %d is %q, want %q", c.name, i+1, line, want)
+				}
+			}
+			// The colour is decoration: stripping it returns the same text the
+			// no-colour path produces, unchanged and complete.
+			if plain := squash(ansi.Strip(strings.Join(lines, ""))); !strings.Contains(plain, squash(long)) {
+				t.Errorf("%s lost part of its message under colour; it rendered:\n%s", c.name, strings.Join(lines, "\n"))
 			}
 		})
 	}
