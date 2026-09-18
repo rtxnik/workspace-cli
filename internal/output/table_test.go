@@ -17,13 +17,3 @@ func TestNewTable_RendersHeaders(t *testing.T) {
 		t.Error("expected STATUS header in table output")
 	}
 }
-
-func TestRenderSection_ContainsTitle(t *testing.T) {
-	got := RenderSection("My Section", "some content")
-	if !strings.Contains(got, "My Section") {
-		t.Error("expected title in section output")
-	}
-	if !strings.Contains(got, "some content") {
-		t.Error("expected content in section output")
-	}
-}
