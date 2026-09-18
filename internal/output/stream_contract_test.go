@@ -26,11 +26,11 @@ import (
 
 // ------------------------------------------------------------ result sink
 //
-// THIS IS THE PACKAGE'S ONE `results`. Every assertion in every later test
-// file reports into it — Task 7's allocator policy, Task 8's grid pairing,
-// Task 9's geometry, Task 10's width sweep, Task 11's two mutation harnesses.
-// Go has one package scope across every _test.go file, so a second declaration
-// is a compile error rather than a duplication.
+// THIS IS THE PACKAGE'S ONE `results`. Every assertion in every test file a
+// later phase adds reports into it — the allocator policy, the grid pairing,
+// the block geometry, the width sweep and the two mutation harnesses. Go has
+// one package scope across every _test.go file, so a second declaration is a
+// compile error rather than a duplication.
 //
 // Assertions report HERE rather than into *testing.T so that a mutation
 // harness can run exactly the same assertion BODIES and ask which ones went

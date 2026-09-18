@@ -208,22 +208,26 @@ var probeMessageRouting = contractProbe{
 // the entire render-side suite stays green.
 const (
 	dieChildEnv = "WS_TEST_DIE"
-	// dieMutantEnv carries Task 11's DieUnwrapped switch ACROSS THE PROCESS
-	// BOUNDARY. The harness sets mutants.DieUnwrapped in the parent; the child
-	// is a fresh process whose `mutants` is at its zero value, so without this
-	// the die_stops_wrapping contract mutant is vacuous and the contract
-	// harness fails. See the two seams below.
+	// dieMutantEnv carries a mutation switch ACROSS THE PROCESS BOUNDARY. A
+	// later phase adds a harness that makes Die stop wrapping and then asks
+	// whether this probe noticed; it sets that switch in the parent, but the
+	// child is a fresh process whose switches are all at their zero value. With
+	// no environment variable to carry the decision, the mutant would change
+	// nothing in the process actually being measured and would be reported as
+	// survived. The two seams below are where the parent asks and the child
+	// re-applies.
 	dieMutantEnv = "WS_TEST_DIE_UNWRAPPED"
 	dieColumns   = 40
 )
 
 // dieChildMutantEnabled reports whether the Die mutant is on in THIS process,
-// and applyDieChildMutant turns it on. Phase 0 has no mutation switches at
-// all — mutants.go is Task 7 — so both are inert here and Task 11 Step 6
-// replaces the two bodies with `return mutants.DieUnwrapped` and
-// `mutants.DieUnwrapped = true`, in the same commit that wires the switch into
-// Die itself. They are seams rather than direct reads for exactly one reason:
-// this file ships three tasks before mutants.go exists.
+// and applyDieChildMutant turns it on. This phase declares no mutation
+// switches at all, so both are inert here: the first always answers false and
+// the second does nothing. A later phase replaces the two bodies with a read
+// and a write of the switch it introduces, in the same change that wires that
+// switch into Die itself. They are seams rather than direct reads for exactly
+// one reason — this file ships before the switch is declared, and a reference
+// to a symbol that does not exist yet does not compile.
 func dieChildMutantEnabled() bool { return false }
 
 func applyDieChildMutant() {}
@@ -253,7 +257,7 @@ func TestDieChildProcess(t *testing.T) {
 	if os.Getenv(dieChildEnv) != "1" {
 		t.Skip("child half of probeDie; runs only in the subprocess")
 	}
-	// The child-side re-apply. Inert in phase 0; live from Task 11 Step 6.
+	// The child-side re-apply. Inert while the seam above is inert.
 	if os.Getenv(dieMutantEnv) == "1" {
 		applyDieChildMutant()
 	}
@@ -277,7 +281,7 @@ func runDieChild(t *testing.T) (exitCode int, stdout, stderr string) {
 		"WS_ASCII=",
 		"RUNEWIDTH_EASTASIAN=",
 	)
-	// The parent-side propagation. Inert in phase 0; live from Task 11 Step 6.
+	// The parent-side propagation. Inert while the seam above is inert.
 	if dieChildMutantEnabled() {
 		cmd.Env = append(cmd.Env, dieMutantEnv+"=1")
 	}
