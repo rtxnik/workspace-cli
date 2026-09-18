@@ -179,12 +179,19 @@ var probeMessageRouting = contractProbe{
 				// A helper with no state emits no mark, and opens with
 				// exactly its declared indent.
 				//
-				// Without this clause the two markless helpers have nothing
-				// tying them to their shape: the mark clause is skipped for
-				// both, and the indent clause is skipped for Info as well
-				// because its indent is 0. Measured before the clause
-				// existed — Info wired to shapeSuccess left the WHOLE
-				// REPOSITORY green, under both gate legs.
+				// Without this clause INFO has nothing tying it to its
+				// shape. The mark clause is skipped for both markless
+				// helpers, and the indent clause is skipped for Info alone,
+				// because its declared indent is 0. Detail was never in that
+				// hole: renderMessage sets prefix to the mark or to the
+				// indent and never to both, so re-pointing Detail at any
+				// other shape changes what its line opens with — measured,
+				// Detail wired to shapeInfo gives 2 violations and the
+				// INDENT clause is the one that reports first.
+				//
+				// Measured before this clause existed — Info wired to
+				// shapeSuccess left the WHOLE REPOSITORY green, under both
+				// gate legs.
 				wantOpen := strings.Repeat(" ", h.indent) + want
 				if !strings.HasPrefix(plain, wantOpen) {
 					r.fail("message_routing",
@@ -332,13 +339,20 @@ func widestLine(lines []string) int {
 // so a change made inside Die — dropping the wrap, writing to the wrong stream,
 // exiting with the wrong code — is invisible to it.
 //
-// Each clause was planted in this tree and observed red, rather than claimed:
+// All eight clauses below were planted in this tree and observed red, rather
+// than claimed. Six plants cover the eight, because two of them trip two
+// clauses each:
 //
 //	Die printing one unwrapped line   -> 2 violations, line 1 at 168 cells
 //	Die's shape stripped of its state -> 1 violation, first line lacks "✗ "
 //	Die pointed at Out()              -> 2 violations: 214 bytes on stdout, and
 //	                                     nothing left on stderr to measure
 //	os.Exit(0) for os.Exit(1)         -> 1 violation, "Die exited 0"
+//	Die returning instead of exiting  -> 2 violations, "Die exited 0" and the
+//	                                     DIE-RETURNED line; digest exit=0 lines=8
+//	the message cut to 150 cells      -> 1 violation, the lost-message clause
+//	inside renderMessage                 alone: five lines, every one inside the
+//	                                     budget, with the mark intact
 var probeDie = contractProbe{
 	name: "die_contract",
 	spec: "§6.1 / §4.7 / §4.8",
@@ -550,7 +564,9 @@ const fxReset = "\x1b[0m"
 //
 // WHICH LAYER CATCHES WHAT, measured one plant at a time. The expectations
 // here are DERIVED from colourFor, so a defect inside colourFor moves both
-// sides of the comparison together and this test cannot see it:
+// sides of the comparison together and this comparison cannot see it —
+// fxSGR's shape guard, listed below, is called from inside this same test and
+// fails it:
 //
 //	paint's role selection    -> this comparison
 //	colourFor, cross-level    -> fxSGR's shape guard, which refuses a value of

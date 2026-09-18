@@ -109,6 +109,15 @@ func TestIsCJKLocale(t *testing.T) {
 // does not — measured, both markers have exactly as many runes as cells (1 and 1,
 // 3 and 3) — so a rune-versus-cell divergence is caught by the fixtures whose
 // rune count is not their cell width, and never here.
+//
+// A NOTE, NOT A DEFECT: with RUNEWIDTH_EASTASIAN=1 exported this test goes red
+// and is the only red in the package — measured, markerWidth(GlyphUTF8) is 2,
+// because `…` is East-Asian Ambiguous. That is the whole reason §4.5 gives the
+// marker an ASCII counterpart. CI exports no such variable, and §6.4 asks for a
+// sweep under exactly that setting in a SUBPROCESS of its own, so the variable
+// belongs to a later phase's environment rather than to this one's defences.
+// Nothing warns a developer who has it exported in their shell; this is that
+// warning.
 func TestGlyphWidths(t *testing.T) {
 	if got := markerWidth(GlyphUTF8); got != 1 {
 		t.Errorf("markerWidth(GlyphUTF8) = %d, want 1", got)

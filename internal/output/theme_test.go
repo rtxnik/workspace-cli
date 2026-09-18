@@ -55,7 +55,12 @@ func TestPaletteDeclaresEveryLevel(t *testing.T) {
 				t.Errorf("role %d at level %d: no colour declared", role, level)
 				continue
 			}
-			if string(got.(lipgloss.Color)) != values[i] {
+			value, isColour := got.(lipgloss.Color)
+			if !isColour {
+				t.Errorf("role %d at level %d declared a %T; the palette must declare a lipgloss.Color", role, level, got)
+				continue
+			}
+			if string(value) != values[i] {
 				t.Errorf("role %d at level %d = %q, want %q", role, level, got, values[i])
 			}
 		}
@@ -87,7 +92,11 @@ func TestStateRolesStayDistinct(t *testing.T) {
 			if !ok {
 				t.Fatalf("role %d has no colour at level %d", role, level)
 			}
-			v := string(c.(lipgloss.Color))
+			value, isColour := c.(lipgloss.Color)
+			if !isColour {
+				t.Fatalf("role %d at level %d declared a %T; distinctness is compared over declared colour values", role, level, c)
+			}
+			v := string(value)
 			if prev, dup := seen[v]; dup {
 				t.Errorf("level %d: roles %d and %d both render as %q", level, prev, role, v)
 			}
