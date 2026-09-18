@@ -103,16 +103,20 @@ var (
 // built from would make a later reassignment of os.Stderr invisible, and
 // reassigning os.Stderr around a call is how several packages in this
 // repository capture operator-facing warnings in their own tests
-// (internal/docker/verify_fixroutes_test.go's captureStderr is one).
-// fmt.Fprintln(os.Stderr, ...) re-reads the variable on every call, so the
-// helpers behave that way today and must keep behaving that way.
+// (internal/docker/verify_fixroutes_test.go's captureStderr is one). The five
+// message helpers used to write through fmt.Fprintln(os.Stderr, ...), which
+// re-reads the variable on every call; they write through this Stream now and
+// have to keep that property.
 //
-// Nothing outside this package reaches Out() or Err() yet, so those capturing
-// suites do NOT detect a lost late binding today: measured, dropping this
-// writer leaves every other package in the repository green and reddens only
-// probeStreamIdentity's landing assertions. That is why the probe asserts
-// where a write LANDS rather than what the writer is, and why it cannot be
-// deferred until the message helpers route through Err().
+// Those capturing suites are detectors of a lost late binding from the commit
+// that moved the helpers into message.go, and were not before it. Measured on
+// this tree by returning the probed *os.File here instead of this writer:
+// internal/docker goes red at 6 tests, cmd at 2, internal/output at
+// probeStreamIdentity's landing assertions. The same defect measured before
+// the helpers moved reddened those landing assertions alone, because nothing
+// outside this package reached Out() or Err() — which is why the probe asserts
+// where a write LANDS rather than what the writer is, and why it could not
+// wait for the helpers to arrive.
 type stdWriter struct{ err bool }
 
 func (s stdWriter) Write(p []byte) (int, error) {
@@ -197,6 +201,16 @@ func (s *Stream) Style(role Role) lipgloss.Style {
 		return base.Foreground(colour)
 	}
 	return base
+}
+
+// paint applies a role to already-padded text. §4.3's invariant is that style
+// is applied after allocation, never before: cells carry plain text plus a
+// role, the renderer measures the plain text and styles the padded result.
+func (s *Stream) paint(role Role, text string) string {
+	if _, ok := colourFor(role, s.level); !ok {
+		return text
+	}
+	return s.Style(role).Render(text)
 }
 
 // ---------------------------------------------------------------- §4.2 width
