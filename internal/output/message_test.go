@@ -340,8 +340,8 @@ func widestLine(lines []string) int {
 // exiting with the wrong code — is invisible to it.
 //
 // All eight clauses below were planted in this tree and observed red, rather
-// than claimed. Six plants cover the eight, because two of them trip two
-// clauses each:
+// than claimed. Six plants cover the eight: three of them trip two clauses at
+// once, and the exit clause is reached by two different plants.
 //
 //	Die printing one unwrapped line   -> 2 violations, line 1 at 168 cells
 //	Die's shape stripped of its state -> 1 violation, first line lacks "✗ "
@@ -351,8 +351,8 @@ func widestLine(lines []string) int {
 //	Die returning instead of exiting  -> 2 violations, "Die exited 0" and the
 //	                                     DIE-RETURNED line; digest exit=0 lines=8
 //	the message cut to 150 cells      -> 1 violation, the lost-message clause
-//	inside renderMessage                 alone: five lines, every one inside the
-//	                                     budget, with the mark intact
+//	inside renderMessage                 alone; digest exit=1 lines=5 widest=40,
+//	                                     so the mark and the budget both held
 var probeDie = contractProbe{
 	name: "die_contract",
 	spec: "§6.1 / §4.7 / §4.8",

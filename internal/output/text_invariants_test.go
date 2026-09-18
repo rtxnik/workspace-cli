@@ -135,10 +135,10 @@ func runeCutAtEnd(s string, w int) string {
 // be run against the shipped primitives (expecting none) and against the
 // planted ones (expecting specific ones).
 //
-// It is the SECOND accumulator in this package — stream_contract_test.go's
-// `results` is the other, and that one's header explains why both stay. The
-// short version: this one is graded by its own control, which requires named
-// invariants to be red, and folding them changes no assertion.
+// It is one of the package's TWO failure accumulators — stream_contract_test.go
+// declares `results`, and that one's header explains why both stay. The short
+// version: this one is graded by its own control, which requires named
+// invariants to come back red, and folding them changes no assertion.
 type violations struct {
 	count map[string]int
 	first map[string]string

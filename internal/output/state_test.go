@@ -4,12 +4,13 @@ import "testing"
 
 // fxStateVocabulary is §4.5's table, written out by the harness.
 //
-// IT IS THE PACKAGE'S ONE COPY. The contract probes already in this package
-// read their expectations from here, and so does every test file a later phase
-// adds — the allocator fixtures, the grid and block-geometry assertions, the
-// width-sweep corpus and the East-Asian-Ambiguous subprocess. None of them
-// declares a second copy. Go has one package scope across every _test.go file,
-// so a second declaration is a compile error, not a duplication.
+// IT IS THE PACKAGE'S ONE COPY. The two message contract probes read their
+// expectations from here today, and so does every test file a later phase adds
+// — the allocator fixtures, the grid and block-geometry assertions, the
+// width-sweep corpus and the East-Asian-Ambiguous subprocess. Nothing declares
+// a second copy and nothing may: Go has one package scope across every
+// _test.go file, so a second declaration is a compile error, not a
+// duplication.
 //
 // It duplicates state.go DELIBERATELY: an assertion that read the marks and
 // words back out of the package would be satisfied by any self-consistent
