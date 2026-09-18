@@ -43,6 +43,16 @@ func W(s string) int {
 // laundering arbitrary control sequences from a container into the operator's
 // session. Raw bytes survive only in --json output, where they are data
 // rather than instructions.
+//
+// Tab survives this step and does not survive the message path, and the two
+// rules are not the layer disagreeing with itself. Sanitise decides what is
+// SAFE to forward: a tab advances to the next tab stop and cannot move the
+// cursor arbitrarily, clear the screen or rewrite the window title, so it is
+// not stripped along with the other controls. What a block then DOES with the
+// byte is the block's own rule, and prose reflows — Wrap re-joins each
+// paragraph on single spaces, so a tab inside a message reaches the terminal
+// as one space. The byte is kept here so that a caller which has a use for it
+// still has it to use.
 func Sanitise(s string) string {
 	stripped := ansi.Strip(s)
 	var b strings.Builder
@@ -241,6 +251,18 @@ func PadLeft(s string, w int) string {
 // Wrap breaks s into lines no wider than w display columns. Existing newlines
 // are honoured as paragraph breaks, which is what a multi-line upstream error
 // needs.
+//
+// WHITESPACE INSIDE A PARAGRAPH IS NOT PRESERVED. Each paragraph is split on
+// its whitespace and re-joined with one space, so every run of spaces or tabs
+// collapses — at every width, including widths at which nothing wraps.
+// Measured: Wrap("Name:    api", 80) returns ["Name: api"], and Wrap of
+// "a<tab>b" at 80 returns ["a b"]. That is this primitive's job: it lays prose
+// out against a budget, and a run it tried to carry would have to answer what
+// becomes of a run straddling a break, and of leading whitespace on a
+// continuation line. No characters are lost, only the spacing between them. A
+// caller that aligns columns by padding its own text is relying on something
+// this function does not offer, and belongs on a block type that owns its
+// geometry instead. probeMessageRouting in message_test.go pins the collapse.
 //
 // A run of characters with no break opportunity — the 200-character
 // unbreakable token of §6.2 — is hard-broken at the budget rather than

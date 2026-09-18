@@ -107,15 +107,38 @@ var messageHelpers = []struct {
 // stateMark: an assertion that read the marks back out of the package would be
 // satisfied by any self-consistent renaming.
 //
+// The fixture hands each helper a run of spaces and a tab, and routingWant
+// spells out what must come back: Wrap re-joins every paragraph on single
+// spaces, so the helpers deliver "routing probe for Info" however the input was
+// spaced. That collapse is the layer's decided behaviour, not an accident of
+// this fixture, so it is asserted here rather than left to be discovered in a
+// terminal; Wrap's own doc comment in text.go states the rule.
+//
 // Each clause was planted in this tree and observed red, rather than claimed:
 //
 //	Warn pointed at Out()              -> 4 violations, "wrote 27 bytes to stdout"
 //	emit resolving one stream for both -> 17 violations, every helper on stdout
 //	Warn made a no-op                  -> 3 violations, "did not write its message"
 //	Info wired to shapeSuccess         -> 1 violation, the markless clause below
+//	a message short enough to fit      -> 6 violations: the text clause for all
+//	passed through unwrapped              four helpers, and the markless clause
+//	                                      for Info and Detail
 //
-// The last one is what the markless clause exists for, and it was added after
-// the rest: before it, that mis-wiring left the WHOLE REPOSITORY green.
+// The fourth is what the markless clause exists for, and it was added after the
+// rest: before it, that mis-wiring left the WHOLE REPOSITORY green. The fifth is
+// the whitespace rule: the plant keeps Wrap in the file and merely stops routing
+// a fitting message through it, which is the shape a regression here would take.
+
+// routingRaw is what each helper is handed; routingWant is what it must put on
+// the wire. They differ, and the difference is the point: the raw form carries
+// a two-space run and a tab, and the collapsed form is written out as a literal
+// rather than recomputed from the raw one, so the expectation does not move
+// when the code that produces it moves.
+const (
+	routingRaw  = "routing  probe\tfor "
+	routingWant = "routing probe for "
+)
+
 var probeMessageRouting = contractProbe{
 	name: "message_routing",
 	spec: "§4.7",
@@ -123,8 +146,9 @@ var probeMessageRouting = contractProbe{
 	run: func(t *testing.T, r *results) string {
 		var seen []string
 		for _, h := range messageHelpers {
-			msg := "routing probe for " + h.name
-			stdout, stderr := capture(t, func() { h.call(msg) })
+			raw := routingRaw + h.name
+			want := routingWant + h.name
+			stdout, stderr := capture(t, func() { h.call(raw) })
 			seen = append(seen, fmt.Sprintf("%s:out=%d,err=%d", h.name, len(stdout), len(stderr)))
 
 			if stdout != "" {
@@ -132,8 +156,10 @@ var probeMessageRouting = contractProbe{
 					h.name, len(stdout), stdout)
 			}
 			plain := ansi.Strip(stderr)
-			if !strings.Contains(plain, msg) {
-				r.fail("message_routing", "%s did not write its message to stderr; stderr was %q", h.name, stderr)
+			if !strings.Contains(plain, want) {
+				r.fail("message_routing",
+					"%s wrote %q to stderr; it was handed %q, and a run of whitespace inside a paragraph collapses to one space, so this had to carry %q",
+					h.name, stderr, raw, want)
 			}
 			if !strings.HasSuffix(stderr, "\n") {
 				r.fail("message_routing", "%s did not terminate its line: %q", h.name, stderr)
@@ -159,11 +185,11 @@ var probeMessageRouting = contractProbe{
 				// because its indent is 0. Measured before the clause
 				// existed — Info wired to shapeSuccess left the WHOLE
 				// REPOSITORY green, under both gate legs.
-				want := strings.Repeat(" ", h.indent) + msg
-				if !strings.HasPrefix(plain, want) {
+				wantOpen := strings.Repeat(" ", h.indent) + want
+				if !strings.HasPrefix(plain, wantOpen) {
 					r.fail("message_routing",
 						"%s wrote %q; a helper with no state emits no mark and opens with its declared indent of %d, so this should have begun %q",
-						h.name, plain, h.indent, want)
+						h.name, plain, h.indent, wantOpen)
 				}
 			}
 		}
