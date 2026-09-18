@@ -107,9 +107,15 @@ var messageHelpers = []struct {
 // stateMark: an assertion that read the marks back out of the package would be
 // satisfied by any self-consistent renaming.
 //
-// Goes red when a helper is pointed at the wrong stream, when emit resolves
-// one stream for the process and reuses it for both, or when a helper stops
-// writing at all.
+// Each clause was planted in this tree and observed red, rather than claimed:
+//
+//	Warn pointed at Out()              -> 4 violations, "wrote 27 bytes to stdout"
+//	emit resolving one stream for both -> 17 violations, every helper on stdout
+//	Warn made a no-op                  -> 3 violations, "did not write its message"
+//	Info wired to shapeSuccess         -> 1 violation, the markless clause below
+//
+// The last one is what the markless clause exists for, and it was added after
+// the rest: before it, that mis-wiring left the WHOLE REPOSITORY green.
 var probeMessageRouting = contractProbe{
 	name: "message_routing",
 	spec: "§4.7",
@@ -142,6 +148,23 @@ var probeMessageRouting = contractProbe{
 			}
 			if h.indent > 0 && !strings.HasPrefix(plain, strings.Repeat(" ", h.indent)) {
 				r.fail("message_routing", "%s wrote %q, which is not indented by %d", h.name, plain, h.indent)
+			}
+			if !h.hasMark {
+				// A helper with no state emits no mark, and opens with
+				// exactly its declared indent.
+				//
+				// Without this clause the two markless helpers have nothing
+				// tying them to their shape: the mark clause is skipped for
+				// both, and the indent clause is skipped for Info as well
+				// because its indent is 0. Measured before the clause
+				// existed — Info wired to shapeSuccess left the WHOLE
+				// REPOSITORY green, under both gate legs.
+				want := strings.Repeat(" ", h.indent) + msg
+				if !strings.HasPrefix(plain, want) {
+					r.fail("message_routing",
+						"%s wrote %q; a helper with no state emits no mark and opens with its declared indent of %d, so this should have begun %q",
+						h.name, plain, h.indent, want)
+				}
 			}
 		}
 		return strings.Join(seen, " ")
@@ -182,10 +205,18 @@ func applyDieChildMutant() {}
 // dieMessage is 195 display cells, and carries an embedded newline so the
 // paragraph handling is exercised too. Measured:
 //
-//	ansi.StringWidth(dieMessage)                 = 195
-//	its two paragraphs                           = 166 and 29 cells
-//	what main emits today, one Fprintln of "✗ " + dieMessage:
-//	                                   line 1 = 168 cells, line 2 = 29 cells
+//	ansi.StringWidth(dieMessage) = 195
+//	its two paragraphs           = 166 and 29 cells
+//
+// Before this task, one Fprintln of errorStyle.Render("✗ "+dieMessage) emitted
+// two lines of 168 cells — not 168 and 29, which is what predicting it from
+// the paragraph widths gives. lipgloss block-renders a multi-line string,
+// padding every line to the widest, so the second line carried its 29 cells of
+// text and 139 trailing spaces.
+//
+// BOTH lines therefore tripped the width loop below, and together with the
+// len(lines) < 3 clause that is the three violations this probe reported
+// against the old bodies.
 var dieMessage = "workspace \"" + strings.Repeat("a", 64) + "\" could not be created: " +
 	"Cannot connect to the Docker daemon at unix:///var/run/docker.sock.\n" +
 	"Is the docker daemon running?"
@@ -271,8 +302,13 @@ func widestLine(lines []string) int {
 // so a change made inside Die — dropping the wrap, writing to the wrong stream,
 // exiting with the wrong code — is invisible to it.
 //
-// Goes red when: Die stops wrapping to its stream's budget, stops carrying the
-// fail mark, puts its message on stdout, or stops exiting 1.
+// Each clause was planted in this tree and observed red, rather than claimed:
+//
+//	Die printing one unwrapped line   -> 2 violations, line 1 at 168 cells
+//	Die's shape stripped of its state -> 1 violation, first line lacks "✗ "
+//	Die pointed at Out()              -> 2 violations: 214 bytes on stdout, and
+//	                                     nothing left on stderr to measure
+//	os.Exit(0) for os.Exit(1)         -> 1 violation, "Die exited 0"
 var probeDie = contractProbe{
 	name: "die_contract",
 	spec: "§6.1 / §4.7 / §4.8",
@@ -482,15 +518,32 @@ const fxReset = "\x1b[0m"
 //	the closing reset is trimmed           -> "emitted \x1b[32mtext", want …\x1b[0m
 //	Colour256 returns the truecolour value -> fxSGR's shape guard, naming "#b8bb26"
 //
-// The last one reddens through fxSGR rather than through the comparison: a
-// cross-LEVEL swap produces a value of the wrong SHAPE, so the encoder refuses
-// it before there is anything to compare. A swap WITHIN a level is what the
-// comparison itself catches.
+// WHICH LAYER CATCHES WHAT, measured one plant at a time. The expectations
+// here are DERIVED from colourFor, so a defect inside colourFor moves both
+// sides of the comparison together and this test cannot see it:
 //
-// For the first two, measured over the whole repository: these two tests are
-// the only red anywhere. In particular they are not caught by
-// TestNewStreamAtTakesEveryPropertyFromItsArguments, which asserts that SOME
-// SGR was emitted — the wrong role passes that check.
+//	paint's role selection    -> this comparison
+//	colourFor, cross-level    -> fxSGR's shape guard, which refuses a value of
+//	                             the wrong shape before there is anything to
+//	                             compare
+//	colourFor, within a level -> theme_test.go's TestPaletteDeclaresEveryLevel,
+//	                             which pins the literals independently.
+//	                             Measured: swapping RoleOK's and RoleWarn's 256
+//	                             indices reddens that test ALONE, and leaves
+//	                             this one green.
+//
+// For the first two plants, measured over the whole repository: these two
+// tests are the only red anywhere.
+//
+// Why exact bytes rather than "some SGR was emitted": measured on the weak
+// form over paint itself — strings.Contains(paint(RoleOK, "x"), ESC[) — which
+// FAILS when the style is dropped and PASSES when every role is painted
+// RoleFail. It separates an absent sequence from a present one, and not a
+// right one from a wrong one.
+//
+// (TestNewStreamAtTakesEveryPropertyFromItsArguments is green under both
+// plants, but for an unrelated reason: it renders through Style and never
+// reaches paint at all. It is not evidence about weak assertions.)
 func TestPaintEmitsTheDeclaredSGR(t *testing.T) {
 	coloured := []Role{RoleOK, RoleWarn, RoleFail, RoleInfo, RoleMuted, RoleAccent}
 
@@ -562,7 +615,11 @@ func TestMessageCarriesItsRoleColourOnEveryWrappedLine(t *testing.T) {
 			if !ok {
 				t.Fatalf("role %d has no declared colour at ColourTrue", c.role)
 			}
-			intro := fxSGR(t, string(colour.(lipgloss.Color)), ColourTrue)
+			value, isColour := colour.(lipgloss.Color)
+			if !isColour {
+				t.Fatalf("role %d declared a %T at ColourTrue; fxSGR can only encode a lipgloss.Color", c.role, colour)
+			}
+			intro := fxSGR(t, string(value), ColourTrue)
 
 			lines := strings.Split(renderMessage(s, c.shape, long), "\n")
 			if len(lines) < 2 {
