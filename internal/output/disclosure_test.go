@@ -176,12 +176,19 @@ func TestCaptionDiscloses(t *testing.T) {
 //
 // style_painted_before_fit is planted here as well as in
 // TestStyleIsAppliedAfterAllocation below, and it is NOT vacuous on this
-// corpus. The sweep renders at ColourTrue — see sweepStream — so wherever a
-// painted cell has to be CUT, the cut counts the escape bytes as cells and the
-// cell comes back short of the width the allocator paid for. Measured over the
-// full 29..200 sweep: 130 of its 2,752 renders go red, 70 through the
-// abbreviation-width check and 60 through gridFields' bordered-row check, the
-// first being
+// corpus. The sweep renders at ColourTrue — see sweepStream — so a painted
+// cell that has to be CUT comes back short of the width the allocator paid
+// for. The mechanism, measured rather than inferred: cutAt steps with
+// ansi.FirstGraphemeCluster, which returns the ESC byte itself at width 0 and
+// then hands back every byte of the parameter string as an ordinary one-cell
+// cluster. On a painted "degraded", clipTail(plain, 5) is "degr…" at 5 cells
+// and clipTail(painted, 5) is "\x1b[38;…" at 1.
+//
+// Measured with the switch planted over the sweep TestTableGridPairing covers
+// — 2,752 renders, widths 29..200 over the eight table fixtures in both glyph
+// modes, and NOT the nine-width sample this test runs: 130 of the 2,752 go
+// red, 70 through the abbreviation-width check and 60 through gridFields'
+// bordered-row check, the first being
 //
 //	table/list @ 29 (mode 0): "STATUS" allocated 9 cells but rendered 1 ("…")
 //

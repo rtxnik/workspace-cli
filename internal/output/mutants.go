@@ -97,9 +97,31 @@ type mutantSwitches struct {
 	// ORDER — ansi.Strip and ansi.StringWidth both ignore SGR — which is why
 	// it needs an assertion that reads where the escapes fall rather than how
 	// wide the line is. That is not the same as the corpus being blind to the
-	// SWITCH: wherever a painted cell has to be cut, the cut counts the escape
-	// bytes as cells and the cell comes back short of its allocation, so
-	// grid_pairing reddens 130 of the 2,752 renders in the full 29..200 sweep.
+	// SWITCH: a painted cell that has to be CUT comes back short of its
+	// allocation. The mechanism, measured rather than inferred — cutAt steps
+	// with ansi.FirstGraphemeCluster, which returns the ESC byte itself at
+	// width 0 and then hands back every byte of the parameter string as an
+	// ordinary ONE-CELL cluster, so the budget is spent on the escape. On a
+	// painted "degraded": clipTail(plain, 5) is "degr…" at 5 cells,
+	// clipTail(painted, 5) is "\x1b[38;…" at 1.
+	//
+	// TWO DIFFERENT SWEEPS MEASURE THIS, and an earlier form of this comment
+	// ran them together — it quoted the table sweep's numbers while naming the
+	// corpus sweep, which was true when it was written and stopped being true
+	// when the 49-fixture corpus landed. Both, measured on this tree:
+	//
+	//	the table sweep TestTableGridPairing covers — 2,752 renders, widths
+	//	29..200 over eight table fixtures in both glyph modes — goes red on
+	//	130 of them, 70 through the abbreviation-width clause and 60 through
+	//	gridFields' bordered-row check;
+	//
+	//	the corpus sweep TestMutationHarness runs — 16,856 renders over 49
+	//	fixtures — reports grid_pairing 1465 violations and
+	//	state_mark_and_word 681, first `table/list @ 29 (mode 0): "STATUS"
+	//	allocated 9 cells but rendered 1 ("…")`. grid_pairing there is a NAME
+	//	rather than one body: assertGridPairing and assertStateStructure both
+	//	report through gridFields, so 1465 is the total across the two.
+	//
 	// TestTableMutantsRedenTheBlockChecks plants it and requires that red.
 	PaintBeforeFit bool
 
