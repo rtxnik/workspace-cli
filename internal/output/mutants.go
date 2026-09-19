@@ -75,8 +75,11 @@ type mutantSwitches struct {
 	NoCaptionDisclosure bool
 	// HardcodedWideFlag writes " (--wide)" into the clause regardless of
 	// Table.WideFlag — the defect accepted review finding #12 exists to
-	// prevent, which survives any corpus in which every table that drops a
-	// column either declares a flag or is a degenerate Col literal.
+	// prevent. On this corpus caption_discloses kills it either way: 10
+	// violations from the degenerate unflagged literals alone, 28 once a
+	// constructor-built unflagged table is in the corpus. So the fixture that
+	// adds that table gives the kill an honest case; it is not what produces
+	// the kill.
 	HardcodedWideFlag bool
 	// CaptionWidth widens the caption's wrap budget by this many cells.
 	CaptionWidth int
@@ -85,7 +88,11 @@ type mutantSwitches struct {
 	// never before". Every width assertion in the suite is blind to the
 	// ORDER — ansi.Strip and ansi.StringWidth both ignore SGR — which is why
 	// it needs an assertion that reads where the escapes fall rather than how
-	// wide the line is.
+	// wide the line is. That is not the same as the corpus being blind to the
+	// SWITCH: wherever a painted cell has to be cut, the cut counts the escape
+	// bytes as cells and the cell comes back short of its allocation, so
+	// grid_pairing reddens 130 of the 2,752 renders in the full 29..200 sweep.
+	// TestTableMutantsRedenTheBlockChecks plants it and requires that red.
 	PaintBeforeFit bool
 }
 
