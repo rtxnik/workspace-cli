@@ -1010,13 +1010,21 @@ func equalInts(a, b []int) bool {
 // against hand-computed allocations. An invariant can say a drop was
 // permissible; only a golden can say WHICH column went.
 //
-// The tie-break needs a golden for a reason worth recording: measured, a plain
-// sort.Slice in place of sort.SliceStable changes the answer on 0 of 4,095
-// equal-slack column sets (n = 2..40, deficit 1..5n) and 0 of 199,850 random
-// column sets — Go's pdqsort falls back to insertion sort below 12 elements
-// and detects an already-ordered run above it. So the sort call does NOT carry
-// the guarantee at the sizes a CLI table reaches; the slice being built in
-// column order does, and nothing but a golden would notice if that changed.
+// The tie-break needs a golden for a reason worth recording, and the
+// measurement was re-run against this package rather than carried over. A
+// plain sort.Slice in place of sort.SliceStable, with nothing else changed,
+// produces the same width vector on 4,095 of 4,095 equal-slack column sets
+// (n = 2..40, deficit 1..5n) and on 200,000 of 200,000 random column sets
+// (n = 2..11, random Min/natural/deficit): Go's pdqsort falls back to
+// insertion sort below 12 elements and detects an already-ordered run above
+// it. Planted into shrinkToFit directly, the swap leaves the WHOLE package
+// suite green.
+//
+// So the sort call does not carry the guarantee at the sizes a CLI table
+// reaches. What carries it is `parts` being BUILT in a.Kept order — and
+// planting that instead, with the slice built right to left, reddens
+// alloc_golden and nothing else. That is the claim this test exists to make
+// good.
 func TestAllocationGoldens(t *testing.T) {
 	if mutants != (mutantSwitches{}) {
 		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
