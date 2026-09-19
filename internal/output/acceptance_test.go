@@ -1528,8 +1528,9 @@ var assertESCContainment = globalAssertion{
 
 // assertGlyphWidths is the FIRST half of §6.4: every mark the layer emits is
 // one cell wide, under the convention this process is running with. The second
-// half — the whole corpus under RUNEWIDTH_EASTASIAN=1 — needs a subprocess and
-// is Task 12.
+// half — the whole corpus under RUNEWIDTH_EASTASIAN=1, and the per-glyph
+// census of the two border sets — needs a subprocess and is
+// TestAmbiguousWideSweep in ambiguous_wide_test.go.
 //
 // Goes red when: a mark in §4.5's table is replaced by one of the retired
 // carriers (`●`, `○`, `·`, `→` are Ambiguous; `⚡` is Wide), or when the ASCII
