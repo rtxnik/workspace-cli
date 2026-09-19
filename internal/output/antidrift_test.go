@@ -180,9 +180,11 @@ func scanWidthPinning(root string) (found []string, guarded int, err error) {
 // guard pass for the wrong reason; or when a width is handed to a renderer
 // anywhere outside the mutation switch.
 //
-// Every one of those four reds was planted against the scanners in
+// That is FOUR reds, and every one of them is planted against the scanners in
 // TestAntiDriftGuardCanFail and TestWidthPinningGuardCanFail rather than
-// assumed: no runtime mutant can redden an assertion about source text, so the
+// assumed — a colour literal outside theme.go, a theme.go that names none, an
+// unguarded .Width(, and a .Width( one line too far below its guard. No
+// runtime mutant can redden an assertion about source text, so the
 // planted-source controls are the only way this body is shown able to fail.
 var assertAntiDrift = globalAssertion{
 	name: "anti_drift",
@@ -328,6 +330,30 @@ func TestAntiDriftGuardCanFail(t *testing.T) {
 		t.Fatalf("a colour literal under testdata was skipped: %v", violations)
 	}
 	t.Logf("a colour literal under testdata is reported: %v", violations)
+
+	// THE OTHER DIRECTION, PLANTED RATHER THAN REASONED ABOUT. assertAntiDrift
+	// fails when theme.go stops naming any colour at all, because a guard that
+	// found nothing because the pattern was nowhere in the tree would pass
+	// over a package that had lost its palette entirely. Nothing above this
+	// line exercises that clause: every stage so far hands the scanner a
+	// theme.go that HAS a literal, so `inPermitted == 0` was an assertion no
+	// stage of this control could reach.
+	//
+	// The violations count is re-asserted alongside it, because emptying the
+	// permitted file must not change what is reported outside it.
+	write("internal/output/theme.go", "package output\n\nvar ok = 1\n")
+	violations, inPermitted, err = scanColourLiterals(dir, permittedThemeFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inPermitted != 0 {
+		t.Fatalf("a palette-less theme.go was still counted as naming %d colour literal(s)", inPermitted)
+	}
+	if len(violations) != 3 {
+		t.Fatalf("emptying the permitted file changed what is reported outside it: %v", violations)
+	}
+	t.Logf("a theme.go naming no colour literal reports inPermitted=0, which is the input " +
+		"assertAntiDrift's vacuity clause reads")
 }
 
 // TestWidthPinningGuardCanFail is the width guard's control, proved the only

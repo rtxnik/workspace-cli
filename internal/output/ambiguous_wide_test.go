@@ -104,6 +104,15 @@ func TestAmbiguousWideSweep(t *testing.T) {
 	// The control. Without it, "0 overflows" would be equally consistent with
 	// the child never having had the convention applied at all.
 	cmode, coverflow, clines := run(ambiModeForced)
+	// The control's own mode is ASSERTED, not merely logged. If ambiModeForced
+	// ever stopped matching the child's role check, the child would fall
+	// through to glyphModeFromEnv, select ASCII, overflow zero — and the
+	// clause below would fire with a true failure and a misleading cause,
+	// blaming the convention for a broken role string.
+	if cmode != "utf8" {
+		t.Errorf("the control ran in glyph mode %q; it exists to FORCE utf8, and an ascii control "+
+			"re-measures what the selected run already measured", cmode)
+	}
 	if coverflow == 0 {
 		t.Errorf("forced UTF-8 glyphs overflowed 0 of %d lines under the Ambiguous-wide convention: "+
 			"the subprocess is not measuring what §6.4 says it measures", clines)
