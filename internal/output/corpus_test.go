@@ -1,11 +1,12 @@
 package output
 
-// Two imports, and no more: x/ansi is here for fxExpandTabs alone, which
-// measures the column a tab advances from. A helper landed ahead of its first
-// caller is `func fxExpandTabs is unused` at the acceptance gate, which runs
-// golangci-lint over the _test.go files too, so the helper and its callers
-// land together.
+// Three imports, each with one job: x/ansi segments and measures for
+// fxExpandTabs, fmt formats the switch set in fxCorpusBuild's guard, strings
+// builds the raw material. A helper landed ahead of its first caller is `func
+// fxExpandTabs is unused` at the acceptance gate, which runs golangci-lint
+// over the _test.go files too, so a helper and its callers land together.
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -194,33 +195,49 @@ func fxChecksSources(c Checks) []string {
 // with that code's mistakes. It short-circuits on tab-free text, so every
 // fixture in the corpus that carries no tab is untouched by it.
 //
-// It is deliberately naive where the production rule is careful: it steps by
-// RUNE and measures each rune on its own, where expandTabs steps by grapheme
-// cluster. The two agree on every string in which a tab is preceded, on its
-// own line, only by single-rune clusters — which is every string in this
-// corpus, table/tab-in-cell being pure ASCII. They diverge on a tab preceded
-// by an emoji-presentation sequence, where a rune-stepped column counter puts
-// the next tab stop one cell early — measured, expandTabs("⚠️\tx") is
-// "⚠️" + 6 spaces + "x" and fxExpandTabs of the same string is
-// "⚠️" + 7 spaces + "x". A fixture that mixes tabs with multi-rune clusters
-// must therefore land with this helper corrected; it is not a free addition.
+// INDEPENDENT IS NOT THE SAME AS NAIVE. It counts columns by GRAPHEME
+// CLUSTER, because that is the rule D-3 fixes for every measure and cut
+// primitive in this layer, and a second implementation is allowed to be
+// independent of the code under test but not to implement a rule the design
+// rejected. A rune-stepped column counter puts the next tab stop one cell
+// early after an emoji-presentation sequence: measured on the rune-stepped
+// draft of this function, fxExpandTabs("⚠️\tx") was "⚠️" + 7 spaces + "x"
+// where expandTabs gives "⚠️" + 6. The corpus already carries fxEmojiRun,
+// fxEmojiCause and a tab fixture, so one fixture combining them would have
+// made a CORRECT renderer redden grid_pairing and alloc_policy — T10-b's
+// failure class with the sign flipped.
+//
+// It segments with ansi.FirstGraphemeCluster directly and NOT through this
+// package's firstCell, which is production code the mutation switches
+// perturb: routing the harness through it would destroy the independence
+// that is the whole point of a second copy. Same x/ansi entry point,
+// separately called.
 func fxExpandTabs(s string) string {
 	if !strings.ContainsRune(s, '\t') {
 		return s
 	}
-	out, col := "", 0
-	for _, r := range s {
-		switch r {
+	var b strings.Builder
+	col := 0
+	for i := 0; i < len(s); {
+		switch s[i] {
 		case '\n':
-			out, col = out+"\n", 0
+			b.WriteByte('\n')
+			col, i = 0, i+1
 		case '\t':
 			n := 8 - col%8
-			out, col = out+strings.Repeat(" ", n), col+n
+			b.WriteString(strings.Repeat(" ", n))
+			col, i = col+n, i+1
 		default:
-			out, col = out+string(r), col+ansi.StringWidth(string(r))
+			cluster, _ := ansi.FirstGraphemeCluster(s[i:], ansi.GraphemeWidth)
+			if cluster == "" {
+				cluster = s[i : i+1] // unreachable: the segmenter always consumes a byte
+			}
+			b.WriteString(cluster)
+			col += ansi.StringWidth(cluster)
+			i += len(cluster)
 		}
 	}
-	return out
+	return b.String()
 }
 
 // --------------------------------------------------------- table builders
@@ -485,6 +502,18 @@ func fxCorpus() []fixture {
 // name or silently fork the corpus, so that TestCaptionDiscloses and
 // TestAcceptanceSweep stopped testing the same tables.
 func fxCorpusBuild() []fixture {
+	// The sentence above is now enforced rather than hoped for. Nothing else
+	// checks it: it holds today only because every caller of fxCorpus() is
+	// clean-guarded and file ordering happens to put acceptance_test.go first.
+	// Under `go test -run <one mutation test>` — a mutation harness's likely
+	// inner loop — this would be reached inside a mutant window, and
+	// tableFixtures()'s own guard would panic with a diagnosis about the
+	// constructor rather than about the switch that caused it.
+	if mutants != (mutantSwitches{}) {
+		panic("the corpus is being built with mutation switches on; a fixture set whose " +
+			"validity depends on a mutated constant is not a fixture set: " +
+			fmt.Sprintf("%+v", mutants))
+	}
 	out := tableFixtures()
 	out = append(out, []fixture{
 		tableFixtureFrom("table/list-name64", "§6.2 64-character name", fxListTable(true)),
