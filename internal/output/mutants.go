@@ -34,15 +34,18 @@ package output
 //     name to this list in the same commit:
 //
 //     TestAllocatorMutantsRedenTheDirectChecks — alloc_policy_test.go
+//     TestTableMutantsRedenTheBlockChecks — disclosure_test.go
+//     TestStyleIsAppliedAfterAllocation — disclosure_test.go
 //
 //     An assignment from anywhere else is the leak this rule exists to
 //     forbid: it turns a deliberate defect into the shipped behaviour for the
 //     rest of the run, with `go test -race ./...` green and nothing to say so.
 //
 // This file is NEVER build-tagged (decision D-11). Production code reads
-// these switches — measured as this file lands: 6 references in 1 non-test
-// file, alloc.go, and more as each later task re-threads the switches it held
-// back — so tagging the declaration out breaks the ordinary build. The tag
+// these switches — measured as the table block lands: 6 references in
+// alloc.go and 5 in blocks.go, and more as each later task re-threads the
+// switches it held back — so tagging the declaration out breaks the ordinary
+// build. The tag
 // goes on the mutation harness and only there. The cost in the shipped binary
 // is one zero-valued struct.
 type mutantSwitches struct {
@@ -57,6 +60,33 @@ type mutantSwitches struct {
 	RelaxOrderSwapped bool // step 5(b) runs before step 5(a)
 	RelaxFloorOne     bool // step 5(b)'s floor drops from max(1, markerWidth(mode)) back to 1
 	NoStateExemption  bool // the ColState exemption is removed from step 5(b)
+
+	// ------------------------------------------------------ §4.4 Table.Render
+	// PinTableWidth hands the allocator's computed total to lipgloss as
+	// `.Width(total)`. lipgloss then re-fits the grid to that number,
+	// absorbing an arithmetic error as silent content loss instead of
+	// overflow — measured over this package's 2,752-render table sweep, a
+	// chrome off-by-one produces 0 overflowing lines with this on and 5,174
+	// without it. On its own it is byte-identical to the clean render, which
+	// is exactly why the call is dangerous.
+	PinTableWidth bool
+	// NoCaptionDisclosure suppresses the "Hidden: …" / "Narrowed: …" clause, so
+	// the table drops or squeezes a column without saying so.
+	NoCaptionDisclosure bool
+	// HardcodedWideFlag writes " (--wide)" into the clause regardless of
+	// Table.WideFlag — the defect accepted review finding #12 exists to
+	// prevent, which survives any corpus in which every table that drops a
+	// column either declares a flag or is a degenerate Col literal.
+	HardcodedWideFlag bool
+	// CaptionWidth widens the caption's wrap budget by this many cells.
+	CaptionWidth int
+	// PaintBeforeFit applies the cell's Role BEFORE truncation and padding
+	// rather than after, inverting §4.3's "style is applied after allocation,
+	// never before". Every width assertion in the suite is blind to the
+	// ORDER — ansi.Strip and ansi.StringWidth both ignore SGR — which is why
+	// it needs an assertion that reads where the escapes fall rather than how
+	// wide the line is.
+	PaintBeforeFit bool
 }
 
 // mutants is the live set. Its zero value is the shipped behaviour.
