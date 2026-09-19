@@ -244,11 +244,12 @@ var assertAntiDrift = globalAssertion{
 //
 // 19 matches, all in the permitted file, zero outside it, and exactly one file
 // in the tree called theme.go. (An earlier draft pinned 18; the palette gained
-// a value since.) One further match is in mutation_test.go, which the scanner
-// skips as a test file. The assertion is therefore GREEN before any of this
-// work happens. Without this control it would be an assertion that cannot
-// fail — and while it was rooted at "." (the package directory inside a Go
-// test) it was also an assertion that could not SEE the drift, because §6.8
+// a value since.) Five further matches are in TEST files — one in
+// mutation_test.go and four in this one — and the scanner skips every one of
+// them by the `_test.go` suffix. The assertion is therefore GREEN before any
+// of this work happens. Without this control it would be an assertion that
+// cannot fail — and while it was rooted at "." (the package directory inside a
+// Go test) it was also an assertion that could not SEE the drift, because §6.8
 // and §7 both speak about the repository, where the ten direct-style sites
 // under cmd/ live.
 func TestAntiDriftGuardCanFail(t *testing.T) {
@@ -314,8 +315,10 @@ func TestAntiDriftGuardCanFail(t *testing.T) {
 	t.Logf("a decoy theme.go outside the permitted path is reported: %v", violations)
 
 	// And a colour literal inside testdata IS reported, which is what dropping
-	// testdata from the skip list buys. With the exclusion in place this file
-	// would be invisible and the count above would stay at 2.
+	// testdata from the skip list buys. Measured, not argued: putting
+	// `|| name == "testdata"` back into scanColourLiterals makes this very
+	// assertion fail with "a colour literal under testdata was skipped:
+	// [cmd/root.go:3 cmd/theme.go:3]" — two where three are required.
 	write("internal/output/testdata/drift.go", "package testdata\n\nvar d = lipgloss.Color(\"#d3869b\")\n")
 	violations, _, err = scanColourLiterals(dir, permittedThemeFile)
 	if err != nil {
@@ -343,10 +346,14 @@ func TestAntiDriftGuardCanFail(t *testing.T) {
 // with lipgloss — and the guard must go on ignoring them.
 //
 // Measured over the real tree, as the two halves of the guard define them:
-// non-test `.Width(` = 3 raw matches, of which 1 is the guarded call at
-// blocks.go:122 and 2 are prose (blocks.go:96, mutants.go:74), so the scanner
-// reports no violations and guarded == 1; test-file `.Width(` = 13 matches
-// over 4 files, all skipped.
+// non-test `.Width(` = 3 raw matches over 2 files, of which 1 is the guarded
+// call at blocks.go:122 and 2 are prose (blocks.go:96, mutants.go:74), so the
+// scanner reports no violations and guarded == 1. Test-file `.Width(` = 29
+// matches over 5 files, every one skipped by the `_test.go` suffix: 7 in
+// stream_contract_test.go, 16 in this file's own planted fixtures and prose,
+// and 6 across acceptance_test.go, disclosure_test.go and mutation_test.go.
+// That test-side total moves whenever this file is edited, which is the point
+// of writing the breakdown down rather than the sum alone.
 func TestWidthPinningGuardCanFail(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {

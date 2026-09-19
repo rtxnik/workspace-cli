@@ -106,9 +106,11 @@ type mutantSwitches struct {
 	// clipTail(painted, 5) is "\x1b[38;…" at 1.
 	//
 	// TWO DIFFERENT SWEEPS MEASURE THIS, and an earlier form of this comment
-	// ran them together — it quoted the table sweep's numbers while naming the
-	// corpus sweep, which was true when it was written and stopped being true
-	// when the 49-fixture corpus landed. Both, measured on this tree:
+	// ran them together: it quoted the table sweep's numbers under the name
+	// "the full 29..200 sweep". That named one sweep while this package had
+	// only one; the 49-fixture corpus then landed and took the name with it,
+	// leaving the sentence pointing at the wrong run. Both, measured on this
+	// tree:
 	//
 	//	the table sweep TestTableGridPairing covers — 2,752 renders, widths
 	//	29..200 over eight table fixtures in both glyph modes — goes red on

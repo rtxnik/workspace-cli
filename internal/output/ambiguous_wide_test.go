@@ -45,12 +45,15 @@ import (
 // corpus. The figures are recorded so that a reader who re-runs this and gets
 // a different pair knows whether the corpus changed or the layer did.
 //
-// The three claims above were planted rather than asserted from the armchair:
-// running the child with RUNEWIDTH_EASTASIAN unset trips the U+2026 guard
-// ("U+2026 measures 1 cells, expected 2"); deleting the RUNEWIDTH_EASTASIAN
-// clause from glyphModeFromEnv makes the parent report mode "utf8" and 14550
-// overflows in the SELECTED run; and emptying two fields of
-// lipgloss.RoundedBorder() makes the census report 9 distinct glyphs.
+// Each claim this file makes was planted rather than argued. Running the child
+// with RUNEWIDTH_EASTASIAN unset trips the U+2026 guard ("U+2026 measures 1
+// cells, expected 2"). Deleting the RUNEWIDTH_EASTASIAN clause from
+// glyphModeFromEnv makes the parent report mode "utf8" and 14550 overflows in
+// the SELECTED run — the same 14550 the forced control reports, which is the
+// two halves cross-checking each other. Emptying two fields of
+// lipgloss.RoundedBorder() makes the census report 9 distinct glyphs. Putting
+// an Ambiguous glyph into asciiBorder makes it report 4 ASCII glyphs and
+// "┼ is 2 cells".
 
 const (
 	ambiWideEnv    = "WS_OUTPUT_AMBIWIDE"
