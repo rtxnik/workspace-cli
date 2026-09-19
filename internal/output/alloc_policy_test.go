@@ -846,6 +846,9 @@ func TestAllocPolicy(t *testing.T) {
 // assertStateStructure and assertContentFidelity. Reading THIS test as a shape
 // assertion over the corpus would overstate it.
 func TestHarnessFixtureFieldsAreRead(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
 	for _, fx := range allocFixtureCases() {
 		if fx.name == "" || fx.spec == "" || fx.kind == "" {
 			t.Errorf("fixture %+v does not declare name, kind and the clause it discharges", fx)

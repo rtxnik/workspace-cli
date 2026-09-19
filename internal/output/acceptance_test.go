@@ -421,6 +421,9 @@ func TestTableGridPairing(t *testing.T) {
 // TestNewTableBlockRejectsImpossibleColSets is §4.3's construction-time
 // rejection (accepted review finding #18), asserted from both sides.
 func TestNewTableBlockRejectsImpossibleColSets(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
 	if _, err := NewTableBlock(fxEqualPrioCols()); err != nil {
 		t.Errorf("a Col set whose un-droppable columns fit MinWidth was rejected: %v", err)
 	}
@@ -455,6 +458,9 @@ func TestNewTableBlockRejectsImpossibleColSets(t *testing.T) {
 // a renderer that clipped it, or dropped it when the grid was already at the
 // budget, or emitted it only above some width, fails.
 func TestCaptionTravelsWithItsTable(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
 	checked := 0
 	for _, fx := range tableFixtures() {
 		if fx.caption == "" {
@@ -1717,6 +1723,9 @@ func TestControlBudget28(t *testing.T) {
 // defect is put in front of them, rather than being satisfied by anything at
 // all.
 func TestDetectorsCanFail(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
 	// §6.3's detector: a cut taken in bytes rather than clusters.
 	cjk := "中文工作区"
 	if utf8.ValidString(cjk[:2]) {
