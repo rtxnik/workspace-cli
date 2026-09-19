@@ -74,6 +74,31 @@ var fxEmojiRun = strings.Repeat("⚠️", 20)
 // conventions, which is what makes a rune-counting width function overflow.
 const fxCJKNote = "拨号失败：连接超时（30 秒），代理配置文件 de-fra-01 无法访问，请检查路由表"
 
+// fxEsc wraps text in control sequences: a line clear in front and an OSC 0
+// title rewrite behind. Two ESC bytes, zero cells to ansi.StringWidth, and a
+// payload — "pwned" — that must never reach the terminal as text.
+//
+// It exists because D-13 sanitises ELEVEN surfaces across blocks.go and, until
+// this corpus, only one of them (Problem.Cause) had a fixture carrying an
+// escape at all. A surface that silently stopped sanitising would have kept
+// the whole suite green. The other ten are covered by the four fixtures at the
+// end of fxCorpusBuild, and assertESCContainment asserts both halves over the
+// corpus: zero ESC bytes out, and no "pwned" surviving as text.
+//
+// Each of the ten was proved, one deleted Sanitise at a time, every one
+// restored — eight plants, because renderPairs covers Fact.K with Fact.V and
+// renderRemedies covers Remedy.Label with Remedy.Cmd:
+//
+//	Problem.Title        12 violations, first problem/esc-surfaces @ 29
+//	Fact.K + Fact.V      24, first problem/esc-surfaces @ 29
+//	Remedy.Label + .Cmd  24, first problem/esc-surfaces @ 29
+//	Empty.Subject        12, first empty/esc-surfaces @ 29
+//	KV.Title             12, first kv/esc-surfaces @ 29
+//	Checks.Title         12, first checks/esc-surfaces @ 29
+//	Check.Name           12, first checks/esc-surfaces @ 29
+//	Check.Note           12, first checks/esc-surfaces @ 29
+func fxEsc(text string) string { return "\x1b[2K" + text + "\x1b]0;pwned\x07" }
+
 // ------------------------------------------------------------ fixture type
 //
 // The fields this corpus fills in, and what reads each back:
@@ -384,6 +409,47 @@ func fxTabTable() fixture {
 	}
 }
 
+// fxEscTable puts §6.7's control sequences where D-13 says they also arrive:
+// in a CELL, in a column TITLE and in the CAPTION. Those are three different
+// paths — Cell.display, Col.title() and captionText — and the escapes are
+// zero-width to ansi.StringWidth, so the width sweep passes over all three
+// while the operator's terminal is being rewritten.
+//
+// Before this fixture, assertESCContainment had never seen an escape anywhere
+// but Problem.Cause, so these three surfaces would have shipped with no
+// detector at all: one that silently stopped sanitising would have kept the
+// whole suite green. Measured, one deletion at a time, each restored:
+//
+//	SanitiseInline out of Cell.display    esc_containment 6 violations, first
+//	                                      "table/esc-in-cell @ 29 (mode 0):
+//	                                      6 ESC bytes at ColourNone"
+//	SanitiseInline out of Col.title()     6 violations, first the same fixture
+//	                                      with 1 ESC byte
+//	Sanitise out of captionText           6 violations, likewise
+//
+// Three deletions, three reds, every one naming this fixture — which is the
+// evidence that no fourth hole is hiding behind the first.
+func fxEscTable() fixture {
+	cols := []Col{
+		{Title: "NAME", Prio: 1, Min: 8, Trunc: TruncMid},
+		{Title: "STATUS\x1b[2K", Prio: 2, Min: 12, Trunc: TruncTail},
+	}
+	rows := [][]Cell{
+		fxRow(Text("api"), Text(fxEscCause)),
+		fxRow(Text("web"), Text("\x1b]8;;https://example.invalid\x1b\\clickable\x1b]8;;\x1b\\")),
+	}
+	caption := "2 workspaces\x1b]0;pwned\x07"
+	tbl := Table{Cols: cols, Rows: rows, Caption: caption, WideFlag: "--wide"}
+	return fixture{
+		name:    "table/esc-in-cell",
+		kind:    "table",
+		spec:    "§6.7 / D-13: escapes in a cell, a column title and a caption are contained",
+		isTable: true, cols: cols, rows: rows,
+		caption: caption, wideFlag: "--wide",
+		render: func(s *Stream) string { return tbl.Render(s) },
+	}
+}
+
 // ------------------------------------------------------------- the corpus
 
 // fxCorpus IS MEMOISED, AND THE MEMOISATION IS LOAD-BEARING.
@@ -429,6 +495,7 @@ func fxCorpusBuild() []fixture {
 		tableFixtureFrom("table/long-caption", "§6.2 caption longer than the budget", fxLongCaptionTable()),
 		tableFixtureFrom("table/unbreakable-200", "§6.2 200-character unbreakable token", fxUnbreakableTable()),
 		fxTabTable(),
+		fxEscTable(),
 		tableFixtureFrom("table/emoji-presentation", "§6.2 emoji-presentation sequences (base + U+FE0F)", fxEmojiTable()),
 	}...)
 
@@ -614,6 +681,63 @@ func fxCorpusBuild() []fixture {
 		{"message/info-esc", "§6.7 message text containing control sequences", shapeInfo,
 			fxEscCause, fxEscSurvivors},
 	}
+	// The D-13 surfaces OUTSIDE the table. table/esc-in-cell covers
+	// Cell.display, Col.title() and captionText; problem/esc-cause covers
+	// Problem.Cause. These four cover the remaining ten — Problem.Title,
+	// Fact.K, Fact.V (renderPairs, shared by Problem.Facts and KV.Pairs),
+	// Remedy.Label, Remedy.Cmd (renderRemedies, shared by Problem.Steps and
+	// Empty.Steps), Empty.Subject, KV.Title, Checks.Title, Check.Name and
+	// Check.Note.
+	//
+	// Each declares its SURVIVORS as its fidelity list rather than its raw
+	// source: the source is deliberately altered in flight, so claiming it
+	// whole would assert the opposite of what §6.7 requires.
+	escProblem := Problem{
+		Title: fxEsc("Could not reconcile the go profile"),
+		Facts: []Fact{{fxEsc("stage"), fxEsc("buildkit export")}},
+		Steps: []Remedy{{fxEsc("Retry"), fxEsc("ws profile rebuild go")}},
+	}
+	out = append(out, fixture{
+		name: "problem/esc-surfaces", kind: "problem",
+		spec:     "§6.7 / D-13: escapes in Title, a Fact key and value, and a Remedy label and command",
+		fidelity: []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go"},
+		render:   func(s *Stream) string { return escProblem.Render(s) },
+	})
+
+	escEmpty := Empty{
+		Subject: fxEsc("cached layers"),
+		Steps:   []Remedy{{fxEsc("Rebuild"), fxEsc("ws profile rebuild go")}},
+	}
+	out = append(out, fixture{
+		name: "empty/esc-surfaces", kind: "empty",
+		spec:     "§6.7 / D-13: escapes in Subject and in a Remedy",
+		fidelity: []string{"cached layers", "Rebuild", "ws profile rebuild go"},
+		render:   func(s *Stream) string { return escEmpty.Render(s) },
+	})
+
+	escKV := KV{
+		Title: fxEsc("Build report"),
+		Pairs: []Fact{{fxEsc("buildkit"), fxEsc("3 of 5 layers cached")}},
+	}
+	out = append(out, fixture{
+		name: "kv/esc-surfaces", kind: "kv",
+		spec:     "§6.7 / D-13: escapes in Title and in a pair",
+		fidelity: []string{"Build report", "buildkit", "3 of 5 layers cached"},
+		render:   func(s *Stream) string { return escKV.Render(s) },
+	})
+
+	escChecks := Checks{
+		Title: fxEsc("Build doctor"),
+		Items: []Check{{fxEsc("buildkit cache"), StateAdvisory, fxEsc("2 of 5 layers reused")}},
+	}
+	out = append(out, fixture{
+		name: "checks/esc-surfaces", kind: "checks",
+		spec:     "§6.7 / D-13: escapes in Title, an item Name and an item Note",
+		states:   []fxState{{StateAdvisory, ""}},
+		fidelity: []string{"Build doctor", "buildkit cache", "2 of 5 layers reused"},
+		render:   func(s *Stream) string { return escChecks.Render(s) },
+	})
+
 	for _, mf := range messages {
 		shape, msg, fid := mf.shape, mf.msg, mf.fid
 		if fid == nil {

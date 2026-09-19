@@ -78,18 +78,31 @@ func fxVert(mode GlyphMode) string {
 // test-side vocabulary (fxBadge) rather than from the package's own
 // stateText().
 //
-// It applies the harness's own copy of the tab rule (fxExpandTabs, in
-// corpus_test.go), because Cell.display feeds the renderer's measuring
-// primitives and those expand tabs. Measured with this call removed and the
-// layer correct: 688 grid_pairing violations, the first reading `"TOOLS\tSET"
-// allocated 18 cells for "go\tnode\tpython" but rendered "go      node    p…"
-// — content lost`, which is the harness demanding that the renderer NOT expand
-// a tab it is obliged to expand.
+// It composes the cell the way Cell.display does, in the same order: sanitise
+// first (D-13), then expand tabs, because that is what the renderer does —
+// display returns SanitiseInline(Text) and the truncation and padding
+// primitives expand tabs afterwards.
+//
+// Both were measured, each with the other in place and the layer correct:
+//
+//	without fxExpandTabs    688 grid_pairing violations, first `"TOOLS\tSET"
+//	                        allocated 18 cells for "go\tnode\tpython" but
+//	                        rendered "go      node    p…" — content lost`
+//	without SanitiseInline  688 grid_pairing violations, first `"STATUS"
+//	                        rendered "unable to pull im…", which is not an
+//	                        abbreviation of "\x1b[2K\x1b[1Aunable to …"`
+//
+// In each case the harness is demanding that the renderer NOT do something it
+// is obliged to do. SanitiseInline is CONSUMED here rather than re-derived, on
+// the same grounds as fxTitle and fxNatural in alloc_policy_test.go: the
+// sanitiser is pinned by text_invariants_test.go, and a second copy of it in
+// the harness would pin nothing that file does not already pin. The tab rule
+// is re-derived, because nothing else pins it.
 func fxCellSource(c Cell, mode GlyphMode) string {
 	if c.isState {
-		return fxExpandTabs(fxBadge(c.state, c.Text, mode))
+		return fxExpandTabs(fxBadge(c.state, SanitiseInline(c.Text), mode))
 	}
-	return fxExpandTabs(c.Text)
+	return fxExpandTabs(SanitiseInline(c.Text))
 }
 
 // fxFaithful reports whether rendered is an honest abbreviation of src: the
@@ -1332,9 +1345,18 @@ var assertESCContainment = globalAssertion{
 			for _, w := range []int{MinWidth, 80, sweepMaxWidth} {
 				for _, fx := range fxCorpus() {
 					s := NewStreamAt(io.Discard, w, false, ColourNone, mode == GlyphASCII)
-					if n := escCount(fx.render(s)); n != 0 {
+					out := fx.render(s)
+					if n := escCount(out); n != 0 {
 						r.fail("esc_containment", "%s @ %d (mode %d): %d ESC bytes at ColourNone",
 							fx.name, w, mode, n)
+					}
+					// Stripping the sequence is not enough on its own: an
+					// implementation that dropped the ESC byte and kept the
+					// rest would satisfy the count above while handing the
+					// operator the payload as prose.
+					if strings.Contains(out, "pwned") {
+						r.fail("esc_containment", "%s @ %d (mode %d): the OSC title-rewrite payload survived as text",
+							fx.name, w, mode)
 					}
 				}
 			}
@@ -1346,6 +1368,45 @@ var assertESCContainment = globalAssertion{
 		}
 		if ansi.StringWidth(fxEscCause) >= len([]rune(fxEscCause)) {
 			r.fail("esc_containment", "the §6.7 fixture's escapes are not zero-width to ansi.StringWidth; the sweep would already see them")
+		}
+
+		// fxEsc is what makes the payload clause above mean anything: if it
+		// stopped carrying escapes, or stopped carrying the payload, every
+		// block fixture built on it would go quietly inert.
+		if n := escCount(fxEsc("x")); n < 2 {
+			r.fail("esc_containment", "fxEsc produces only %d ESC bytes; the block surfaces built on it cannot demonstrate containment", n)
+		}
+		if !strings.Contains(fxEsc("x"), "pwned") {
+			r.fail("esc_containment", "fxEsc no longer carries a payload; the leak clause in part (a) cannot fail")
+		}
+
+		// The ESC fixture must reach the TABLE surfaces, or D-13's sanitising
+		// calls on Cell.display, Col.title() and captionText have no detector.
+		// Part (a) above already asserts zero ESC bytes out; this asserts the
+		// INPUT still carries them, which is what makes part (a) mean
+		// something here.
+		//
+		// The raw fields are read directly and NOT through fxCellSource: that
+		// helper sanitises, as Cell.display does, so routing this count
+		// through it would count the escapes the harness has just stripped and
+		// the clause would fire on a perfectly potent fixture.
+		for _, fx := range fxCorpus() {
+			if fx.name != "table/esc-in-cell" {
+				continue
+			}
+			raw := fx.caption
+			for _, row := range fx.rows {
+				for _, c := range row {
+					raw += c.Text
+				}
+			}
+			for _, c := range fx.cols {
+				raw += c.Title
+			}
+			if n := escCount(raw); n < 4 {
+				r.fail("esc_containment", "table/esc-in-cell carries only %d ESC bytes across its cells, "+
+					"titles and caption; it cannot demonstrate containment on those surfaces", n)
+			}
 		}
 
 		problem := Problem{
@@ -1521,13 +1582,20 @@ func TestAcceptanceGlobals(t *testing.T) {
 // reviewer must be told about rather than have absorbed silently. Record in
 // this comment what moved it and by how much, every time.
 //
-// Measured over 44 fixtures, 17 of them tables: 443 overflowing lines of 1123.
-// Last moved by table/tab-in-cell and the tab expansion that came with it:
-// 431 of 1109 over the 43-fixture corpus, +12 overflowing lines and +14 lines
-// in total. The sweep's own line count fell the other way across the same
-// change, 111464 to 111120, because expanded tabs are wider than the zero
-// cells the layer used to measure them at and the wraps land differently.
-const control28Overflows = 443
+// Measured over 49 fixtures, 18 of them tables: 455 overflowing lines of 1171.
+// It moved twice while this corpus was being built, and each move is one table
+// fixture's worth of geometry at the floor:
+//
+//	43 fixtures, 16 tables                431 of 1109
+//	+ table/tab-in-cell and the fix       443 of 1123
+//	+ table/esc-in-cell                   455 of 1137
+//	+ the four block escape fixtures      455 of 1171 (they add 34 lines at
+//	                                      the floor and overflow none of them)
+//
+// The sweep's own line count moved the other way across the tab fix, 111464 to
+// 111120, because expanded tabs are wider than the zero cells the layer used
+// to measure them at and the wraps land differently.
+const control28Overflows = 455
 
 func TestControlBudget28(t *testing.T) {
 	over, total := 0, 0
