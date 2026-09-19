@@ -367,19 +367,23 @@ func TestAntiDriftGuardCanFail(t *testing.T) {
 // scanWidthPinning skips `_test.go`, so a control planted in a test file could
 // never be reported however wrong it was, and this test would be an assertion
 // that cannot fail. The test-file plant below is here for the opposite reason:
-// this package really has 7 `.Width(` calls in stream_contract_test.go, every
-// one of them `(*Stream).Width()` — the layer's own accessor, nothing to do
-// with lipgloss — and the guard must go on ignoring them.
+// this package's test files call `(*Stream).Width()` — the layer's own
+// accessor, nothing to do with lipgloss — and the guard must go on ignoring
+// them however many of them there are.
 //
-// Measured over the real tree, as the two halves of the guard define them:
-// non-test `.Width(` = 3 raw matches over 2 files, of which 1 is the guarded
-// call at blocks.go:122 and 2 are prose (blocks.go:96, mutants.go:74), so the
-// scanner reports no violations and guarded == 1. Test-file `.Width(` = 29
-// matches over 5 files, every one skipped by the `_test.go` suffix: 7 in
-// stream_contract_test.go, 16 in this file's own planted fixtures and prose,
-// and 6 across acceptance_test.go, disclosure_test.go and mutation_test.go.
-// That test-side total moves whenever this file is edited, which is the point
-// of writing the breakdown down rather than the sum alone.
+// Measured over the real tree, as the guard's two ASSERTED numbers define
+// them: non-test `.Width(` = 3 raw matches over 2 files, of which 1 is the
+// guarded call at blocks.go:122 and 2 are prose (blocks.go:96, mutants.go:74)
+// — so scanWidthPinning returns len(violations) == 0 and guarded == 1, which
+// is exactly the pair assertAntiDrift reads back.
+//
+// NO TEST-SIDE TALLY IS PINNED HERE, and that is a correction rather than an
+// omission. An earlier draft carried a per-file count of `.Width(` over the
+// test files; it was re-pinned two commits before the end of this phase and
+// falsified in the same file by the next commit, which added two more matches
+// to THIS ONE. The scanner drops every `_test.go` by suffix before the line
+// scan runs, so no assertion in this package consumes that number — and a
+// figure nothing reads is a figure that can only rot.
 func TestWidthPinningGuardCanFail(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {
