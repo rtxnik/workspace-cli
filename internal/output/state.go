@@ -74,3 +74,13 @@ func widestStateWord() int {
 	}
 	return widest
 }
+
+// stateText is the canonical "mark + word" rendering. An empty label falls
+// back to the state's default word (§4.5): `ws list` renders `✓ running`,
+// `- stopped`, `- not created`, not `✓ ok`.
+func stateText(st State, label string, mode GlyphMode) string {
+	if label == "" {
+		label = stateWord(st)
+	}
+	return stateMark(st, mode) + " " + label
+}
