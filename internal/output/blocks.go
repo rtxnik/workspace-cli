@@ -259,15 +259,18 @@ type Checks struct {
 // reads the sanitised width.
 //
 // That half is a GUARD, not a live fix, and the difference was measured rather
-// than assumed. W is ansi.StringWidth, which already counts CSI, OSC and C0 as
-// zero cells: on §6.7's escape-laden fixture W(raw) and W(Sanitise(raw)) are
+// than assumed. W measures with ansi.StringWidth, which already counts CSI,
+// OSC and C0 as zero cells: on §6.7's escape-laden fixture W(raw) and W(Sanitise(raw)) are
 // both 70, and on "ab\x01\x02cd\x07ef" both 6. Sizing the key column from the
 // RAW string instead (planted, one match) leaves the whole package green. What
 // sanitising actually buys is the CONTENT half above — the sequences never
 // reach the terminal — and that half is covered: removing Sanitise from
-// Problem.Cause reddens TestProblemCauseIsSanitised. The other ten surfaces
-// carry the same rule with no escape-bearing fixture behind them today; §6.7's
-// fixture is a Cause. Counted at this append: 11 caller surfaces read through
+// Problem.Cause reddens TestProblemCauseIsSanitised. The other ten now have
+// escape-bearing fixtures of their own in corpus_test.go — problem, empty, kv
+// and checks /esc-surfaces — and assertESCContainment is their detector:
+// deleting the Sanitise from any one of the call sites below reddens it,
+// measured 12 violations each and 24 where renderPairs or renderRemedies
+// covers two surfaces at once. Counted at this append: 11 caller surfaces read through
 // Sanitise across 13 call sites, the Fact key and the Remedy label being read
 // once in their width pass and once in their render pass.
 

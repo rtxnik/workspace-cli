@@ -299,10 +299,12 @@ func truncate(mode Trunc, s string, w int, glyphs GlyphMode) string {
 
 // Pad right-pads to exactly w display columns; a no-op when already wider.
 //
-// The measurement is W, which is ansi.StringWidth and therefore already sums
-// grapheme clusters rather than runes: a cell holding ⚠️ is padded by two
-// fewer spaces than a rune count would suggest, which is what keeps the
-// column's field the width the allocator assigned it (§4.3).
+// The measurement is W, which sums grapheme clusters rather than runes: a cell
+// holding ⚠️ is padded by two fewer spaces than a rune count would suggest,
+// which is what keeps the column's field the width the allocator assigned it
+// (§4.3). Tabs are expanded first, for the same reason and by the same rule as
+// everywhere else in this file: padding a string to a width measured with the
+// tab at zero cells would push the field past the border it was sized for.
 func Pad(s string, w int) string {
 	s = expandTabs(s)
 	if d := w - W(s); d > 0 {
