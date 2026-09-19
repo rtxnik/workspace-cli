@@ -73,8 +73,14 @@ var assertCaptionDiscloses = sweepAssertion{
 		// Step 5(b) appends every column it narrowed to Relaxed; step 5(c) may
 		// then drop some of those same columns, and nothing removed them from
 		// Relaxed, so the caption told the operator a column was both narrowed
-		// and hidden. The fix belongs in the allocator; this is its detector,
-		// and without it the fix has none.
+		// and hidden. The fix belongs in the allocator; this is its detector.
+		//
+		// It is a REGRESSION guard and not a live detector: measured on this
+		// corpus, 8 of the 2,752 renders carry both a Dropped and a Relaxed
+		// list, and none of them overlaps — under the clean allocator and
+		// under each of the six §4.3 switches taken one at a time. So the loop
+		// runs and finds nothing today. Nothing in this task can make it fire,
+		// which is exactly why it is written down rather than assumed.
 		dropped := make(map[string]bool, len(a.Dropped))
 		for _, title := range a.Dropped {
 			dropped[title] = true
