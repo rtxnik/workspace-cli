@@ -536,3 +536,142 @@ func TestPairedAssertionCatchesWhatTheSweepCannot(t *testing.T) {
 			"before changing this expectation", pinWidth)
 	}
 }
+
+// ============================================ the contract mutation harness
+//
+// The corpus harness above plants a defect and re-renders the corpus. That
+// cannot reach §4.7's stream routing, §4.2's width resolution, §4.5's
+// glyph-mode selection or §4.8's Die, because none of them appears in a
+// render: the sweep builds its streams with NewStreamAt over io.Discard and
+// never resolves a file descriptor. A mutant in any of them is VACUOUS against
+// the corpus — the bytes do not change — and a harness that reported such a
+// mutant as killed would be certifying coverage it does not have.
+//
+// So those defects are planted against the PROBES of stream_contract_test.go
+// and message_test.go instead, on the same three rules: the probe must be
+// green clean, the mutant must CHANGE WHAT THE PROBE OBSERVES, and the probe
+// must go red.
+
+type contractMutant struct {
+	name   string
+	spec   string
+	defect string
+	apply  func(m *mutantSwitches)
+	probe  contractProbe
+}
+
+func contractMutants() []contractMutant {
+	return []contractMutant{
+		{
+			name: "messages_routed_to_stdout",
+			spec: "§4.7",
+			defect: "the message helpers write to stdout instead of stderr, so `ws list > out.json` " +
+				"interleaves progress chatter with the artifact a script consumes",
+			apply: func(m *mutantSwitches) { m.MessagesToStdout = true },
+			probe: probeMessageRouting,
+		},
+		{
+			name: "colour_probed_on_stdout",
+			spec: "§4.1 / §4.6",
+			defect: "every stream's colour capability is resolved from stdout whatever fd it writes to — " +
+				"the measured defect that writes raw SGR into a redirected err.log while the message " +
+				"helpers go to stderr",
+			apply: func(m *mutantSwitches) { m.ColourProbedOnStdout = true },
+			probe: probeStreamIdentity,
+		},
+		{
+			name: "streams_not_memoised",
+			spec: "§4.1",
+			defect: "Out() and Err() are rebuilt on every call instead of being resolved once per process, " +
+				"so two call sites hold two streams over one fd and each re-probes it",
+			apply: func(m *mutantSwitches) { m.NoStreamMemo = true },
+			probe: probeStreamIdentity,
+		},
+		{
+			name:   "die_stops_wrapping",
+			spec:   "§6.1 / §4.8",
+			defect: "Die alone stops wrapping — the four helpers the sweep reaches through renderMessage are untouched",
+			apply:  func(m *mutantSwitches) { m.DieUnwrapped = true },
+			probe:  probeDie,
+		},
+		{
+			name: "columns_below_minwidth_rejected",
+			spec: "§4.2 / accepted review finding #13",
+			defect: "a COLUMNS below MinWidth is rejected and falls through to the probe instead of being clamped, " +
+				"so COLUMNS=28 in a pipe renders an unbounded table while COLUMNS=29 renders at 29",
+			apply: func(m *mutantSwitches) { m.ColumnsRejectBelowMin = true },
+			probe: probeResolveWidth,
+		},
+		{
+			name:   "width_probed_on_fd_zero",
+			spec:   "§4.2",
+			defect: "the width probe is pointed at fd 0 — stdin — rather than at the stream's own fd",
+			apply:  func(m *mutantSwitches) { m.ProbeWrongFd = true },
+			probe:  probeResolveWidth,
+		},
+		{
+			name: "cjk_locale_ignored",
+			spec: "§4.5",
+			defect: "the CJK language tag is ignored, so a ja_JP.UTF-8 or zh_CN.UTF-8 terminal keeps the UTF-8 " +
+				"glyph set whose marker and eleven border glyphs it draws at two cells",
+			apply: func(m *mutantSwitches) { m.IgnoreCJKTag = true },
+			probe: probeGlyphMode,
+		},
+	}
+}
+
+func TestContractMutationHarness(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("the mutation switches were not at their zero value on entry: %+v", mutants)
+	}
+	t.Cleanup(func() { mutants = mutantSwitches{} })
+
+	// One clean run per probe: the baseline observation, and the proof that
+	// the probe is green on the shipped behaviour before anything is planted.
+	//
+	// Both registries: contractProbes() in stream_contract_test.go carries
+	// stream_identity, resolve_width and glyph_mode_selection, and
+	// messageProbes() in message_test.go carries message_routing and
+	// die_contract. They are separate because the message helpers did not have
+	// their §4.7 behaviour when the first registry landed, so a probe over
+	// them would have been red at that point's own acceptance gate.
+	clean := map[string]string{}
+	for _, p := range append(contractProbes(), messageProbes()...) {
+		r := newResults()
+		clean[p.name] = p.run(t, r)
+		if r.any() {
+			t.Fatalf("probe %s is already red on the clean package (%v); the results below would be noise",
+				p.name, r.redAssertions())
+		}
+	}
+
+	t.Log("")
+	t.Log("contract mutant                            perturbed  killed by")
+	for _, m := range contractMutants() {
+		var observed string
+		r := newResults()
+		withMutant(t, m.apply, func() { observed = m.probe.run(t, r) })
+
+		perturbed := observed != clean[m.probe.name]
+		switch {
+		case !perturbed:
+			t.Errorf("VACUOUS MUTANT %s: probe %s observed exactly what it observes clean (%q), "+
+				"so nothing could distinguish it. %s", m.name, m.probe.name, observed, m.defect)
+		case len(r.redAssertions()) == 0:
+			t.Errorf("SURVIVING MUTANT %s: probe %s observed %q against a clean %q and stayed green. %s",
+				m.name, m.probe.name, observed, clean[m.probe.name], m.defect)
+		}
+		killed := "— SURVIVED —"
+		if len(r.redAssertions()) > 0 {
+			parts := make([]string, 0, len(r.redAssertions()))
+			for _, name := range r.redAssertions() {
+				parts = append(parts, name+"("+strconv.Itoa(r.fails[name])+")")
+			}
+			killed = strings.Join(parts, " ")
+		}
+		t.Logf("%-42s %-10t %s", m.name, perturbed, killed)
+		if len(r.redAssertions()) > 0 {
+			t.Logf("    first violation: %s", r.first[r.redAssertions()[0]])
+		}
+	}
+}

@@ -21,11 +21,11 @@ import (
 // routing every one of them to stdout, or leaving them unwrapped, passed the
 // whole suite before these assertions existed.
 //
-// The two assertions Task 11 plants defects against are contractProbe values
-// (the type Task 4 declares), not plain tests: the mutation harness has to be
-// able to ask WHICH assertion noticed, and a *testing.T reports to the
-// framework rather than to the caller. TestMessageContract below is the
-// ordinary entry point that runs them clean.
+// The two assertions TestContractMutationHarness in mutation_test.go plants
+// defects against are contractProbe values, not plain tests: the mutation
+// harness has to be able to ask WHICH assertion noticed, and a *testing.T
+// reports to the framework rather than to the caller. TestMessageContract
+// below is the ordinary entry point that runs them clean.
 
 // ---------------------------------------------------------------- helpers
 
@@ -215,30 +215,37 @@ var probeMessageRouting = contractProbe{
 // the entire render-side suite stays green.
 const (
 	dieChildEnv = "WS_TEST_DIE"
-	// dieMutantEnv carries a mutation switch ACROSS THE PROCESS BOUNDARY. A
-	// later phase adds a harness that makes Die stop wrapping and then asks
-	// whether this probe noticed; it sets that switch in the parent, but the
-	// child is a fresh process whose switches are all at their zero value. With
-	// no environment variable to carry the decision, the mutant would change
-	// nothing in the process actually being measured and would be reported as
-	// survived. The two seams below are where the parent asks and the child
-	// re-applies.
+	// dieMutantEnv carries a mutation switch ACROSS THE PROCESS BOUNDARY.
+	// TestContractMutationHarness in mutation_test.go makes Die stop wrapping
+	// and then asks whether this probe noticed; it sets mutants.DieUnwrapped
+	// in the parent, but the child is a fresh process whose switches are all
+	// at their zero value. With no environment variable to carry the decision,
+	// the mutant would change nothing in the process actually being measured
+	// and would be reported as survived. The two seams below are where the
+	// parent asks and the child re-applies.
 	dieMutantEnv = "WS_TEST_DIE_UNWRAPPED"
 	dieColumns   = 40
 )
 
 // dieChildMutantEnabled reports whether the Die mutant is on in THIS process,
-// and applyDieChildMutant turns it on. mutants.go declares only the allocator
-// switches of §4.3 today and the Die switch is not among them, so both are
-// inert here: the first always answers false and the second does nothing. A
-// later change replaces the two bodies with a read and a write of that switch,
-// in the same change that wires it into Die itself. They are seams rather than
-// direct reads for exactly one reason — this file shipped before the switch is
-// declared, and a reference to a symbol that does not exist yet does not
-// compile.
-func dieChildMutantEnabled() bool { return false }
+// and applyDieChildMutant turns it on in the CHILD. They were seams for one
+// reason — this file shipped before mutants.DieUnwrapped was declared, and a
+// reference to a symbol that does not exist yet does not compile — and they
+// now read and write that switch.
+//
+// applyDieChildMutant is the one assignment to `mutants` outside a
+// `//go:build mutation` file and a named control test; mutants.go carves it
+// out by name as rule 3(c). It carries no restore because there is nothing to
+// restore to: it runs in the re-exec'd child of runDieChild, and Die ends that
+// process.
+//
+// Measured with the two bodies still inert: die_stops_wrapping came back
+// `false — SURVIVED —`, on the digest "exit=1 lines=7 widest=40" — exactly
+// what probeDie observes clean — because the child was the only process being
+// measured and the parent's switch never reached it.
+func dieChildMutantEnabled() bool { return mutants.DieUnwrapped }
 
-func applyDieChildMutant() {}
+func applyDieChildMutant() { mutants.DieUnwrapped = true }
 
 // dieMessage is 195 display cells, and carries an embedded newline so the
 // paragraph handling is exercised too. Measured:
@@ -400,8 +407,9 @@ var probeDie = contractProbe{
 	},
 }
 
-// messageProbes is the half of the contract registry this task owns. Task 4's
-// contractProbes() carries the other three; Task 11 runs
+// messageProbes is the half of the contract registry this file owns;
+// contractProbes() in stream_contract_test.go carries the other three.
+// TestContractMutationHarness in mutation_test.go runs
 // append(contractProbes(), messageProbes()...).
 func messageProbes() []contractProbe {
 	return []contractProbe{probeMessageRouting, probeDie}
