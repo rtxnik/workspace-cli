@@ -1181,9 +1181,22 @@ var assertValidUTF8 = sweepAssertion{
 //	    exempts it precisely so that (3) stays satisfiable — and must be
 //	    dropped instead.
 //
-// Goes red when: a mark or a word in §4.5's table is changed or dropped, when
-// the ColState exemption in step 5(b) is removed, or when a width defect
-// squeezes a state cell far enough to eat its mark.
+// Every one of those four was planted and measured, one at a time, each
+// restored — and three of them are caught by this assertion ALONE:
+//
+//	stateText's separator changed to a       12382 violations (grid_pairing
+//	  same-width character                   sees it too)
+//	stateText's empty-label fallback          4816, ALONE, first
+//	  upper-cased                            "checks/proxy-doctor @ 29:
+//	                                         \"✓ ok\" missing from the render"
+//	the ColState exemption removed from       8, ALONE, first
+//	  step 5(b)                              "table/degenerate-state-floor @ 29:
+//	                                         state column \"STATUS\" allocated
+//	                                         11, below its Min 12" — alloc_policy
+//	                                         does NOT see this one
+//	a state cell cut from the head, so the    1372, ALONE, first
+//	  squeeze eats the mark instead of the   "table/list @ 29: squeezed state
+//	  word                                   cell \"…starting\" lost its mark"
 //
 // §6.5 also records, so it is not rediscovered, that a 4.5:1 contrast gate
 // against BOTH a light and a dark background is unsatisfiable in sRGB — the
@@ -1390,7 +1403,26 @@ var assertESCContainment = globalAssertion{
 		// helper sanitises, as Cell.display does, so routing this count
 		// through it would count the escapes the harness has just stripped and
 		// the clause would fire on a perfectly potent fixture.
+		//
+		// The MEMBERSHIP of each escape-bearing fixture is asserted too. Every
+		// clause above is a loop over the corpus that skips what it is not
+		// interested in, so a fixture quietly dropped or renamed takes its own
+		// detector with it and every one of those loops stays green over the
+		// remaining fixtures. That is the assertion-that-cannot-fail shape, one
+		// level up from the assertions themselves.
+		want := map[string]bool{
+			"table/esc-in-cell":    false,
+			"problem/esc-cause":    false,
+			"problem/esc-surfaces": false,
+			"empty/esc-surfaces":   false,
+			"kv/esc-surfaces":      false,
+			"checks/esc-surfaces":  false,
+			"message/info-esc":     false,
+		}
 		for _, fx := range fxCorpus() {
+			if _, ok := want[fx.name]; ok {
+				want[fx.name] = true
+			}
 			if fx.name != "table/esc-in-cell" {
 				continue
 			}
@@ -1406,6 +1438,11 @@ var assertESCContainment = globalAssertion{
 			if n := escCount(raw); n < 4 {
 				r.fail("esc_containment", "table/esc-in-cell carries only %d ESC bytes across its cells, "+
 					"titles and caption; it cannot demonstrate containment on those surfaces", n)
+			}
+		}
+		for name, seen := range want {
+			if !seen {
+				r.fail("esc_containment", "%s is not in the corpus; the D-13 surfaces it is the only detector for have none", name)
 			}
 		}
 
