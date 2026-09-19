@@ -1,9 +1,14 @@
 package output
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"strconv" // the "N." step prefixes and numberWidth
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -162,27 +167,24 @@ func gridFields(rc renderCase, a Alloc, r *results) ([][]string, bool) {
 	return rowsOut, true
 }
 
-// assertGridPairing is §6.1's paired assertion, plus the width half for the
-// lines the grid does not own (the caption).
+// assertGridPairing is §6.1's paired assertion, on the grid alone.
 //
-// It is a sweepAssertion rather than a plain function because Task 10
-// registers it in sweepAssertions() and Task 11 asks which assertion killed
-// which mutant. TestTableGridPairing below is the standalone entry point.
+// It is a sweepAssertion rather than a plain function because sweepAssertions()
+// registers it beside the corpus-wide checks and Task 11 asks which assertion
+// killed which mutant. TestTableGridPairing below is the standalone entry
+// point.
 //
-// The width half reports under the assertion name "width_budget", whose own
-// sweepAssertion arrives in Task 10; until then the name exists only as a
-// failure label in this body.
+// THE WIDTH HALF IS NOT HERE ANY MORE. It began life as this body's first
+// loop, and assertWidthBudget in this file now owns it, so that every fixture
+// in fxCorpus() gets it and not only the tables. Every harness that runs this
+// assertion must run assertWidthBudget beside it — TestTableGridPairing below
+// and TestTableMutantsRedenTheBlockChecks in disclosure_test.go both do —
+// because caption_wrapped_too_wide is killed by that loop and by nothing else.
 var assertGridPairing = sweepAssertion{
 	name: "grid_pairing",
 	spec: "§6.1 paired assertion",
 	what: "rendered grid width == Alloc.Total; each cell's field == its allocated width; no content lost that was allocated for",
 	check: func(rc renderCase, r *results) {
-		for i, line := range rc.plain {
-			if got := ansi.StringWidth(line); got > rc.budget {
-				r.fail("width_budget", "%s @ %d (mode %d): line %d is %d cells, budget %d: %q",
-					rc.fx.name, rc.width, rc.mode, i+1, got, rc.budget, line)
-			}
-		}
 		if !rc.fx.isTable {
 			return
 		}
@@ -285,8 +287,8 @@ var assertGridPairing = sweepAssertion{
 // §4.4's WideFlag contract needs: a valid, constructor-built table that drops a
 // column and declares NO WideFlag.
 //
-// It takes no *testing.T, because Task 10's fxCorpus() — which has none — is
-// built on top of it. A Col set the constructor refuses where the corpus needs
+// It takes no *testing.T, because fxCorpus() in corpus_test.go — which has
+// none — is built on top of it. A Col set the constructor refuses where the corpus needs
 // it accepted, or accepts where the corpus needs it refused, is a broken plan
 // rather than a test failure, so it panics with the diagnosis rather than
 // returning a half-built corpus. (The same degenerate/valid split is asserted
@@ -359,6 +361,12 @@ func tableFixtures() []fixture {
 
 // TestTableGridPairing sweeps every table fixture at every width from MinWidth
 // to 200 in both glyph modes and applies §6.1's paired assertion to each.
+//
+// It runs assertWidthBudget beside it because the width loop USED TO BE
+// assertGridPairing's first clause and now lives in its own assertion. Without
+// the extra line this harness would measure no line width at all — splitting an
+// assertion is never a local edit, and every harness that ran the original has
+// to be told about the half that moved.
 func TestTableGridPairing(t *testing.T) {
 	if mutants != (mutantSwitches{}) {
 		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
@@ -368,7 +376,9 @@ func TestTableGridPairing(t *testing.T) {
 	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
 		for w := MinWidth; w <= 200; w++ {
 			for _, fx := range tableFixtures() {
-				assertGridPairing.check(newRenderCase(fx, w, mode), r)
+				rc := newRenderCase(fx, w, mode)
+				assertWidthBudget.check(rc, r)
+				assertGridPairing.check(rc, r)
 				renders++
 			}
 		}
@@ -986,5 +996,581 @@ func TestStreamStateHelpers(t *testing.T) {
 				t.Errorf("mode %d: StateText(%v, \"running\") = %q, want %q", mode, st, got, want)
 			}
 		}
+	}
+}
+
+// =================================================== the corpus-wide sweep
+//
+// What follows is the §6.1/§6.2 acceptance sweep: the whole corpus of
+// corpus_test.go, at every width from MinWidth to sweepMaxWidth, in both glyph
+// modes, held against every assertion in sweepAssertions().
+//
+// Two rules hold throughout, and are the reason the harness is worth anything:
+//
+//   - The harness never measures with the code under test. Widths are taken
+//     with ansi.StringWidth directly and never through W(), because W() is one
+//     of the things the mutation switches perturb; a harness that measured
+//     with the mutated function would agree with the defect and report
+//     success.
+//   - The harness owns its expectations. The state vocabulary, the truncation
+//     markers and the border glyphs are declared in the test files from §4.5
+//     and §4.4, not read back out of the package, so a self-consistent
+//     renaming cannot satisfy them.
+
+// globalAssertion is one property that needs its own renders, or no renders at
+// all, rather than a pass over the sweep.
+type globalAssertion struct {
+	name  string
+	spec  string
+	what  string
+	check func(r *results)
+}
+
+// sweepStats is what one pass over the corpus measured.
+type sweepStats struct {
+	renders int
+	lines   int
+	digest  string // over every rendered byte: the vacuity check of a mutant run
+}
+
+const sweepMaxWidth = 200
+
+// runSweep renders every fixture at every width in [lo, hi] in both glyph
+// modes and applies every supplied assertion to each render.
+//
+// It builds its renderCases with newRenderCase, which is the same constructor
+// TestAllocPolicy, TestTableGridPairing and TestCaptionDiscloses use: one
+// render path, so a defect cannot hide behind a second one.
+//
+// The digest is not decoration. It is the only thing that lets a mutation
+// harness distinguish "no assertion caught this mutant" from "this mutant
+// changed nothing at all", and those two outcomes must never be reported the
+// same way.
+func runSweep(lo, hi int, checks []sweepAssertion, r *results) sweepStats {
+	h := sha256.New()
+	st := sweepStats{}
+	corpus := fxCorpus()
+	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+		for w := lo; w <= hi; w++ {
+			for _, fx := range corpus {
+				rc := newRenderCase(fx, w, mode)
+				st.renders++
+				st.lines += len(rc.lines)
+				_, _ = fmt.Fprintf(h, "%s|%d|%d|%s\x00", fx.name, w, mode, rc.out)
+				for _, a := range checks {
+					a.check(rc, r)
+				}
+			}
+		}
+	}
+	st.digest = hex.EncodeToString(h.Sum(nil))
+	return st
+}
+
+// ------------------------------------------------------- §6.1 width budget
+
+// assertWidthBudget is the property test of §6.1: every line of every render of
+// every block type and every message helper, at every width from MinWidth to
+// sweepMaxWidth, is at most the budget wide.
+//
+// It was assertGridPairing's first clause, and it is LIFTED OUT here rather
+// than duplicated: a table render still gets it, and so now does every
+// Problem, Empty, KV, Checks and message render in the corpus.
+//
+// Goes red when: the allocator's arithmetic is wrong by a cell (chrome
+// off-by-one), when a truncation marker is emitted without being reserved,
+// when a width is counted in runes instead of cells, when a wrapped block
+// ignores the indent it is printed at, or when a message helper stops
+// wrapping.
+var assertWidthBudget = sweepAssertion{
+	name: "width_budget",
+	spec: "§6.1",
+	what: "ansi.StringWidth(line) <= budget for every line of every render, MinWidth..200",
+	check: func(rc renderCase, r *results) {
+		for i, line := range rc.plain {
+			if got := ansi.StringWidth(line); got > rc.budget {
+				r.fail("width_budget", "%s @ %d (mode %d): line %d is %d cells, budget %d: %q",
+					rc.fx.name, rc.width, rc.mode, i+1, got, rc.budget, line)
+			}
+		}
+	},
+}
+
+// THE TWO HALVES OF §6.1's PAIRED ASSERTION, AND WHY BOTH.
+//
+// §6.1 asks for two things: the rendered grid width equals the allocator's
+// computed total, AND cell content equals what the allocator said it
+// allocated. They are not redundant, and each owns a defect class the other
+// cannot see:
+//
+//   - a chrome UNDER-count makes the render wider than the budget, so
+//     width_budget sees it — unless the total is also handed to lipgloss as
+//     .Width(), which re-fits the row and absorbs the error as content loss.
+//     Then only the paired assertion is left.
+//   - a chrome OVER-count makes the render NARROWER than the budget. Nothing
+//     overflows, so width_budget is silent in both directions, and the
+//     grid-total clause is the only clause OF THE PAIR that sees it.
+//
+// Those two shapes are asserted, not assumed: TestTableMutantsRedenTheBlockChecks
+// in disclosure_test.go plants chrome_off_by_one and chrome_over_by_one each
+// combined with lipgloss_width_pinning and requires both to be killed.
+// chrome_over_by_one is also seen by alloc_policy, which is an argument for
+// registering assertAllocPolicy in the sweep registry rather than an argument
+// against the paired assertion.
+
+// ------------------------------------------------------------ §6.3 UTF-8
+
+// assertValidUTF8 is §6.3. Goes red when any cut is taken in BYTES rather than
+// on a grapheme-cluster boundary — the measured defect it guards is
+// `tools[:maxTools-1]` (cmd/profile.go), which slices mid-rune and emits
+// invalid UTF-8. §6.3 records that this "fails today".
+var assertValidUTF8 = sweepAssertion{
+	name: "valid_utf8",
+	spec: "§6.3",
+	what: "every rendered byte sequence decodes as UTF-8",
+	check: func(rc renderCase, r *results) {
+		if !utf8.ValidString(rc.out) {
+			r.fail("valid_utf8", "%s @ %d (mode %d) is not valid UTF-8", rc.fx.name, rc.width, rc.mode)
+		}
+	},
+}
+
+// -------------------------------------------------- §6.5 structural colour
+
+// assertStateStructure is §6.5: colour is decorative, so the assertion is
+// STRUCTURAL, not photometric. Every rendered state carries its mark AND its
+// word. Four parts, because four different things can go wrong:
+//
+//	(1) a message helper's shape is a mark then prose, so its mark must still
+//	    be at the head of the first line however narrow the stream is;
+//	(2) blocks that never abbreviate a badge — Checks pads to the vocabulary's
+//	    widest mark and word — must show the whole "mark word" at every width.
+//	    The badge is composed by fxBadge from the harness's own copy of §4.5,
+//	    with an empty label falling back to the state's own word, so this is
+//	    what pins stateText's fallback and its single-space separator BY BYTES
+//	    rather than by width;
+//	(3) a state cell in a table must never lose its MARK, at any width, even
+//	    when the allocator has squeezed it: `-` alone renders `- stopped` and
+//	    `- not created` identically, which is the ambiguity §4.5 exists to
+//	    remove;
+//	(4) a state column must never be taken below its Min by step 5(b) — §4.3
+//	    exempts it precisely so that (3) stays satisfiable — and must be
+//	    dropped instead.
+//
+// Goes red when: a mark or a word in §4.5's table is changed or dropped, when
+// the ColState exemption in step 5(b) is removed, or when a width defect
+// squeezes a state cell far enough to eat its mark.
+//
+// §6.5 also records, so it is not rediscovered, that a 4.5:1 contrast gate
+// against BOTH a light and a dark background is unsatisfiable in sRGB — the
+// window is empty and the theoretical ceiling is 3.84:1 — so no photometric
+// gate is adopted and none may be added here.
+var assertStateStructure = sweepAssertion{
+	name: "state_mark_and_word",
+	spec: "§6.5",
+	what: "every rendered state carries its mark and its word; state columns keep their mark and are never relaxed below Min",
+	check: func(rc renderCase, r *results) {
+		joined := strings.Join(rc.plain, "\n")
+		if rc.fx.hasPrefixState {
+			want := fxMark(rc.fx.prefixState, rc.mode) + " "
+			if !strings.HasPrefix(rc.plain[0], want) {
+				r.fail("state_mark_and_word", "%s @ %d (mode %d): first line %q does not start with the mark %q",
+					rc.fx.name, rc.width, rc.mode, rc.plain[0], want)
+			}
+		}
+		for _, want := range rc.fx.states {
+			badge := fxBadge(want.st, want.label, rc.mode)
+			if !strings.Contains(joined, badge) {
+				r.fail("state_mark_and_word", "%s @ %d (mode %d): %q missing from the render",
+					rc.fx.name, rc.width, rc.mode, badge)
+			}
+		}
+		if !rc.fx.isTable {
+			return
+		}
+		a := Allocate(rc.fx.cols, rc.fx.rows, rc.budget, rc.mode)
+		for i, col := range rc.fx.cols {
+			if col.Kind != ColState || a.Widths[i] < 0 {
+				continue
+			}
+			if a.Widths[i] < col.Min {
+				r.fail("state_mark_and_word", "%s @ %d (mode %d): state column %q allocated %d, below its Min %d",
+					rc.fx.name, rc.width, rc.mode, col.Title, a.Widths[i], col.Min)
+			}
+			for _, relaxed := range a.Relaxed {
+				if relaxed == fxTitle(col) {
+					r.fail("state_mark_and_word", "%s @ %d (mode %d): state column %q was relaxed by step 5(b); §4.3 exempts it",
+						rc.fx.name, rc.width, rc.mode, col.Title)
+				}
+			}
+		}
+		if len(a.Kept) == 0 {
+			return
+		}
+		fields, ok := gridFields(rc, a, r)
+		if !ok {
+			return
+		}
+		for rowIdx, row := range fields[1:] {
+			for k, col := range a.Kept {
+				if rc.fx.cols[col].Kind != ColState {
+					continue
+				}
+				cells := rc.fx.rows[rowIdx]
+				if col >= len(cells) {
+					continue
+				}
+				src := fxCellSource(cells[col], rc.mode)
+				content := strings.TrimSpace(row[k])
+				mark := fxMark(cells[col].state, rc.mode)
+				if a.Widths[col] >= ansi.StringWidth(src) {
+					if content != src {
+						r.fail("state_mark_and_word", "%s @ %d (mode %d): state cell had room for %q but rendered %q",
+							rc.fx.name, rc.width, rc.mode, src, content)
+					}
+					continue
+				}
+				if !strings.HasPrefix(content, mark+" ") && content != mark {
+					r.fail("state_mark_and_word", "%s @ %d (mode %d): squeezed state cell %q lost its mark %q",
+						rc.fx.name, rc.width, rc.mode, content, mark)
+				}
+			}
+		}
+	},
+}
+
+// sweepAssertions is the registry runSweep is driven with.
+func sweepAssertions() []sweepAssertion {
+	return []sweepAssertion{
+		assertWidthBudget,
+		assertGridPairing,
+		assertValidUTF8,
+		assertStateStructure,
+		assertAllocPolicy,      // §4.3 against the spec, not against Allocate — alloc_policy_test.go
+		assertCaptionDiscloses, // §4.3 disclosure clause — disclosure_test.go
+		assertContentFidelity,  // §4.4 wrapping, outside the grid — disclosure_test.go
+	}
+}
+
+// --------------------------------------------------- §6.7 ESC containment
+
+func escCount(s string) int { return strings.Count(s, "\x1b") }
+
+// nonSGRSequences returns the escape sequences in s that are NOT plain SGR
+// (CSI … m). Those are the ones that move the cursor, clear the screen,
+// rewrite the window title or plant a hyperlink — the ones a container's
+// stderr must never be able to reach the operator's terminal with.
+func nonSGRSequences(s string) []string {
+	var out []string
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		if rs[i] != 0x1b {
+			continue
+		}
+		if i+1 >= len(rs) {
+			out = append(out, "bare ESC")
+			continue
+		}
+		switch rs[i+1] {
+		case '[':
+			j := i + 2
+			for j < len(rs) && (rs[j] < 0x40 || rs[j] > 0x7e) {
+				j++
+			}
+			if j < len(rs) && rs[j] != 'm' {
+				out = append(out, fmt.Sprintf("CSI %c", rs[j]))
+			}
+			i = j
+		case ']':
+			out = append(out, "OSC")
+			i++
+		default:
+			out = append(out, fmt.Sprintf("ESC %c", rs[i+1]))
+			i++
+		}
+	}
+	return out
+}
+
+// assertESCContainment is §6.7, in three parts:
+//
+//	(a) the whole corpus rendered at ColourNone yields zero ESC bytes;
+//	(b) a Problem whose Cause CONTAINS cursor moves, a line clear, an OSC
+//	    hyperlink and a title rewrite renders with zero ESC bytes on the TTY
+//	    path — and with none of the payload those sequences carried;
+//	(c) the same for message text, because the helpers travel the same
+//	    sanitising path and are 137 of the ~157 call sites.
+//
+// It also asserts the FIXTURE is potent: ansi.StringWidth measures the raw
+// Cause as narrower than a terminal would show it, which is exactly why the
+// width sweep alone cannot see this defect.
+//
+// §6.7's other clause — "NO_COLOR=1 and a piped stream both yield zero ESC
+// bytes" — is asserted at the colour probe in stream_contract_test.go (D-7),
+// where the environment seam actually lives. What is asserted HERE is the
+// corpus-level consequence, over every block type.
+//
+// Goes red when: Sanitise stops stripping CSI/OSC, or stops being applied to
+// Problem.Cause or to message text.
+var assertESCContainment = globalAssertion{
+	name: "esc_containment",
+	spec: "§6.7",
+	what: "the corpus at ColourNone yields zero ESC bytes; a Cause containing control sequences renders with none",
+	check: func(r *results) {
+		for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+			for _, w := range []int{MinWidth, 80, sweepMaxWidth} {
+				for _, fx := range fxCorpus() {
+					s := NewStreamAt(io.Discard, w, false, ColourNone, mode == GlyphASCII)
+					if n := escCount(fx.render(s)); n != 0 {
+						r.fail("esc_containment", "%s @ %d (mode %d): %d ESC bytes at ColourNone",
+							fx.name, w, mode, n)
+					}
+				}
+			}
+		}
+
+		// The fixture must be potent, or part (b) proves nothing.
+		if got := escCount(fxEscCause); got < 4 {
+			r.fail("esc_containment", "the §6.7 fixture carries only %d ESC bytes; it cannot demonstrate containment", got)
+		}
+		if ansi.StringWidth(fxEscCause) >= len([]rune(fxEscCause)) {
+			r.fail("esc_containment", "the §6.7 fixture's escapes are not zero-width to ansi.StringWidth; the sweep would already see them")
+		}
+
+		problem := Problem{
+			Title: "Could not pull the base image",
+			Cause: fxEscCause,
+			Facts: []Fact{{"image", fxBaseImage}},
+			Steps: []Remedy{{"Retry", "ws profile rebuild default"}},
+		}
+		for _, w := range []int{MinWidth, 80, sweepMaxWidth} {
+			// The TTY path at ColourNone: literally zero ESC bytes.
+			plain := problem.Render(NewStreamAt(io.Discard, w, true, ColourNone, false))
+			if n := escCount(plain); n != 0 {
+				r.fail("esc_containment", "Problem with an ESC-laden Cause emitted %d ESC bytes on the TTY path @ %d", n, w)
+			}
+			// The TTY path WITH colour: the layer's own SGR is legitimate, a
+			// forwarded cursor move or OSC is not.
+			coloured := problem.Render(NewStreamAt(io.Discard, w, true, ColourTrue, false))
+			if seqs := nonSGRSequences(coloured); len(seqs) > 0 {
+				r.fail("esc_containment", "Problem forwarded %v from its Cause on the coloured TTY path @ %d", seqs, w)
+			}
+			if strings.Contains(plain, "OWNED") || strings.Contains(plain, "registry.example.invalid") {
+				r.fail("esc_containment", "Problem @ %d leaked an escape payload (title rewrite or hyperlink target) as text", w)
+			}
+			if !strings.Contains(ansi.Strip(plain), "unable to pull image") {
+				r.fail("esc_containment", "Problem @ %d dropped the human-readable part of the Cause", w)
+			}
+		}
+
+		for _, w := range []int{MinWidth, 80, sweepMaxWidth} {
+			msg := renderMessage(NewStreamAt(io.Discard, w, true, ColourNone, false), shapeWarn, fxEscCause)
+			if n := escCount(msg); n != 0 {
+				r.fail("esc_containment", "Warn with ESC-laden text emitted %d ESC bytes @ %d", n, w)
+			}
+		}
+	},
+}
+
+// -------------------------------------------------------- §6.4 glyph width
+
+// assertGlyphWidths is the FIRST half of §6.4: every mark the layer emits is
+// one cell wide, under the convention this process is running with. The second
+// half — the whole corpus under RUNEWIDTH_EASTASIAN=1 — needs a subprocess and
+// is Task 12.
+//
+// Goes red when: a mark in §4.5's table is replaced by one of the retired
+// carriers (`●`, `○`, `·`, `→` are Ambiguous; `⚡` is Wide), or when the ASCII
+// counterpart of a mark stops being ASCII, or when the ASCII marker stops
+// being three cells — the number §4.3 step 5(b)'s floor depends on.
+var assertGlyphWidths = globalAssertion{
+	name: "glyph_widths",
+	spec: "§6.4",
+	what: "every state mark is one cell wide in both glyph modes; the ASCII marker is three cells and markerWidth says so",
+	check: func(r *results) {
+		for _, st := range allStates {
+			for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+				got := stateMark(st, mode)
+				want := fxMark(st, mode)
+				if got != want {
+					r.fail("glyph_widths", "state %d mode %d renders %q, §4.5 fixes it as %q", st, mode, got, want)
+				}
+				if w := ansi.StringWidth(got); w != 1 {
+					r.fail("glyph_widths", "state %d mode %d mark %q is %d cells, §4.5 requires 1", st, mode, got, w)
+				}
+			}
+			if word := stateWord(st); word != fxStateVocabulary[st].word {
+				r.fail("glyph_widths", "state %d word is %q, §4.5 fixes it as %q", st, word, fxStateVocabulary[st].word)
+			}
+		}
+		if w := ansi.StringWidth(marker(GlyphASCII)); w != 3 {
+			r.fail("glyph_widths", "the ASCII truncation marker measures %d cells, expected 3", w)
+		}
+		if got := markerWidth(GlyphASCII); got != 3 {
+			r.fail("glyph_widths", "markerWidth(ASCII) is %d; step 5(b)'s floor would not hold the marker", got)
+		}
+		if got := markerWidth(GlyphUTF8); got != 1 {
+			r.fail("glyph_widths", "markerWidth(UTF8) is %d, expected 1 under the narrow convention", got)
+		}
+	},
+}
+
+// ------------------------------------------- §4.3 construction-time refusal
+
+// assertColValidation covers §4.3's last clause: a Col set whose forced chrome
+// plus its un-droppable Min widths cannot fit MinWidth is rejected at
+// CONSTRUCTION rather than rendered, so the zero-column case is reachable only
+// through a programming error.
+//
+// The boundary is asserted from BOTH sides, one cell apart, which is what
+// makes it fail when the chrome formula drifts by a cell.
+var assertColValidation = globalAssertion{
+	name: "col_validation",
+	spec: "§4.3 / §6.2",
+	what: "an over-constrained Col set is refused at construction; the set one cell inside the boundary is accepted",
+	check: func(r *results) {
+		// Two un-droppable columns cost 3*2+1 = 7 cells of chrome, so Min
+		// widths of 11 and 11 need 29 — exactly MinWidth — and 11 and 12 need
+		// 30, one cell too many.
+		ok := []Col{{Title: "A", Prio: 1, Min: 11}, {Title: "B", Prio: 1, Min: 11}}
+		bad := []Col{{Title: "A", Prio: 1, Min: 11}, {Title: "B", Prio: 1, Min: 12}}
+		if _, err := NewTableBlock(ok, nil); err != nil {
+			r.fail("col_validation", "a Col set needing exactly MinWidth was rejected: %v", err)
+		}
+		if _, err := NewTableBlock(bad, nil); err == nil {
+			r.fail("col_validation", "a Col set needing MinWidth+1 was accepted; §4.3 requires refusal")
+		}
+		if _, err := NewTableBlock([]Col{{Title: "A", Prio: 1, Min: 0}}, nil); err == nil {
+			r.fail("col_validation", "a column with Min 0 was accepted")
+		}
+	},
+}
+
+func globalAssertions() []globalAssertion {
+	// assertAntiDrift joins this list in Task 12.
+	return []globalAssertion{assertESCContainment, assertGlyphWidths, assertColValidation}
+}
+
+// ============================================================ the tests
+
+// TestAcceptanceSweep is §6.1 and §6.2: every block type, every degenerate
+// variant and every message helper, at every width from MinWidth to
+// sweepMaxWidth, in both glyph modes, checked by every sweep assertion.
+func TestAcceptanceSweep(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	r := newResults()
+	allocStats = allocPolicyStats{}
+	st := runSweep(MinWidth, sweepMaxWidth, sweepAssertions(), r)
+	r.report(t)
+	t.Logf("swept %d renders / %d lines over widths %d..%d x 2 glyph modes x %d fixtures",
+		st.renders, st.lines, MinWidth, sweepMaxWidth, len(fxCorpus()))
+	for _, a := range sweepAssertions() {
+		t.Logf("  asserted %-20s %-22s %s", a.name, a.spec, a.what)
+	}
+
+	// What §4.3's invariants actually had in front of them. An allocator
+	// invariant over a corpus that never drops, never relaxes and never
+	// squeezes an Atomic column is green against ANY allocator at all, so the
+	// counts are asserted rather than merely logged.
+	t.Logf("  allocations %d: %d dropped a column, %d relaxed one below its Min, %d squeezed an Atomic column, %d ended at n = 0",
+		allocStats.allocations, allocStats.dropped, allocStats.relaxed, allocStats.squeezed, allocStats.captionOnly)
+	if allocStats.dropped == 0 || allocStats.relaxed == 0 || allocStats.squeezed == 0 || allocStats.captionOnly == 0 {
+		t.Errorf("the corpus does not reach every branch the §4.3 invariants police: %+v", allocStats)
+	}
+}
+
+// TestAcceptanceGlobals runs the assertions that need their own renders.
+func TestAcceptanceGlobals(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	for _, a := range globalAssertions() {
+		t.Run(a.name, func(t *testing.T) {
+			r := newResults()
+			a.check(r)
+			r.report(t)
+			t.Logf("%s %s: %s", a.name, a.spec, a.what)
+		})
+	}
+}
+
+// TestControlBudget28 is the control §6.1 demands: the same corpus re-checked
+// against a budget of 28 must report a NON-ZERO number of overflowing lines
+// while reporting zero at 29.
+//
+// §4.2 clamps a sub-MinWidth width up to MinWidth, so this is not "render at
+// 28" — nothing can be rendered at 28. It is the corpus rendered at the floor
+// and measured against a budget one cell below it, which makes the number the
+// size of the clamp's visible effect rather than a bug count.
+//
+// The number is PINNED. It moves when the corpus changes, when the clamp is
+// removed, or when any block's geometry at the floor changes — all of which a
+// reviewer must be told about rather than have absorbed silently. Record in
+// this comment what moved it and by how much, every time.
+//
+// Measured over 43 fixtures, 16 of them tables: 431 overflowing lines of 1109.
+const control28Overflows = 431
+
+func TestControlBudget28(t *testing.T) {
+	over, total := 0, 0
+	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+		for _, fx := range fxCorpus() {
+			rc := newRenderCase(fx, MinWidth-1, mode)
+			for _, line := range rc.plain {
+				total++
+				if ansi.StringWidth(line) > MinWidth-1 {
+					over++
+				}
+			}
+		}
+	}
+	if over == 0 {
+		t.Fatalf("the corpus produced 0 lines wider than %d: the width assertion cannot discriminate", MinWidth-1)
+	}
+	if over != control28Overflows {
+		t.Errorf("budget %d: %d overflowing lines of %d, pinned at %d",
+			MinWidth-1, over, total, control28Overflows)
+	}
+	t.Logf("budget %d: %d of %d lines overflow (budget %d: 0)", MinWidth-1, over, total, MinWidth)
+}
+
+// TestDetectorsCanFail is the control for the two assertions that no runtime
+// mutation switch in this package can redden — §6.3's UTF-8 check and §6.7's
+// ESC containment. Neither defect class is expressible as a switch in the
+// shipped package: every cut in text.go lands on a whole grapheme cluster, and
+// Sanitise has no off switch.
+//
+// What can still be proved, and is proved here, is that the DETECTORS those
+// assertions are built on discriminate — that they report the defect when the
+// defect is put in front of them, rather than being satisfied by anything at
+// all.
+func TestDetectorsCanFail(t *testing.T) {
+	// §6.3's detector: a cut taken in bytes rather than clusters.
+	cjk := "中文工作区"
+	if utf8.ValidString(cjk[:2]) {
+		t.Error("utf8.ValidString accepted a mid-rune byte slice; §6.3's assertion could not fail")
+	}
+	if !utf8.ValidString(cjk) {
+		t.Error("utf8.ValidString rejected valid text; §6.3's assertion would always fail")
+	}
+
+	// §6.7's detectors: ESC counting and the non-SGR sequence scanner.
+	if got := escCount(fxEscCause); got == 0 {
+		t.Error("escCount found no ESC in the §6.7 fixture")
+	}
+	if seqs := nonSGRSequences(fxEscCause); len(seqs) == 0 {
+		t.Error("nonSGRSequences found nothing in a fixture carrying cursor moves, a line clear and two OSCs")
+	} else {
+		t.Logf("the §6.7 fixture carries %d ESC bytes and %v", escCount(fxEscCause), seqs)
+	}
+	// Pure SGR — what the layer itself legitimately emits — must NOT be
+	// reported, or the assertion would fire on every coloured render.
+	if seqs := nonSGRSequences("\x1b[38;2;184;187;38mok\x1b[0m"); len(seqs) != 0 {
+		t.Errorf("nonSGRSequences reported %v for plain SGR; §6.7 would fail on any coloured render", seqs)
+	}
+	if escCount("no escapes here") != 0 {
+		t.Error("escCount reported escapes in plain text")
 	}
 }

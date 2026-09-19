@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // §4.3's disclosure clause: the caption must say what the allocator DID.
@@ -221,6 +223,12 @@ func TestTableMutantsRedenTheBlockChecks(t *testing.T) {
 					rc := newRenderCase(fx, w, mode)
 					b.WriteString(rc.out)
 					b.WriteByte(0)
+					// The width-budget loop used to live inside
+					// assertGridPairing. caption_wrapped_too_wide is killed by
+					// it and by nothing else, so this harness has to run the
+					// half that moved: splitting an assertion is never a local
+					// edit.
+					assertWidthBudget.check(rc, r)
 					assertGridPairing.check(rc, r)
 					assertCaptionDiscloses.check(rc, r)
 				}
@@ -344,4 +352,91 @@ func TestStyleIsAppliedAfterAllocation(t *testing.T) {
 	}
 	t.Logf("clean   %q", clean)
 	t.Logf("mutated %q", mutated)
+}
+
+// ----------------------------------------------------- §4.4 content fidelity
+
+// assertContentFidelity is §4.4's wrapping contract, asserted OUTSIDE the grid:
+// a wrap may insert whitespace but never delete characters.
+//
+// Why it is not optional, measured on the reference implementation: a message
+// helper that truncated instead of wrapping passed the entire suite before this
+// assertion existed — across all 137 call sites, with §6.1's width sweep green,
+// because a truncated line is by construction no wider than the budget.
+//
+// The comparison goes through squash (message_test.go), which removes every
+// space, tab and newline: a wrapped line break, a hanging indent and a hard
+// break at the budget are all whitespace the renderer is entitled to introduce.
+//
+// A fixture whose text is deliberately altered in flight — §6.7's ESC-laden
+// Cause, which Sanitise strips — declares the SURVIVORS as its fidelity list
+// rather than its raw source, because the raw source is not what §4.4 promises
+// to keep.
+//
+// Goes red when: a block truncates where §4.4 says it wraps, when a hanging
+// indent eats a character instead of a space, or when a value is dropped
+// because it did not fit its aligned slot.
+var assertContentFidelity = sweepAssertion{
+	name: "content_fidelity",
+	spec: "§4.4",
+	what: "outside the grid, every wrapped source string survives the render whole once line breaks and indents are collapsed",
+	check: func(rc renderCase, r *results) {
+		if len(rc.fx.fidelity) == 0 {
+			return
+		}
+		rendered := squash(strings.Join(rc.plain, "\n"))
+		for _, src := range rc.fx.fidelity {
+			want := squash(src)
+			if want == "" {
+				continue
+			}
+			if !strings.Contains(rendered, want) {
+				r.fail("content_fidelity", "%s @ %d (mode %d): %d-cell source %q is not in the render whole:\n%s",
+					rc.fx.name, rc.width, rc.mode, ansi.StringWidth(src), src, strings.Join(rc.plain, "\n"))
+			}
+		}
+	},
+}
+
+// TestDisclosureAssertionsArePotent refuses to let either assertion above pass
+// over a corpus that never puts it to work: a disclosure check is trivially
+// green on a corpus where nothing is ever dropped, and a fidelity check is
+// trivially green on one where nothing is ever wrapped.
+func TestDisclosureAssertionsArePotent(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	disclosing, wrapping, sources := 0, 0, 0
+	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+		for _, w := range []int{MinWidth, 40, 80, 120, sweepMaxWidth} {
+			for _, fx := range fxCorpus() {
+				rc := newRenderCase(fx, w, mode)
+				if fx.isTable {
+					a := Allocate(fx.cols, fx.rows, rc.budget, mode)
+					if len(a.Dropped)+len(a.Relaxed) > 0 {
+						disclosing++
+					}
+					continue
+				}
+				sources += len(fx.fidelity)
+				for _, src := range fx.fidelity {
+					// A source that fits on one line at this width proves
+					// nothing about wrapping. Measured in display CELLS, as
+					// everywhere in this suite — a byte count would call every
+					// CJK fixture wide and every emoji one wider still.
+					if len(rc.plain) > 1 && ansi.StringWidth(src) > rc.budget {
+						wrapping++
+					}
+				}
+			}
+		}
+	}
+	if disclosing == 0 {
+		t.Error("no render in the corpus dropped or relaxed a column: caption_discloses cannot fail")
+	}
+	if wrapping == 0 {
+		t.Error("no declared source is wider than its budget in any render: content_fidelity cannot fail")
+	}
+	t.Logf("%d renders disclose a dropped or relaxed column; %d of %d declared sources are wider than the budget they are wrapped into",
+		disclosing, wrapping, sources)
 }
