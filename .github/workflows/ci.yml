@@ -67,10 +67,11 @@ jobs:
   mutation:
     name: Output mutation harness (hard gate)
     runs-on: ubuntu-latest
-    # The longest job in this workflow — the harness re-runs the whole corpus
-    # once per mutant, about two minutes in a 10-core container. This ceiling
-    # sits ABOVE the target's own `-timeout 20m` on purpose: a genuine hang
-    # should produce Go's stack dump naming the test, not a bare cancellation.
+    # The harness re-runs the whole corpus once per mutant — measured at about
+    # two minutes in a 10-core container, and a hosted runner is slower. This
+    # ceiling sits ABOVE the target's own `-timeout 20m` on purpose: a genuine
+    # hang should produce Go's stack dump naming the test, not a bare
+    # cancellation.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
@@ -86,10 +87,13 @@ jobs:
       # The linter is installed and invoked directly, at the version the lint
       # job pins, rather than through golangci-lint-action with
       # `args: --build-tags mutation`. That is deliberate: an `args:` the
-      # action did not forward would leave a GREEN step over an unlinted file —
-      # a silent no-op — and no other job in this repository passes `args:`, so
-      # nothing here would have caught it. Running `make lint-mutation` makes
-      # CI execute the same string a developer can verify locally.
+      # action did not forward would leave a GREEN step over an unlinted file,
+      # so the failure would be silent rather than loud. Running
+      # `make lint-mutation` takes the forwarding out of the chain instead of
+      # trusting it, and makes CI execute the same string a developer runs
+      # locally. The flag itself is not taken on trust either: with a lint
+      # error planted in the tagged file, plain `golangci-lint run` stays at
+      # 0 issues while `make lint-mutation` reports it and exits non-zero.
       - name: Lint what the build tag hides from the lint job
         run: |
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
