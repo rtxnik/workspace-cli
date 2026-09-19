@@ -1032,10 +1032,11 @@ func TestStreamStateHelpers(t *testing.T) {
 // Two rules hold throughout, and are the reason the harness is worth anything:
 //
 //   - The harness never measures with the code under test. Widths are taken
-//     with ansi.StringWidth directly and never through W(), because W() is one
-//     of the things the mutation switches perturb; a harness that measured
-//     with the mutated function would agree with the defect and report
-//     success.
+//     with ansi.StringWidth directly and never through W(), because W() is
+//     production code this suite has to be able to disagree with: a harness
+//     that measured with it would agree with its mistakes and report success.
+//     Every mutation switch aimed at the width primitives lands in W, so this
+//     is the line between a harness that can adjudicate and one that cannot.
 //   - The harness owns its expectations. The state vocabulary, the truncation
 //     markers and the border glyphs are declared in the test files from §4.5
 //     and §4.4, not read back out of the package, so a self-consistent
@@ -1635,6 +1636,9 @@ func TestAcceptanceGlobals(t *testing.T) {
 const control28Overflows = 455
 
 func TestControlBudget28(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
 	over, total := 0, 0
 	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
 		for _, fx := range fxCorpus() {
