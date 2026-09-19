@@ -69,7 +69,16 @@ func Die(msg string) {
 		// message as one unwrapped line — leaves the whole corpus green.
 		// probeDie in message_test.go is what reaches it, and it has to carry
 		// this switch across a process boundary to do so.
-		_, _ = fmt.Fprintln(Err(), stateMark(shapeFail.state, Err().mode)+" "+Sanitise(msg))
+		//
+		// THE BRANCH IS DELIBERATELY SINGLE-AXIS. It is renderMessage's own
+		// output with NoMessageWrap on, for Die alone: the mark, the role and
+		// the sanitising all survive and only the wrap goes. An earlier form
+		// dropped s.paint too, which made one switch stand for two changes —
+		// invisible in probeDie, whose child writes to a pipe at ColourNone
+		// where paint emits nothing, and exactly the ambiguity this harness
+		// exists to catch everywhere else.
+		s := Err()
+		_, _ = fmt.Fprintln(s, s.paint(shapeFail.role, stateMark(shapeFail.state, s.mode)+" "+Sanitise(msg)))
 		os.Exit(1)
 	}
 	emit(Err(), shapeFail, msg)

@@ -23,6 +23,14 @@ import (
 // out breaks the ordinary build, while tagging the HARNESS out keeps a sweep
 // per mutant out of `go test -race ./...`. Task 12's `make test-mutation` and
 // its CI job are what keep it a hard gate.
+//
+// THE TAG ALSO HIDES THIS FILE FROM THE LINTER, AND THE CI JOB MUST UNDO THAT.
+// `golangci-lint run` never compiles a build-tagged file, so the repository's
+// ordinary lint gate says nothing about anything below this line. The job that
+// runs the harness must therefore also run
+// `golangci-lint run --build-tags mutation`, or the next edit here ships
+// unlinted. Measured on this tree at the commit that closed Task 11:
+// v2.12.2 with that flag reports 0 issues.
 
 // ------------------------------------------------------- rule 3's enforcement
 
@@ -45,14 +53,22 @@ import (
 // memoised and fxCorpusBuild panics when it is reached with a switch on — a
 // guard written for exactly this caller, because `go test -run <one mutation
 // test>` reaches the builder for the first time from inside a mutant window.
-// Measured with this line removed: `go test -tags mutation -run
+// Measured with the fxCorpus line removed: `go test -tags mutation -run
 // TestPairedAssertionCatchesWhatTheSweepCannot` panics with "the corpus is
 // being built with mutation switches on".
+//
+// THE ORDER OF THE FIRST THREE STATEMENTS IS THE POINT. The Cleanup is
+// registered before anything can plant; the zero value is restored before the
+// corpus is built, so the build is guaranteed clean rather than merely clean
+// in every caller that exists today; and only then is the switch set. Building
+// the corpus before that reset would leave the panic reachable from any future
+// caller that arrived dirty, and in CI that panic is a build failure rather
+// than a test failure.
 func withMutant(t *testing.T, set func(m *mutantSwitches), fn func()) {
 	t.Helper()
-	_ = fxCorpus()
 	t.Cleanup(func() { mutants = mutantSwitches{} })
 	mutants = mutantSwitches{}
+	_ = fxCorpus()
 	set(&mutants)
 	fn()
 	mutants = mutantSwitches{}
@@ -272,11 +288,13 @@ func corpusMutants() []mutant {
 			spec: "§4.3 style ordering",
 			defect: `the cell's Role is applied BEFORE truncation and padding, so a cut can land inside an ` +
 				`SGR sequence and the padding falls outside the painted run. The corpus is not blind to it: ` +
-				`sweepStream renders at ColourTrue deliberately, so wherever a painted cell has to be cut the ` +
-				`cut counts the escape bytes as cells and the cell comes back short of its allocation. ` +
-				`TestStyleIsAppliedAfterAllocation in disclosure_test.go is the assertion that reads WHERE the ` +
-				`escapes fall rather than how wide the line is, which is the half of the defect no width ` +
-				`assertion can see`,
+				`sweepStream renders at ColourTrue deliberately, and a painted cell that has to be cut comes ` +
+				`back SHORT OF ITS ALLOCATION. Measured first violations, planted over the whole sweep: ` +
+				`grid_pairing "table/list @ 29 (mode 0): \"STATUS\" allocated 9 cells but rendered 1 (\"…\")" ` +
+				`and state_mark_and_word "table/list @ 29 (mode 0): squeezed state cell \"…\" lost its mark ` +
+				`\"~\"". TestStyleIsAppliedAfterAllocation in disclosure_test.go is the assertion that reads ` +
+				`WHERE the escapes fall rather than how wide the line is, which is the half of the defect no ` +
+				`width assertion can see`,
 			apply: func(m *mutantSwitches) { m.PaintBeforeFit = true },
 		},
 		{
@@ -601,11 +619,13 @@ func contractMutants() []contractMutant {
 			probe: probeStreamIdentity,
 		},
 		{
-			name:   "die_stops_wrapping",
-			spec:   "§6.1 / §4.8",
-			defect: "Die alone stops wrapping — the four helpers the sweep reaches through renderMessage are untouched",
-			apply:  func(m *mutantSwitches) { m.DieUnwrapped = true },
-			probe:  probeDie,
+			name: "die_stops_wrapping",
+			spec: "§6.1 / §4.8",
+			defect: "Die alone stops wrapping — the four helpers the sweep reaches through renderMessage are " +
+				"untouched, and so are Die's own mark, role and sanitising: the switch moves the wrap and " +
+				"nothing else, so a kill cannot be attributed to a second change",
+			apply: func(m *mutantSwitches) { m.DieUnwrapped = true },
+			probe: probeDie,
 		},
 		{
 			name: "columns_below_minwidth_rejected",
