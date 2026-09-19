@@ -207,10 +207,19 @@ func fxChrome(n int) int {
 // emits; the width of arbitrary cell content is x/ansi's to get right and
 // nothing here re-derives it. The sanitiser is consumed rather than
 // re-derived for the same reason, and is pinned by text_invariants_test.go.
+//
+// THE TAB RULE IS THE ONE THING HERE THAT IS RE-DERIVED. W expands tabs before
+// it measures, so naturalWidths does too; fxExpandTabs is the harness's own
+// second implementation of that rule, in corpus_test.go, for the same reason
+// fxBadge is a second implementation of §4.5. Consuming expandTabs instead
+// would let a wrong tab stop move the allocation and the expectation together.
+// Measured on table/tab-in-cell with the layer fixed and this line absent:
+// 1032 alloc_policy violations, the first reading `natural widths [4 28]; the
+// widest of each column's heading and its cells is [4 15]`.
 func fxNatural(cols []Col, rows [][]Cell, mode GlyphMode) []int {
 	natural := make([]int, len(cols))
 	for i, c := range cols {
-		natural[i] = ansi.StringWidth(SanitiseInline(c.Title))
+		natural[i] = ansi.StringWidth(fxExpandTabs(SanitiseInline(c.Title)))
 		for _, row := range rows {
 			if i >= len(row) {
 				continue
@@ -219,6 +228,7 @@ func fxNatural(cols []Col, rows [][]Cell, mode GlyphMode) []int {
 			if row[i].isState {
 				text = fxBadge(row[i].state, text, mode)
 			}
+			text = fxExpandTabs(text)
 			if w := ansi.StringWidth(text); w > natural[i] {
 				natural[i] = w
 			}

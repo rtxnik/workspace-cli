@@ -1,11 +1,15 @@
 package output
 
-// ONE import, and that is not an oversight. fxExpandTabs — the harness's own
-// copy of the tab rule — arrives with its first caller, and brings
-// `github.com/charmbracelet/x/ansi` back with it. A helper landed ahead of its
-// first caller is `func fxExpandTabs is unused` at the acceptance gate, which
-// runs golangci-lint over the _test.go files too.
-import "strings"
+// Two imports, and no more: x/ansi is here for fxExpandTabs alone, which
+// measures the column a tab advances from. A helper landed ahead of its first
+// caller is `func fxExpandTabs is unused` at the acceptance gate, which runs
+// golangci-lint over the _test.go files too, so the helper and its callers
+// land together.
+import (
+	"strings"
+
+	"github.com/charmbracelet/x/ansi"
+)
 
 // The §6 acceptance corpus: the raw material, the eight table builders this
 // file adds on top of acceptance_test.go's tableFixtures(), and fxCorpus().
@@ -154,6 +158,41 @@ func fxChecksSources(c Checks) []string {
 		out = append(out, it.Name)
 		if it.Note != "" {
 			out = append(out, it.Note)
+		}
+	}
+	return out
+}
+
+// fxExpandTabs is the harness's OWN copy of the tab rule (§4.4 / text.go's
+// expandTabs), for the same reason fxStateVocabulary is the harness's own copy
+// of §4.5: an expectation computed with the code under test cannot disagree
+// with that code's mistakes. It short-circuits on tab-free text, so every
+// fixture in the corpus that carries no tab is untouched by it.
+//
+// It is deliberately naive where the production rule is careful: it steps by
+// RUNE and measures each rune on its own, where expandTabs steps by grapheme
+// cluster. The two agree on every string in which a tab is preceded, on its
+// own line, only by single-rune clusters — which is every string in this
+// corpus, table/tab-in-cell being pure ASCII. They diverge on a tab preceded
+// by an emoji-presentation sequence, where a rune-stepped column counter puts
+// the next tab stop one cell early — measured, expandTabs("⚠️\tx") is
+// "⚠️" + 6 spaces + "x" and fxExpandTabs of the same string is
+// "⚠️" + 7 spaces + "x". A fixture that mixes tabs with multi-rune clusters
+// must therefore land with this helper corrected; it is not a free addition.
+func fxExpandTabs(s string) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	out, col := "", 0
+	for _, r := range s {
+		switch r {
+		case '\n':
+			out, col = out+"\n", 0
+		case '\t':
+			n := 8 - col%8
+			out, col = out+strings.Repeat(" ", n), col+n
+		default:
+			out, col = out+string(r), col+ansi.StringWidth(string(r))
 		}
 	}
 	return out
@@ -319,6 +358,32 @@ func fxUnbreakableTable() *Table {
 	}
 }
 
+// fxTabTable is the TAB fixture. §4.4 mandates that Sanitise PRESERVE tab, and
+// ansi.StringWidth measures U+0009 at 0 cells while a terminal advances to the
+// next tab stop — so every width the layer computes over text containing a tab
+// is wrong in the one direction the width contract forbids. Tabs are placed in
+// a cell, in a column TITLE and in the CAPTION, because those are three
+// different measurement paths.
+func fxTabTable() fixture {
+	cols := []Col{
+		{Title: "NAME", Prio: 1, Min: 8, Trunc: TruncMid},
+		{Title: "TOOLS\tSET", Prio: 2, Min: 12, Trunc: TruncTail},
+	}
+	rows := [][]Cell{
+		fxRow(Text("go"), Text("go\tnode\tpython")),
+		fxRow(Text("web"), Text("node\tbun\tdeno\tpnpm")),
+	}
+	tbl := Table{Cols: cols, Rows: rows, Caption: "2 profiles\tof 8", WideFlag: "--wide"}
+	return fixture{
+		name:    "table/tab-in-cell",
+		kind:    "table",
+		spec:    "§4.4 Sanitise preserves tab; ansi.StringWidth measures it at 0 cells",
+		isTable: true, cols: cols, rows: rows,
+		caption: "2 profiles\tof 8", wideFlag: "--wide",
+		render: func(s *Stream) string { return tbl.Render(s) },
+	}
+}
+
 // ------------------------------------------------------------- the corpus
 
 // fxCorpus IS MEMOISED, AND THE MEMOISATION IS LOAD-BEARING.
@@ -363,6 +428,7 @@ func fxCorpusBuild() []fixture {
 		tableFixtureFrom("table/single-col", "§6.2 single-column table", fxSingleColTable()),
 		tableFixtureFrom("table/long-caption", "§6.2 caption longer than the budget", fxLongCaptionTable()),
 		tableFixtureFrom("table/unbreakable-200", "§6.2 200-character unbreakable token", fxUnbreakableTable()),
+		fxTabTable(),
 		tableFixtureFrom("table/emoji-presentation", "§6.2 emoji-presentation sequences (base + U+FE0F)", fxEmojiTable()),
 	}...)
 

@@ -29,7 +29,73 @@ const (
 
 // W is the display width of a string in terminal columns.
 func W(s string) int {
+	s = expandTabs(s)
 	return ansi.StringWidth(s)
+}
+
+// tabStop is the convention every widely used terminal emulator ships with.
+const tabStop = 8
+
+// expandTabs replaces every U+0009 with spaces to the next tab stop, counting
+// display cells from the start of each logical line.
+//
+// The layer measures with ansi.StringWidth, which reports U+0009 as ZERO
+// cells; a terminal advances to the next tab stop. Every width the layer
+// computes over text containing a tab is therefore wrong in the one direction
+// the width contract forbids, and inside a grid the error is not even visible
+// as overflow: the cell is padded to the width it was told and the terminal
+// then pushes the remainder past the right-hand border. Measured before the
+// fix, over a table carrying tabs in a cell, a column title and the caption:
+// 1032 paired-assertion violations, the first reading `"TOOLS\tSET" allocated
+// 15 cells for "TOOLS\tSET" but rendered "TOOLS    SET" — content lost`.
+//
+// §4.4's "tab preserved" is a rule about Sanitise, which is unchanged and
+// still preserves U+0009, so the raw text §4.4 governs and the --json path
+// that carries it are untouched. This is the RENDER boundary: the character
+// does not reach the terminal, its spacing does, deterministically, at
+// 8-column stops. The cost is that a tab used for alignment in upstream
+// output no longer aligns against anything outside its own block. §4.3's
+// precedence — the width contract outranks every other invariant, restated for
+// text blocks in §4.4 — is what decides that trade.
+//
+// The rejected alternative is teaching W to measure a tab at its advance: a
+// tab stop is a function of the column the character is drawn at, and this
+// layer measures a cell in isolation, before the allocator has decided where
+// that cell starts and before the border and padding to its left exist.
+// Dropping tabs outright is worse still: `go\tnode` becomes `gonode`.
+//
+// It steps by grapheme cluster for the same reason every other cut in this
+// file does (D-3): an emoji-presentation sequence is two runes and two cells,
+// so a rune-stepped column counter would put the next tab stop in the wrong
+// place. The short-circuit on tab-free text is what keeps it off the hot path
+// of every other measurement in the package, and is also what stops the
+// firstCell -> W -> expandTabs cycle below from recursing: the cluster
+// firstCell hands to W never begins with a tab, because the tab case above is
+// handled without consulting the segmenter.
+func expandTabs(s string) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + tabStop)
+	col := 0
+	for i := 0; i < len(s); {
+		switch s[i] {
+		case '\n':
+			b.WriteByte('\n')
+			col, i = 0, i+1
+		case '\t':
+			n := tabStop - col%tabStop
+			b.WriteString(strings.Repeat(" ", n))
+			col, i = col+n, i+1
+		default:
+			cluster, w := firstCell(s[i:])
+			b.WriteString(cluster)
+			col += w
+			i += len(cluster)
+		}
+	}
+	return b.String()
 }
 
 // Sanitise strips CSI and OSC sequences and C0/C1 control characters, keeping
@@ -48,11 +114,14 @@ func W(s string) int {
 // rules are not the layer disagreeing with itself. Sanitise decides what is
 // SAFE to forward: a tab advances to the next tab stop and cannot move the
 // cursor arbitrarily, clear the screen or rewrite the window title, so it is
-// not stripped along with the other controls. What a block then DOES with the
-// byte is the block's own rule, and prose reflows — Wrap re-joins each
-// paragraph on single spaces, so a tab inside a message reaches the terminal
-// as one space. The byte is kept here so that a caller which has a use for it
-// still has it to use.
+// not stripped along with the other controls. What happens to the byte AFTER
+// this step is the render boundary's rule, not this function's: expandTabs
+// turns it into spaces at every primitive that measures, cuts, pads or wraps,
+// so it never reaches the terminal as a tab. In a grid cell that means spaces
+// to the next 8-column stop; in prose Wrap additionally re-joins each
+// paragraph on single spaces, so measured, Wrap("a\tb", 80) is ["a b"]. The
+// byte is kept HERE so that a caller which has a use for it — --json, which
+// never travels the render path — still has it to use.
 func Sanitise(s string) string {
 	stripped := ansi.Strip(s)
 	var b strings.Builder
@@ -165,6 +234,7 @@ func cutAtEnd(s string, w int) string {
 
 // clipTail keeps the head: "golangci-lint, nod…".
 func clipTail(s string, w int, mode GlyphMode) string {
+	s = expandTabs(s)
 	if w <= 0 {
 		return ""
 	}
@@ -181,6 +251,7 @@ func clipTail(s string, w int, mode GlyphMode) string {
 // clipHead keeps the tail: "…8a2e:370:7334]:443" — addresses, where the port
 // must survive.
 func clipHead(s string, w int, mode GlyphMode) string {
+	s = expandTabs(s)
 	if w <= 0 {
 		return ""
 	}
@@ -196,6 +267,7 @@ func clipHead(s string, w int, mode GlyphMode) string {
 
 // clipMid keeps both ends: "aaaaaaaa…hhhhhhhh" — names.
 func clipMid(s string, w int, mode GlyphMode) string {
+	s = expandTabs(s)
 	if w <= 0 {
 		return ""
 	}
@@ -232,6 +304,7 @@ func truncate(mode Trunc, s string, w int, glyphs GlyphMode) string {
 // fewer spaces than a rune count would suggest, which is what keeps the
 // column's field the width the allocator assigned it (§4.3).
 func Pad(s string, w int) string {
+	s = expandTabs(s)
 	if d := w - W(s); d > 0 {
 		return s + strings.Repeat(" ", d)
 	}
@@ -240,6 +313,7 @@ func Pad(s string, w int) string {
 
 // PadLeft left-pads to exactly w display columns, for right-aligned columns.
 func PadLeft(s string, w int) string {
+	s = expandTabs(s)
 	if d := w - W(s); d > 0 {
 		return strings.Repeat(" ", d) + s
 	}
@@ -284,6 +358,7 @@ func Wrap(s string, w int) []string {
 		// positive w, and at every w <= 0.
 		w = 1
 	}
+	s = expandTabs(s)
 	var out []string
 	for _, para := range strings.Split(s, "\n") {
 		start := len(out)

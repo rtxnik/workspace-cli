@@ -78,13 +78,18 @@ func fxVert(mode GlyphMode) string {
 // test-side vocabulary (fxBadge) rather than from the package's own
 // stateText().
 //
-// Task 10 routes this through fxExpandTabs when the tab fixture arrives; until
-// then there are no tabs in any fixture.
+// It applies the harness's own copy of the tab rule (fxExpandTabs, in
+// corpus_test.go), because Cell.display feeds the renderer's measuring
+// primitives and those expand tabs. Measured with this call removed and the
+// layer correct: 688 grid_pairing violations, the first reading `"TOOLS\tSET"
+// allocated 18 cells for "go\tnode\tpython" but rendered "go      node    p…"
+// — content lost`, which is the harness demanding that the renderer NOT expand
+// a tab it is obliged to expand.
 func fxCellSource(c Cell, mode GlyphMode) string {
 	if c.isState {
-		return fxBadge(c.state, c.Text, mode)
+		return fxExpandTabs(fxBadge(c.state, c.Text, mode))
 	}
-	return c.Text
+	return fxExpandTabs(c.Text)
 }
 
 // fxFaithful reports whether rendered is an honest abbreviation of src: the
@@ -244,7 +249,13 @@ var assertGridPairing = sweepAssertion{
 						rc.fx.name, rc.width, rc.mode, rowIdx, title, got, alloc)
 					continue
 				}
-				src := title
+				// fxExpandTabs for the same reason fxCellSource applies it:
+				// the renderer draws the heading through clipTail and Pad,
+				// both of which expand tabs before they measure. Measured with
+				// this call removed and the layer correct: 344 grid_pairing
+				// violations on the heading alone, the 688 above being the
+				// cells' share of the same 1032.
+				src := fxExpandTabs(title)
 				if rowIdx > 0 {
 					src = ""
 					if cells := rc.fx.rows[rowIdx-1]; col < len(cells) {
@@ -1510,8 +1521,13 @@ func TestAcceptanceGlobals(t *testing.T) {
 // reviewer must be told about rather than have absorbed silently. Record in
 // this comment what moved it and by how much, every time.
 //
-// Measured over 43 fixtures, 16 of them tables: 431 overflowing lines of 1109.
-const control28Overflows = 431
+// Measured over 44 fixtures, 17 of them tables: 443 overflowing lines of 1123.
+// Last moved by table/tab-in-cell and the tab expansion that came with it:
+// 431 of 1109 over the 43-fixture corpus, +12 overflowing lines and +14 lines
+// in total. The sweep's own line count fell the other way across the same
+// change, 111464 to 111120, because expanded tabs are wider than the zero
+// cells the layer used to measure them at and the wraps land differently.
+const control28Overflows = 443
 
 func TestControlBudget28(t *testing.T) {
 	over, total := 0, 0
