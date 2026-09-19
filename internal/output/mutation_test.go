@@ -29,8 +29,11 @@ import (
 // withMutant applies one switch set for the duration of fn and RESTORES THE
 // ZERO VALUE afterwards, through t.Cleanup as well as on the normal return, so
 // that an fn abandoned by t.Fatal still cannot leave a defect switched on for
-// the rest of the run. Every plant in both harnesses goes through here; a bare
-// `mutants = …` anywhere in this file is the thing mutants.go's rule 3 forbids.
+// the rest of the run. EVERY PLANT IN BOTH HARNESSES GOES THROUGH HERE, and a
+// switch turned on anywhere else in this file is the thing mutants.go's rule 3
+// forbids. The only other assignments to `mutants` here are the four entry
+// guards' `t.Cleanup(func() { mutants = mutantSwitches{} })`, which restore
+// rather than plant.
 //
 // The two restores are not redundant and TestMutantSwitchesAreRestored proves
 // each separately. The TRAILING one is what lets a harness plant in a loop: a
@@ -140,7 +143,9 @@ func corpusMutants() []mutant {
 			spec: "§6.1 control / §4.3 budget contract",
 			defect: "the cut primitives step by rune while the budget contract measures display cells of grapheme " +
 				"clusters, so an emoji-presentation sequence (base + U+FE0F: 1 + 0 per rune, 2 as a cluster) is " +
-				"cut at one cell of budget and drawn at two. Distinct from rune_vs_cell, which mutates W itself: " +
+				"cut at one cell of budget and drawn at two. Measured on U+26A0 U+FE0F: firstCell returns " +
+				"(\"⚠\", 1) with the switch on against (\"⚠️\", 2) clean. Distinct from rune_vs_cell, " +
+				"which mutates W itself: " +
 				"here the measure is correct and only the stepper is wrong, so it is invisible on every fixture " +
 				"whose runes are its cells",
 			apply: func(m *mutantSwitches) { m.RuneSegmentation = true },
@@ -231,14 +236,17 @@ func corpusMutants() []mutant {
 			name: "state_column_not_exempt_from_5b",
 			spec: "§4.3 step 5(b) / §4.5",
 			defect: "the ColState exemption is removed from step 5(b): a state column is shaved below its Min " +
-				"instead of being dropped, which renders `- not created` and `- stopped` both as `-`",
+				"instead of being dropped. Measured first violation: `table/degenerate-state-floor @ 29 " +
+				"(mode 0): state column \"STATUS\" allocated 11, below its Min 12` — the Min §4.5's " +
+				"vocabulary sets so that a state's mark AND its word both fit",
 			apply: func(m *mutantSwitches) { m.NoStateExemption = true },
 		},
 		{
 			name: "drop_against_natural_sum",
 			spec: "§4.3 step 2",
 			defect: "step 2 is worded against the natural sum instead of the Min sum — the wording §4.3 records " +
-				"as implemented and measured wrong: a table sheds a whole column rather than shaving three cells off one",
+				"as implemented and measured wrong: a table sheds a whole column where shaving a column's " +
+				"slack down to its Min would have kept it",
 			apply: func(m *mutantSwitches) { m.DropAgainstNatural = true },
 		},
 		{
@@ -251,10 +259,12 @@ func corpusMutants() []mutant {
 			name: "hardcoded_wide_flag",
 			spec: "§4.4 / accepted review finding #12",
 			defect: `" (--wide)" is written into the Hidden clause regardless of Table.WideFlag, so the caption ` +
-				`advertises a flag the command does not have. The defect left the pre-plan draft's whole suite ` +
-				`green, because every table in that corpus which dropped a column declared a WideFlag. What ` +
-				`kills it here is the fixture Task 8 added for it, table/no-wide-flag: a constructor-built ` +
-				`table that drops a column and declares none`,
+				`advertises a flag the command does not have — the defect accepted review finding #12 exists ` +
+				`to prevent. Killed by caption_discloses. The table/no-wide-flag fixture is NOT what produces ` +
+				`that kill, and tableFixtures() in acceptance_test.go carries the measurement: 10 violations ` +
+				`without the fixture, 28 with it, so the mutant dies on the degenerate unflagged literals ` +
+				`alone. What the fixture adds is the honest case — a table a command could actually build, ` +
+				`dropping a column, with no flag to name, of which the corpus had none before it`,
 			apply: func(m *mutantSwitches) { m.HardcodedWideFlag = true },
 		},
 		{
@@ -309,15 +319,17 @@ func (run mutationRun) vacuous() bool { return !run.perturbed }
 //
 // THE WIDTH RANGE IS THE ACCEPTANCE SWEEP'S, AND NARROWING IT IS A SAVING THAT
 // HAS ALREADY BEEN MEASURED AND REJECTED. The cost is linear in the width
-// count and nothing else: measured over this roster, MinWidth..200 (172
-// widths) takes 93.10s and MinWidth..114 (86 widths) 47.33s, 4.23s against
-// 2.15s per run. The narrow sweep killed the SAME mutants by the SAME
-// assertions — no mutant survived it that the full sweep killed — so the
-// saving is real and the null result is recorded here rather than left to be
-// re-derived. It is declined because the harness's claim is that it re-runs
-// the registry over THE SWEEP THAT SHIPS: TestAcceptanceSweep renders
-// MinWidth..sweepMaxWidth, and a harness grading a narrower sweep would print
-// a per-assertion coverage table describing a sweep nothing runs.
+// count and nothing else: over the complete roster, MinWidth..200 (172 widths)
+// runs in 93.06s and MinWidth..114 (86 widths) in 47.67s — 4.23s against
+// 2.15s per mutant. BOTH DIRECTIONS OF THE COVERAGE TABLE CAME BACK IDENTICAL,
+// diffed with the per-assertion counts stripped: the same mutants killed, by
+// the same assertions, with the same one declared vacuous and none surviving.
+// So the saving is real, and the null result is recorded here rather than left
+// to be re-derived by the next reader who notices the runtime. It is declined
+// because the harness's claim is that it re-runs the registry over THE SWEEP
+// THAT SHIPS: TestAcceptanceSweep renders MinWidth..sweepMaxWidth, and a
+// harness grading a narrower sweep would print a coverage table describing a
+// sweep nothing runs.
 func runCorpusWithAssertions() (*results, sweepStats) {
 	r := newResults()
 	st := runSweep(MinWidth, sweepMaxWidth, sweepAssertions(), r)
@@ -365,19 +377,21 @@ func TestMutationHarness(t *testing.T) {
 			// A mutation that changes nothing cannot be killed by anything.
 			// Reporting it as killed would be the harness certifying coverage
 			// it does not have.
-			t.Errorf("VACUOUS MUTANT %s: the render is byte-identical to the clean corpus over "+
-				"%d renders, so no assertion could distinguish it and none of the %d assertions "+
-				"below is evidence about it. %s", m.name, st.renders,
-				len(sweepAssertions())+len(globalAssertions()), m.defect)
+			t.Errorf("VACUOUS MUTANT %s (%s): the render is byte-identical to the clean corpus over "+
+				"%d renders — digest %s, the clean one — so no assertion could distinguish it and none "+
+				"of the %d assertions below is evidence about it. %s", m.name, m.spec, st.renders,
+				st.digest[:16], len(sweepAssertions())+len(globalAssertions()), m.defect)
 		case run.perturbed && m.vacuousBecause != "":
-			t.Errorf("mutant %s was declared vacuous but now perturbs the render; the declaration is stale "+
-				"and the mutant must be re-classified", m.name)
+			t.Errorf("mutant %s (%s) was declared vacuous but now perturbs the render (digest %s against "+
+				"the clean %s); the declaration is stale and the mutant must be re-classified",
+				m.name, m.spec, st.digest[:16], cleanStats.digest[:16])
 		case run.perturbed && len(run.red) == 0:
-			t.Errorf("SURVIVING MUTANT %s: the corpus renders differently but every assertion stayed green. %s",
-				m.name, m.defect)
+			t.Errorf("SURVIVING MUTANT %s (%s): the corpus renders differently (digest %s) but every "+
+				"assertion stayed green. %s", m.name, m.spec, st.digest[:16], m.defect)
 		}
 		if !run.perturbed && m.vacuousBecause != "" {
-			t.Logf("VACUOUS (declared, and re-measured here) %s: %s", m.name, m.vacuousBecause)
+			t.Logf("VACUOUS (declared, and re-measured here) %s: digest %s, the clean one. %s",
+				m.name, run.digest[:16], m.vacuousBecause)
 		}
 	}
 
@@ -424,18 +438,17 @@ func TestMutationHarness(t *testing.T) {
 		killers := byAssertion[name]
 		if len(killers) == 0 {
 			unkilled = append(unkilled, name)
-			t.Logf("%-24s NO MUTANT — see the note above this test", name)
+			t.Logf("%-24s NO MUTANT — see \"Assertions no runtime switch can redden\" below", name)
 			continue
 		}
 		t.Logf("%-24s %s", name, strings.Join(killers, ", "))
 	}
 	if len(unkilled) > 0 {
 		// Not a failure: some assertions guard defect classes that no runtime
-		// switch in mutants.go can express. Each is listed with the source
-		// change that would fail it and the control that proves the detector
-		// discriminates, in the table above TestPairedAssertionCatchesWhatThe-
-		// SweepCannot. They are named here so the gap is REPORTED rather than
-		// hidden.
+		// switch in mutants.go can express. The table immediately below this
+		// function gives each one the source change that would fail it and the
+		// control that proves the detector discriminates. They are named here
+		// so the gap is REPORTED rather than hidden.
 		t.Logf("assertions no runtime mutant reddens: %s", strings.Join(unkilled, ", "))
 	}
 }
@@ -655,11 +668,11 @@ func TestContractMutationHarness(t *testing.T) {
 		perturbed := observed != clean[m.probe.name]
 		switch {
 		case !perturbed:
-			t.Errorf("VACUOUS MUTANT %s: probe %s observed exactly what it observes clean (%q), "+
-				"so nothing could distinguish it. %s", m.name, m.probe.name, observed, m.defect)
+			t.Errorf("VACUOUS MUTANT %s (%s): probe %s observed exactly what it observes clean (%q), "+
+				"so nothing could distinguish it. %s", m.name, m.spec, m.probe.name, observed, m.defect)
 		case len(r.redAssertions()) == 0:
-			t.Errorf("SURVIVING MUTANT %s: probe %s observed %q against a clean %q and stayed green. %s",
-				m.name, m.probe.name, observed, clean[m.probe.name], m.defect)
+			t.Errorf("SURVIVING MUTANT %s (%s): probe %s observed %q against a clean %q and stayed green. %s",
+				m.name, m.spec, m.probe.name, observed, clean[m.probe.name], m.defect)
 		}
 		killed := "— SURVIVED —"
 		if len(r.redAssertions()) > 0 {
