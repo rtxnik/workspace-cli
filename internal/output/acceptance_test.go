@@ -43,9 +43,11 @@ import (
 // Two rules hold throughout this file and the ones that follow it:
 //
 //   - The harness never measures with the code under test. Widths are taken
-//     with ansi.StringWidth directly and never with W(), because W() is one of
-//     the things being mutated; a harness that measured with the mutated
-//     function would agree with the defect and report success.
+//     with ansi.StringWidth directly and never with W(), because W() is
+//     production code this suite has to be able to disagree with — as are
+//     firstCell, Wrap, marker and markerWidth, which the mutation switches
+//     also reach. A harness that measured with any of them would agree with
+//     its mistakes and report success.
 //   - The harness owns its expectations. The truncation markers, the state
 //     vocabulary and the border glyphs are declared in the test files from
 //     §4.5, not read back out of the package, so a self-consistent renaming
@@ -523,7 +525,8 @@ func fxProblem() Problem {
 
 // plainLines is the render as the terminal shows it: SGR stripped, split into
 // lines. Stripping is done with ansi.Strip and measuring with
-// ansi.StringWidth — never with W(), which is one of the things being mutated.
+// ansi.StringWidth — never with W(), which is production code this suite has
+// to be able to disagree with.
 func plainLines(out string) []string {
 	lines := strings.Split(out, "\n")
 	for i, l := range lines {
@@ -1035,8 +1038,12 @@ func TestStreamStateHelpers(t *testing.T) {
 //     with ansi.StringWidth directly and never through W(), because W() is
 //     production code this suite has to be able to disagree with: a harness
 //     that measured with it would agree with its mistakes and report success.
-//     Every mutation switch aimed at the width primitives lands in W, so this
-//     is the line between a harness that can adjudicate and one that cannot.
+//     The same holds for every other primitive this harness could have leaned
+//     on: the switches aimed at the text layer are spread across W, firstCell
+//     and Wrap in text.go and marker/markerWidth in glyph.go, so "measure with
+//     x/ansi, never with the package" is the only rule that covers all of
+//     them. It is the line between a harness that can adjudicate and one that
+//     cannot.
 //   - The harness owns its expectations. The state vocabulary, the truncation
 //     markers and the border glyphs are declared in the test files from §4.5
 //     and §4.4, not read back out of the package, so a self-consistent
@@ -1182,22 +1189,31 @@ var assertValidUTF8 = sweepAssertion{
 //	    exempts it precisely so that (3) stays satisfiable — and must be
 //	    dropped instead.
 //
-// Every one of those four was planted and measured, one at a time, each
-// restored — and three of them are caught by this assertion ALONE:
+// FIVE plants, one per part plus one more on the vocabulary all four read,
+// each applied alone and restored. Four of the five are caught by this
+// assertion and by nothing else:
 //
-//	stateText's separator changed to a       12382 violations (grid_pairing
-//	  same-width character                   sees it too)
-//	stateText's empty-label fallback          4816, ALONE, first
-//	  upper-cased                            "checks/proxy-doctor @ 29:
+//	(1) renderMessage's first line emitted   1376, ALONE, first
+//	    without its prefix                   "message/success-cjk @ 29: first
+//	                                         line \"工作区已启动：拨号失败：连\"
+//	                                         does not start with the mark \"✓ \""
+//	(2) stateText's empty-label fallback      4816, ALONE, first
+//	    upper-cased                          "checks/proxy-doctor @ 29:
 //	                                         \"✓ ok\" missing from the render"
-//	the ColState exemption removed from       8, ALONE, first
-//	  step 5(b)                              "table/degenerate-state-floor @ 29:
+//	(3) a state cell cut from the head, so    1372, ALONE, first
+//	    the squeeze eats the mark instead    "table/list @ 29: squeezed state
+//	    of the word                          cell \"…starting\" lost its mark"
+//	(4) the ColState exemption removed        8, ALONE, first
+//	    from step 5(b)                       "table/degenerate-state-floor @ 29:
 //	                                         state column \"STATUS\" allocated
 //	                                         11, below its Min 12" — alloc_policy
 //	                                         does NOT see this one
-//	a state cell cut from the head, so the    1372, ALONE, first
-//	  squeeze eats the mark instead of the   "table/list @ 29: squeezed state
-//	  word                                   cell \"…starting\" lost its mark"
+//	    stateText's separator changed to a   12382 (grid_pairing sees it too);
+//	    same-width character                 this one reaches parts (2) and (3)
+//	                                         and NOT part (1), because
+//	                                         renderMessage builds its prefix
+//	                                         from stateMark directly and never
+//	                                         calls stateText
 //
 // §6.5 also records, so it is not rediscovered, that a 4.5:1 contrast gate
 // against BOTH a light and a dark background is unsatisfiable in sRGB — the
@@ -1224,6 +1240,32 @@ var assertStateStructure = sweepAssertion{
 			}
 		}
 		if !rc.fx.isTable {
+			return
+		}
+		// Parts (3) and (4) report on ColState columns and on nothing else, so
+		// a table with none of them can be answered without an Allocate and a
+		// gridFields — both of which assertGridPairing has already run over
+		// this same render. Measured: 9 of the 18 table fixtures declare no
+		// state column, exactly half, which is 3,096 of the sweep's Allocate
+		// calls removed.
+		//
+		// IT DOES NOT MAKE THE SWEEP FASTER, and the number is recorded here
+		// so nobody looks for the saving again. Measured five runs each way,
+		// the sweep is 4.15-4.30s with this early return and 4.18-4.32s
+		// without: one noise band. The cost is not in the assertions. Timed
+		// separately over the same 16,856 renders, building the renderCases
+		// alone takes 3.88s, and no single assertion in sweepAssertions()
+		// adds more than 64ms on top of it. A harness that needs the sweep to
+		// be cheaper has to render fewer times — fewer widths or fewer
+		// fixtures — not assert less.
+		hasStateCol := false
+		for _, col := range rc.fx.cols {
+			if col.Kind == ColState {
+				hasStateCol = true
+				break
+			}
+		}
+		if !hasStateCol {
 			return
 		}
 		a := Allocate(rc.fx.cols, rc.fx.rows, rc.budget, rc.mode)
