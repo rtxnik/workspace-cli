@@ -21,16 +21,18 @@ import (
 // The file carries `//go:build mutation` (decision D-11) and mutants.go never
 // does: production code branches on the switches, so tagging the DECLARATION
 // out breaks the ordinary build, while tagging the HARNESS out keeps a sweep
-// per mutant out of `go test -race ./...`. Task 12's `make test-mutation` and
-// its CI job are what keep it a hard gate.
+// per mutant out of `go test -race ./...`. The `test-mutation` target in the
+// Makefile and the `mutation` job in .github/workflows/ci.yml are what keep it
+// a hard gate. That target carries NO `-run` filter, on purpose: the tag
+// already scopes it, and the filter an earlier draft used would have excluded
+// TestMutantSwitchesAreRestored below.
 //
-// THE TAG ALSO HIDES THIS FILE FROM THE LINTER, AND THE CI JOB MUST UNDO THAT.
+// THE TAG ALSO HIDES THIS FILE FROM THE LINTER, AND THE CI JOB UNDOES THAT.
 // `golangci-lint run` never compiles a build-tagged file, so the repository's
-// ordinary lint gate says nothing about anything below this line. The job that
-// runs the harness must therefore also run
-// `golangci-lint run --build-tags mutation`, or the next edit here ships
-// unlinted. Measured on this tree at the commit that closed Task 11:
-// v2.12.2 with that flag reports 0 issues.
+// ordinary lint job says nothing about anything below this line. The `mutation`
+// job therefore runs golangci-lint a second time with `--build-tags mutation`
+// before it runs the harness. Measured on this tree: v2.12.2 with that flag
+// reports 0 issues.
 
 // ------------------------------------------------------- rule 3's enforcement
 

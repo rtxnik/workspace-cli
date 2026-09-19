@@ -64,6 +64,27 @@ jobs:
             fi
           fi
 
+  mutation:
+    name: Output mutation harness (hard gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version: "1.26.6"
+      # The lint job above never sees internal/output/mutation_test.go:
+      # golangci-lint does not compile a //go:build-tagged file, so the whole
+      # harness would ship unlinted without this step. Same version as the
+      # lint job, plus the tag.
+      - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa  # v7.0.1
+        with:
+          version: v2.12.2
+          args: --build-tags mutation
+      - name: Mutation harness (hard gate)
+        run: make test-mutation
+
   datapath:
     runs-on: ubuntu-latest
     # Hard ceiling: every docker command in the gate is also timeout-wrapped, but
