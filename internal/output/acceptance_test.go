@@ -1600,8 +1600,10 @@ var assertColValidation = globalAssertion{
 }
 
 func globalAssertions() []globalAssertion {
-	// assertAntiDrift joins this list in Task 12.
-	return []globalAssertion{assertESCContainment, assertGlyphWidths, assertColValidation}
+	// assertAntiDrift is in antidrift_test.go: it is the only member of this
+	// list that reads SOURCE TEXT rather than a render, so no runtime mutant
+	// can redden it and its controls are two planted-source tests of its own.
+	return []globalAssertion{assertESCContainment, assertGlyphWidths, assertColValidation, assertAntiDrift}
 }
 
 // ============================================================ the tests

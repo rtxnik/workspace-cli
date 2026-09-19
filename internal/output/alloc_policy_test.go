@@ -482,8 +482,13 @@ var allocStats allocPolicyStats
 // fixture at every width in both glyph modes rather than seven hand-picked
 // points — and that reach is now the corpus's: sweepAssertions() runs this
 // same body over fxCorpus()'s 49 fixtures as well as over the eight below.
-// Whether it becomes the sole killer of any mutant in the finished suite is a
-// Task 12 measurement, over the full switch roster rather than the §4.3 seven.
+// It IS the sole killer of four mutants once the whole roster runs rather than
+// the §4.3 seven. Measured by TestMutationHarness over the complete
+// 21-mutant corpus roster: relax_skips_atomic_squeeze (10 violations),
+// relax_order_swapped (10), relax_floor_is_one (33) and drop_against_natural_sum
+// (2238) are each reddened by alloc_policy and by nothing else in the
+// registry. That is a different claim from the three-body split above, which
+// compares this body only against alloc_golden and relax_clauses.
 //
 // Goes red when: a column is dropped while shrinking the kept columns to their
 // Min would still have fitted (the step-2 wording §4.3 rejected); a column is

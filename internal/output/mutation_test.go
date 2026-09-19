@@ -497,12 +497,16 @@ func TestMutationHarness(t *testing.T) {
 //	  Its control: TestDetectorsCanFail — escCount and nonSGRSequences report
 //	  the ESC-laden fixture and stay silent on plain SGR.
 //
-//	anti_drift (§6.8 / §6.1), once Task 12 registers it
+//	anti_drift (§6.8 / §6.1)
 //	  Why no switch expresses it: it is an assertion about the SOURCE TEXT,
 //	  which no runtime value can change.
 //	  The source change that would fail it: a lipgloss.Color("#…") added
-//	  outside theme.go, or .Width( re-introduced on the grid.
-//	  Its control: Task 12's planted-source controls.
+//	  outside theme.go, theme.go losing its palette, or .Width( re-introduced
+//	  on the grid outside the mutants.PinTableWidth branch. All four were
+//	  planted against the real tree and observed red.
+//	  Its control: TestAntiDriftGuardCanFail and TestWidthPinningGuardCanFail
+//	  in antidrift_test.go, which point the two scanners at planted trees and
+//	  require the drift back at the right file and line.
 //
 // A fourth gap is reported by assertGridPairing's own comment rather than by
 // the harness: the clauses that detect a cell count disagreeing with
