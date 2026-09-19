@@ -444,10 +444,10 @@ func allocFixtures() []allocFixture {
 // exercised, so the pass can refuse to report success over a corpus in which
 // nothing was ever dropped or relaxed.
 //
-// THE SHAPE IS PART OF THE CONTRACT WITH TASK 10. Its TestAcceptanceSweep
-// zeroes allocStats before the sweep and reads allocations/dropped/relaxed/
-// squeezed/captionOnly back out of it afterwards, and errors if any of them is
-// zero. Whichever test drives the assertion zeroes the counter first; the
+// THE SHAPE IS PART OF THE CONTRACT WITH TestAcceptanceSweep in
+// acceptance_test.go, which zeroes allocStats before the sweep and reads
+// allocations/dropped/relaxed/squeezed/captionOnly back out of it afterwards,
+// and errors if any of them is zero. Whichever test drives the assertion zeroes the counter first; the
 // counter is package-global because a sweepAssertion's check signature carries
 // only a renderCase and a results sink, and threading a counter through it
 // would change a shape every later harness file depends on.
@@ -459,7 +459,7 @@ type allocPolicyStats struct {
 var allocStats allocPolicyStats
 
 // assertAllocPolicy is §4.3 read as arithmetic, in the sweepAssertion shape
-// Task 10's registry consumes.
+// sweepAssertions() in acceptance_test.go consumes.
 //
 // It is registered in sweepAssertions(). What it contributes today is
 // measured AND asserted: TestAllocatorMutantsRedenTheDirectChecks plants each
@@ -477,13 +477,13 @@ var allocStats allocPolicyStats
 // body's catch — and if a change makes a body start catching one, the control
 // stays green and these three lines are what needs re-measuring.
 //
-// So no §4.3 switch is caught by alloc_policy alone at this point in the
-// plan, and the value it adds over the goldens is reach: it holds every
+// So no §4.3 switch is caught by alloc_policy alone among those three bodies,
+// and the value it adds over the goldens is reach: it holds every
 // fixture at every width in both glyph modes rather than seven hand-picked
-// points, which is what will still hold when Task 10's corpus replaces these
-// fixtures. Whether it becomes the sole killer of any mutant in the finished
-// suite is a Task 12 measurement — neither the paired assertion nor the rest
-// of the corpus exists yet, so it cannot be made here.
+// points — and that reach is now the corpus's: sweepAssertions() runs this
+// same body over fxCorpus()'s 49 fixtures as well as over the eight below.
+// Whether it becomes the sole killer of any mutant in the finished suite is a
+// Task 12 measurement, over the full switch roster rather than the §4.3 seven.
 //
 // Goes red when: a column is dropped while shrinking the kept columns to their
 // Min would still have fitted (the step-2 wording §4.3 rejected); a column is
@@ -775,8 +775,8 @@ func allocFixtureCases() []fixture {
 	return out
 }
 
-// checkAllocPolicy drives assertAllocPolicy — the SAME assertion body Task 10
-// registers in its sweep — over every fixture at every width in [MinWidth, 200]
+// checkAllocPolicy drives assertAllocPolicy — the SAME assertion body
+// sweepAssertions() registers — over every fixture at every width in [MinWidth, 200]
 // in both glyph modes. It zeroes allocStats first, exactly as
 // TestAcceptanceSweep does.
 func checkAllocPolicy(r *results) allocPolicyStats {
@@ -792,8 +792,8 @@ func checkAllocPolicy(r *results) allocPolicyStats {
 }
 
 // TestAllocPolicy is §4.3 as arithmetic, over 8 fixtures × 172 widths × 2
-// glyph modes. It is the standalone entry point for the assertion Task 10
-// later registers in the sweep; both drive the same body.
+// glyph modes. It is the standalone entry point for the assertion
+// sweepAssertions() also registers; both drive the same body.
 //
 // The reach counts are asserted non-zero because every invariant above is
 // trivially green on a corpus that never drops, never relaxes and never
@@ -832,12 +832,14 @@ func TestAllocPolicy(t *testing.T) {
 // in, which is what keeps `golangci-lint`'s `unused` quiet: it counts _test.go
 // files, and the acceptance gate runs it before every commit.
 //
-// It is named for what it does. On this task's fixtures most of its clauses
-// cannot run — every fixture here is a table with no renderer, no states, no
-// prefix state and no fidelity list — and the budget clause compares
-// newRenderCase's output against the same fxBudget the constructor called. The
-// clauses become real guards in Task 10, where the corpus fills those fields;
-// reading this as a shape assertion today would overstate it.
+// It is named for what it does. It runs over allocFixtureCases() and nothing
+// else, and every fixture there is a table with no renderer, no states, no
+// prefix state and no fidelity list — so most of its clauses cannot run, and
+// the budget clause compares newRenderCase's output against the same fxBudget
+// the constructor called. The corpus that fills those fields is fxCorpus() in
+// corpus_test.go, and the assertions that read them back are
+// assertStateStructure and assertContentFidelity. Reading THIS test as a shape
+// assertion over the corpus would overstate it.
 func TestHarnessFixtureFieldsAreRead(t *testing.T) {
 	for _, fx := range allocFixtureCases() {
 		if fx.name == "" || fx.spec == "" || fx.kind == "" {
@@ -854,11 +856,11 @@ func TestHarnessFixtureFieldsAreRead(t *testing.T) {
 			if _, ok := fxStateVocabulary[st.st]; !ok {
 				t.Errorf("%s: declares state %d, which is not in §4.5's table", fx.name, st.st)
 			}
-			// Reads fxState.label, which nothing else does until Task 10's
-			// §6.5 structural assertion — and an unread struct field is
-			// `field label is unused` at THIS task's acceptance gate. It is a
-			// real guard as well: a label with surrounding whitespace could
-			// never match the badge the render emits.
+			// Reads fxState.label, which assertStateStructure in
+			// acceptance_test.go now does too — and an unread struct field is
+			// `field label is unused` at the acceptance gate. It is a real
+			// guard as well: a label with surrounding whitespace could never
+			// match the badge the render emits.
 			if strings.TrimSpace(st.label) != st.label {
 				t.Errorf("%s: state label %q carries surrounding whitespace; no render can match it", fx.name, st.label)
 			}
