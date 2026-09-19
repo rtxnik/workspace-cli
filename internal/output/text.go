@@ -2,6 +2,7 @@ package output
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -30,6 +31,9 @@ const (
 // W is the display width of a string in terminal columns.
 func W(s string) int {
 	s = expandTabs(s)
+	if mutants.RuneWidth {
+		return utf8.RuneCountInString(ansi.Strip(s))
+	}
 	return ansi.StringWidth(s)
 }
 
@@ -183,6 +187,14 @@ func SanitiseInline(s string) string {
 // It never returns an empty cluster for a non-empty s, so the loops below can
 // step on its result without a progress guard of their own.
 func firstCell(s string) (cluster string, width int) {
+	if mutants.RuneSegmentation {
+		// The stepper is weakened to a RUNE while W goes on measuring cells
+		// correctly. That distinction is the whole point of the switch: the
+		// measure is right and only the cut is wrong, so it is invisible on
+		// every fixture whose runes are its cells.
+		_, n := utf8.DecodeRuneInString(s)
+		return s[:n], W(s[:n])
+	}
 	cluster, _ = ansi.FirstGraphemeCluster(s, ansi.GraphemeWidth)
 	if cluster == "" && s != "" {
 		cluster = s[:1] // unreachable: the segmenter always consumes a byte
@@ -352,6 +364,10 @@ func PadLeft(s string, w int) string {
 // allowed to overflow: §4.3's rule that the width contract outranks every
 // other invariant applies to text blocks too, not only to tables.
 func Wrap(s string, w int) []string {
+	if mutants.TruncateInsteadOfWrap {
+		// What §4.4 forbids: one truncated line instead of wrapped ones.
+		return []string{clipTail(strings.ReplaceAll(s, "\n", " "), w, GlyphUTF8)}
+	}
 	if w < 1 {
 		// Wrap is exported and its budget comes from a caller. This is the
 		// floor for a NON-POSITIVE budget, and no longer a defence against a

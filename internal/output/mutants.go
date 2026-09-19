@@ -19,7 +19,7 @@ package output
 //     only allocator, and no acceptance test may encode a known failure or
 //     assert that the shipped code is wrong.
 //
-//  3. Only two kinds of file may assign `mutants`, and each must restore the
+//  3. Only three kinds of file may assign `mutants`, and each must restore the
 //     zero value on every path out of the assignment.
 //
 //     (a) A file carrying `//go:build mutation` — the mutation harness proper.
@@ -36,6 +36,15 @@ package output
 //     TestAllocatorMutantsRedenTheDirectChecks — alloc_policy_test.go
 //     TestTableMutantsRedenTheBlockChecks — disclosure_test.go
 //     TestStyleIsAppliedAfterAllocation — disclosure_test.go
+//
+//     (c) A CHILD-PROCESS SEAM: applyDieChildMutant in message_test.go, and
+//     nothing else. probeDie re-execs the test binary, so a switch planted in
+//     the parent does not reach the process under measurement; the child
+//     re-applies it from an environment variable at the top of
+//     TestDieChildProcess. It carries no restore because there is nothing to
+//     restore to — Die exits the child, and the assignment cannot outlive the
+//     process it is made in. That is the whole of the exemption: an untagged
+//     file assigning `mutants` in a process it is about to end.
 //
 //     An assignment from anywhere else is the leak this rule exists to
 //     forbid: it turns a deliberate defect into the shipped behaviour for the
@@ -94,6 +103,26 @@ type mutantSwitches struct {
 	// grid_pairing reddens 130 of the 2,752 renders in the full 29..200 sweep.
 	// TestTableMutantsRedenTheBlockChecks plants it and requires that red.
 	PaintBeforeFit bool
+
+	// ------------------------------------------------ §4.3 / §6.1 width
+	RuneWidth             bool // W counts runes instead of display cells
+	RuneSegmentation      bool // the cut primitives step by rune, not by grapheme cluster
+	NoEllipsisReserve     bool // truncation reserves no room for the marker
+	ASCIIMarkerMismeasure bool // "..." emitted while one cell is reserved for it
+	PairsIndent           bool // KV and Fact values wrapped at the full budget, ignoring the indent
+	NoMessageWrap         bool // the message helpers emit one unwrapped line — what they did before this layer
+
+	// ------------------------------------------------------- §4.4 wrapping
+	TruncateInsteadOfWrap bool // Wrap emits one truncated line
+
+	// ------------------------------------------- §4.7 / §4.2 / §4.5 contract
+	MessagesToStdout      bool // the message helpers write to stdout
+	DieUnwrapped          bool // Die alone stops wrapping
+	ColumnsRejectBelowMin bool // a COLUMNS below MinWidth is rejected instead of clamped
+	ProbeWrongFd          bool // newStream probes fd 0 instead of its own fd
+	NoStreamMemo          bool // Out()/Err() rebuild a Stream on every call
+	ColourProbedOnStdout  bool // every stream's colour level resolved from stdout
+	IgnoreCJKTag          bool // the CJK branch of §4.5's selection rule dropped
 }
 
 // mutants is the live set. Its zero value is the shipped behaviour.
