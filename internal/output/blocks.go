@@ -381,6 +381,12 @@ func renderPairs(s *Stream, pairs []Fact, budget int) string {
 			continue
 		}
 		valueWidth := budget - valueIndent
+		if mutants.PairsIndent {
+			// The defect: the value is wrapped at the FULL budget while it is
+			// printed at valueIndent, so every line past the first overflows
+			// by the width of the key column.
+			valueWidth = budget
+		}
 		lines := Wrap(value, valueWidth)
 		b.WriteString(strings.Repeat(" ", indent) +
 			s.paint(RoleMuted, Pad(key, keyWidth)) +
