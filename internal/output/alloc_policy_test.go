@@ -11,7 +11,8 @@ import (
 
 // §4.3 held against itself is not enough.
 //
-// The §6.1 paired assertion (Task 8) derives its expectation by calling
+// The §6.1 paired assertion (assertGridPairing, acceptance_test.go) derives
+// its expectation by calling
 // Allocate() and then checking the render against what Allocate said. That is
 // exactly right for catching a renderer that disagrees with the allocator, and
 // it is blind by construction to an allocator that is WRONG BUT CONSISTENT: a
@@ -93,8 +94,9 @@ type fixture struct {
 	// truncated, and that half is the paired assertion's job.
 	fidelity []string
 
-	// render is nil for a fixture that has no renderer yet, which is how THIS
-	// task drives assertAllocPolicy before Table exists.
+	// render is nil for a fixture that has no renderer attached, which is how
+	// the allocator's own fixtures drive assertAllocPolicy: it reads the
+	// allocator's input and nothing else.
 	render func(s *Stream) string
 }
 
@@ -143,8 +145,8 @@ func sweepStream(w int, mode GlyphMode) *Stream {
 
 // newRenderCase renders one fixture. A fixture with no render function is
 // carried through with empty output, so an assertion that reads only the
-// allocator's input still works — which is how this task drives
-// assertAllocPolicy before any renderer exists.
+// allocator's input still works — which is how the allocator's own fixtures
+// drive assertAllocPolicy with no renderer attached.
 func newRenderCase(fx fixture, w int, mode GlyphMode) renderCase {
 	s := sweepStream(w, mode)
 	rc := renderCase{fx: fx, width: w, budget: fxBudget(w), mode: mode, stream: s}
@@ -252,9 +254,9 @@ func fxRow(cells ...Cell) []Cell { return cells }
 
 // ---------------------------------------------------------------- fixtures
 //
-// Fixtures are returned as (cols, rows) rather than as a Table: Table does not
-// exist until Task 8, and the allocator must be provable without a renderer.
-// Task 8 wraps these same pairs into Table values.
+// Fixtures are returned as (cols, rows) rather than as a Table: the allocator
+// must be provable without a renderer. tableFixtures in acceptance_test.go
+// wraps these same pairs into Table values.
 
 type allocFixture struct {
 	name string
@@ -744,9 +746,9 @@ func checkAllocInvariants(name string, cols []Col, rows [][]Cell, budget int, mo
 	}
 }
 
-// allocFixtureCases wraps this task's (cols, rows) pairs into the shared
-// `fixture` shape, with no renderer: Table does not exist until Task 8, and
-// assertAllocPolicy reads only the allocator's input. Task 8 declares the
+// allocFixtureCases wraps this file's (cols, rows) pairs into the shared
+// `fixture` shape, with no renderer: assertAllocPolicy reads only the
+// allocator's input. tableFixtures in acceptance_test.go declares the
 // rendering table fixtures over the SAME pairs.
 func allocFixtureCases() []fixture {
 	var out []fixture
@@ -1139,7 +1141,8 @@ func checkRelaxClauses(r *results) {
 
 	// Termination at n = 0: chrome and total are both undefined and must be 0,
 	// and one cell more brings the column back. The render-level half of this
-	// — that no box is drawn — belongs to Task 8, which owns the renderer.
+	// — that no box is drawn — is asserted by assertGridPairing's n = 0 branch
+	// in acceptance_test.go.
 	cc, cr := fxCaptionOnlyCols()
 	z := Allocate(cc, cr, MinWidth, GlyphUTF8)
 	if len(z.Kept) != 0 || z.Chrome != 0 || z.Total != 0 {
