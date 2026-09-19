@@ -265,7 +265,7 @@ type Checks struct {
 // RAW string instead (planted, one match) leaves the whole package green. What
 // sanitising actually buys is the CONTENT half above — the sequences never
 // reach the terminal — and that half is covered: removing Sanitise from
-// Problem.Cause reddens TestProblemCauseIsSanitised. The other five surfaces
+// Problem.Cause reddens TestProblemCauseIsSanitised. The other ten surfaces
 // carry the same rule with no escape-bearing fixture behind them today; §6.7's
 // fixture is a Cause. Counted at this append: 11 caller surfaces read through
 // Sanitise across 13 call sites, the Fact key and the Remedy label being read
@@ -490,7 +490,7 @@ func (k KV) Render(s *Stream) string {
 // of the layer rather than of its content: the natural floor of 12 columns is
 // 2 + 1 + 1 + 8, set by the widest state word (`degraded`). A content-sized
 // column would re-align between two runs of the same command — `ws proxy
-// doctor` would indent its names at column 6 with everything passing and at
+// doctor` would indent its names at column 8 with everything passing and at
 // column 14 with one check degraded.
 func (c Checks) Render(s *Stream) string {
 	budget := s.budget()

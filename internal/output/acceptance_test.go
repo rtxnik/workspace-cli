@@ -574,9 +574,26 @@ func TestProblemGeometry(t *testing.T) {
 			}
 			return -1
 		}
+		// A step header is located by its SHAPE — exactly two leading spaces
+		// and then a digit — and never by the number it is expected to carry,
+		// so the number is left for an assertion to check rather than being
+		// baked into the locator. Measured on this fixture: the shape locator
+		// and a `1.` locator agree at all 172 swept widths, and exactly 2 lines
+		// per render are header-shaped at every one of them, so nothing in the
+		// Title, the Cause or the Facts is mistaken for a step.
+		isHeader := func(l string) bool {
+			rest := strings.TrimPrefix(l, "  ")
+			return len(l)-len(rest) == 2 && rest != "" && rest[0] >= '0' && rest[0] <= '9'
+		}
 		iCause := idx("Cannot connect")
 		iFacts := idx(p.Facts[0].K)
-		iSteps := idx("1.")
+		iSteps := -1
+		for i, l := range lines {
+			if isHeader(l) {
+				iSteps = i
+				break
+			}
+		}
 		if iCause < 0 || iFacts < 0 || iSteps < 0 {
 			t.Fatalf("@%d a declared section is missing: cause=%d facts=%d steps=%d\n%s",
 				w, iCause, iFacts, iSteps, strings.Join(lines, "\n"))
@@ -590,6 +607,25 @@ func TestProblemGeometry(t *testing.T) {
 		if iCause <= 0 || iCause >= iFacts || iFacts >= iSteps {
 			t.Fatalf("@%d §4.4 orders Title, Cause, Facts, Steps; got title=0 cause=%d facts=%d steps=%d\n%s",
 				w, iCause, iFacts, iSteps, strings.Join(lines, "\n"))
+		}
+
+		// Title: the continuation lines carry the 2-space hanging indent. They
+		// are the lines between the title's first line and the Cause, and the
+		// whole point of wrapping the title at budget-hang rather than at
+		// budget is that they have a known width to be indented into. Without
+		// this, deleting the indent from Problem.Render passed every other
+		// assertion in the task.
+		//
+		// NARROW BY CONSTRUCTION: fxProblem's 28-cell title only wraps where
+		// budget-hang is under 28, which on the swept range is w == 29 alone —
+		// measured, there is 1 continuation line at 1 of the 172 widths and 0
+		// at the other 171. That is enough to catch the deletion and no more; a
+		// long-title fixture belongs in the corpus rather than here.
+		for i := 1; i < iCause; i++ {
+			if got := indentOf(lines[i]); got != 2 {
+				t.Fatalf("@%d title continuation line %d is indented %d cells; §4.4 hangs it by 2: %q",
+					w, i+1, got, lines[i])
+			}
 		}
 
 		// Cause: indented 2. This is the assertion an indent change fails.
@@ -634,15 +670,16 @@ func TestProblemGeometry(t *testing.T) {
 		}
 
 		// Steps: 2sp + "N." + sp + label padded + 2sp + command — when the
-		// command fits its aligned slot. This is the assertion that dropping the
-		// "N." numbering fails.
+		// command fits its aligned slot. The prefix clause further down is the
+		// assertion that dropping or misnumbering the "N." fails, and it is the
+		// clause two plants below were written to redden.
 		numberWidth := ansi.StringWidth(strconv.Itoa(len(p.Steps))) + 2 // "N." plus one space
 		cmdIndent := 2 + numberWidth + widestLabel + 2
 
-		// EACH STEP HEADER IS LOCATED BY ITS OWN `"  N."` PREFIX, NOT BY AN
-		// OFFSET FROM iSteps. A step occupies ONE line only while its command
-		// fits the aligned slot; §4.4 — the rule this same loop asserts further
-		// down — drops a command that does not fit onto its own line, and a
+		// EACH STEP HEADER IS LOCATED BY ITS SHAPE, NOT BY AN OFFSET FROM
+		// iSteps AND NOT BY THE NUMBER IT SHOULD CARRY. A step occupies ONE
+		// line only while its command fits the aligned slot; §4.4 — the rule
+		// this same loop asserts further down — drops a command that does not fit onto its own line, and a
 		// command of C cells then wraps below C + 5 columns. Measured on this
 		// fixture: step 1's 27-cell command is on its own line at the 17 widths
 		// from 29 to 45, and wrapped at 29, 30 and 31. So lines[iSteps+k] is
@@ -660,8 +697,7 @@ func TestProblemGeometry(t *testing.T) {
 		stepLine := make([]int, len(p.Steps))
 		cursor := iSteps
 		for k := range p.Steps {
-			pfx := "  " + strconv.Itoa(k+1) + "."
-			for cursor < len(lines) && !strings.HasPrefix(lines[cursor], pfx) {
+			for cursor < len(lines) && !isHeader(lines[cursor]) {
 				cursor++
 			}
 			if cursor >= len(lines) {
@@ -673,14 +709,16 @@ func TestProblemGeometry(t *testing.T) {
 		for k, s := range p.Steps {
 			line := lines[stepLine[k]]
 			prefix := "  " + strconv.Itoa(k+1) + "."
-			// This one CANNOT fail while the scan above locates the header,
-			// because the scan requires the same prefix. It is kept as the
-			// guard for the offset form the comment above warns against:
-			// measured, with `stepLine[k] = iSteps + k` planted in place of the
-			// scan, this is the line that fires, at every width from 29 to 45
-			// (`@29 step 2 does not start with 2sp + "2."`, on step 1's wrapped
-			// command line). A renumbered or missing header reddens at the scan
-			// instead, with `step N header line not found`.
+			// The scan above matches a header by shape alone, so THIS is the
+			// clause that checks the number, and it can fail on the code under
+			// test rather than only on a mutation of this harness. Measured,
+			// one plant each: dropping the "." from the numbering reddens it
+			// with `@29 step 1 does not start with 2sp + "1.": "  1  start
+			// docker"`, and numbering every step "1." reddens it with `@29 step
+			// 2 does not start with 2sp + "2.": "  1. check"`. It also still
+			// catches the offset form the comment above warns against: with
+			// `stepLine[k] = iSteps + k` planted in place of the scan it fires
+			// at every width from 29 to 45.
 			if !strings.HasPrefix(line, prefix) {
 				t.Fatalf("@%d step %d does not start with `2sp + \"%d.\"`: %q", w, k+1, k+1, line)
 			}
@@ -813,8 +851,11 @@ func TestKVStacksBelowTwelve(t *testing.T) {
 // render `✓ ok  binary present` and pass any assertion written against the
 // items it was given; this one fails it. The reason the rule matters is that a
 // content-sized column re-aligns between two runs of the same command — `ws
-// proxy doctor` would indent its names at column 6 with everything passing and
-// at column 14 with one check degraded.
+// proxy doctor` would indent its names at column 8 with everything passing and
+// at column 14 with one check degraded — both figures being the gap-inclusive
+// name indent, 2 + mark + sp + word + gap, so `2 + 1 + 1 + 2 + 2` against
+// `2 + 1 + 1 + 8 + 2`. Measured on the content-sized plant, whose render is
+// `"  ✓ ok  binary present"`.
 func TestChecksFloorIsVocabularyWide(t *testing.T) {
 	if mutants != (mutantSwitches{}) {
 		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
