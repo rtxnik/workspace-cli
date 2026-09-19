@@ -67,6 +67,11 @@ jobs:
   mutation:
     name: Output mutation harness (hard gate)
     runs-on: ubuntu-latest
+    # The longest job in this workflow — the harness re-runs the whole corpus
+    # once per mutant, about two minutes in a 10-core container. This ceiling
+    # sits ABOVE the target's own `-timeout 20m` on purpose: a genuine hang
+    # should produce Go's stack dump naming the test, not a bare cancellation.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
@@ -75,13 +80,21 @@ jobs:
         with:
           go-version: "1.26.6"
       # The lint job above never sees internal/output/mutation_test.go:
-      # golangci-lint does not compile a //go:build-tagged file, so the whole
-      # harness would ship unlinted without this step. Same version as the
-      # lint job, plus the tag.
-      - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa  # v7.0.1
-        with:
-          version: v2.12.2
-          args: --build-tags mutation
+      # golangci-lint does not compile a //go:build-tagged file, so ~700 lines
+      # would ship unlinted without this step.
+      #
+      # The linter is installed and invoked directly, at the version the lint
+      # job pins, rather than through golangci-lint-action with
+      # `args: --build-tags mutation`. That is deliberate: an `args:` the
+      # action did not forward would leave a GREEN step over an unlinted file —
+      # a silent no-op — and no other job in this repository passes `args:`, so
+      # nothing here would have caught it. Running `make lint-mutation` makes
+      # CI execute the same string a developer can verify locally.
+      - name: Lint what the build tag hides from the lint job
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          make lint-mutation
       - name: Plant every defect switch and require each one dies
         run: make test-mutation
 

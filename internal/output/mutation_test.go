@@ -31,10 +31,17 @@ import (
 //
 // THE TAG ALSO HIDES THIS FILE FROM THE LINTER, AND THE CI JOB UNDOES THAT.
 // `golangci-lint run` never compiles a build-tagged file, so the repository's
-// ordinary lint job says nothing about anything below this line. The `mutation`
-// job therefore runs golangci-lint a second time with `--build-tags mutation`
-// before it runs the harness. Measured on this tree: v2.12.2 with that flag
-// reports 0 issues.
+// ordinary lint job says nothing about anything below this line. The
+// `lint-mutation` Makefile target is this file's only lint, and the `mutation`
+// job runs that exact target before it runs the harness.
+//
+// "0 issues" from the tagged run does NOT on its own prove the flag reached
+// the analyser — it is equally consistent with the flag being dropped — so it
+// was planted. With an ineffectual assignment added to this file, plain
+// `golangci-lint run` stays at `0 issues` and exits 0, while
+// `golangci-lint run --build-tags mutation` reports `ineffectual assignment to
+// n (ineffassign)` and `func zzLintCanary is unused (unused)` and exits 1.
+// Clean, the tagged run reports 0 issues.
 
 // ------------------------------------------------------- rule 3's enforcement
 
