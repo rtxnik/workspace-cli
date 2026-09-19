@@ -1,6 +1,7 @@
 package output
 
 import (
+	"strconv" // the "N." step prefixes and numberWidth
 	"strings"
 	"testing"
 
@@ -438,4 +439,511 @@ func TestCaptionTravelsWithItsTable(t *testing.T) {
 		t.Fatal("no fixture declares a caption: this assertion cannot fail")
 	}
 	t.Logf("%d renders carry their declared caption whole", checked)
+}
+
+// §4.4's block geometry, asserted as geometry.
+//
+// Measured before these assertions existed, on the reference implementation:
+// rendering Problem's Facts and Steps in the opposite order left the whole
+// suite green (ok wsrender 101.418s), and changing the Cause indent from 2 to 4
+// while dropping the "N." numbering went red on exactly ONE thing — the
+// reference's budget-28 control count, 421 -> 425 — which is a line
+// count, not a geometry check. §6.1 says in terms that "a golden file at 80
+// columns is not acceptance"; a pinned line count is less than that.
+//
+// Measured HERE, with the assertions below in place — each planted as a single
+// substitution in blocks.go, matched once, and restored:
+//
+//	Facts and Steps swapped     @29 §4.4 orders Title, Cause, Facts, Steps;
+//	                            got title=0 cause=2 facts=13 steps=7
+//	Cause indent 2 -> 4         @29 Cause is indented 4 cells; §4.4 says 2
+//	the "." dropped from "N."   @29 a declared section is missing: steps=-1
+//	the key column not padded   @29 fact "profile" is not `2sp + key padded
+//	                            to 9 + 2sp + value`: "  profile  go"
+//	a border glyph written      @29 line 1 draws the border glyph "│"
+
+// fxEscCause is §6.7's fixture: upstream text that CONTAINS control sequences —
+// a line clear, a cursor-up, a cursor-position move, an OSC 8 hyperlink and an
+// OSC 0 title rewrite. ansi.StringWidth counts every one of them as zero-width,
+// so a width sweep over this text passes while the operator's terminal is being
+// rewritten. That is the whole reason §4.4 sanitises rather than forwards.
+// Measured: 9 ESC bytes in, ansi.StringWidth 70.
+const fxEscCause = "\x1b[2K\x1b[1Aunable to pull image: " +
+	"\x1b]8;;https://registry.example.invalid/help\x1b\\see the registry log\x1b]8;;\x1b\\" +
+	"\x1b[3;7H \x1b]0;OWNED\x07 giving up after 3 attempts\x1b[0m"
+
+// fxEscSurvivors is what must still be there once the sequences are stripped. A
+// fixture whose text is deliberately altered in flight cannot declare its raw
+// source as a fidelity claim, so it declares what must survive instead —
+// otherwise "zero ESC bytes" is satisfied by emitting nothing at all.
+var fxEscSurvivors = []string{"unable to pull image", "see the registry log", "giving up after 3 attempts"}
+
+func fxProblem() Problem {
+	return Problem{
+		Title: "cannot start workspace \"api\"",
+		Cause: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
+		Facts: []Fact{{"workspace", "api"}, {"profile", "go"}, {"proxy", "de-fra-01"}},
+		Steps: []Remedy{{"start docker", "sudo systemctl start docker"}, {"check", "ws proxy check"}},
+	}
+}
+
+// plainLines is the render as the terminal shows it: SGR stripped, split into
+// lines. Stripping is done with ansi.Strip and measuring with
+// ansi.StringWidth — never with W(), which is one of the things being mutated.
+func plainLines(out string) []string {
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		lines[i] = ansi.Strip(l)
+	}
+	return lines
+}
+
+// blockStream is the sweep's own stream at GlyphUTF8: a TTY with colour ON, so
+// every assertion below is forced to strip SGR to measure — the same
+// arithmetic the terminal does. Asserting at ColourNone would let a render that
+// mismeasures its own escapes pass.
+//
+// It delegates to sweepStream rather than building its own Stream, so a change
+// to the sweep's colour level or TTY flag reaches every call site here too.
+// Measured: blockStream(80) and sweepStream(80, GlyphUTF8) agree on width, TTY
+// status, colour level and glyph mode, and fxProblem().Render(blockStream(80))
+// carries 14 ESC bytes — so the stripping every assertion below does is real
+// work rather than a no-op over plain text.
+func blockStream(w int) *Stream {
+	return sweepStream(w, GlyphUTF8)
+}
+
+// indentOf is the number of leading spaces on a line, measured in display cells
+// with ansi.StringWidth rather than with W(): the harness never measures with
+// the code under test.
+func indentOf(line string) int {
+	return ansi.StringWidth(line) - ansi.StringWidth(strings.TrimLeft(line, " "))
+}
+
+// TestProblemGeometry asserts §4.4's geometry directly, at every width from
+// MinWidth to 200, rather than pinning a render at 80 columns.
+func TestProblemGeometry(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	p := fxProblem()
+	widestKey := 0
+	for _, f := range p.Facts {
+		if w := ansi.StringWidth(f.K); w > widestKey {
+			widestKey = w
+		}
+	}
+	widestLabel := 0
+	for _, s := range p.Steps {
+		if w := ansi.StringWidth(s.Label); w > widestLabel {
+			widestLabel = w
+		}
+	}
+
+	for w := MinWidth; w <= 200; w++ {
+		lines := plainLines(p.Render(blockStream(w)))
+		budget := clampBudget(w)
+
+		// No line ever exceeds the budget, and no box is drawn: Problem is an
+		// indented text block. A border around unbounded upstream text is what
+		// turns overflow into shredded output — the audit measured such blocks
+		// at 90 to 227 columns.
+		for i, l := range lines {
+			if got := ansi.StringWidth(l); got > budget {
+				t.Fatalf("@%d line %d is %d cells, budget %d: %q", w, i+1, got, budget, l)
+			}
+			for _, glyph := range []string{"│", "─", "╭", "╮", "╰", "╯", "|"} {
+				if strings.Contains(l, glyph) {
+					t.Fatalf("@%d line %d draws the border glyph %q; Problem carries no box: %q", w, i+1, glyph, l)
+				}
+			}
+		}
+
+		// Title: column 0, with a 2-space hanging indent on continuation lines.
+		if indentOf(lines[0]) != 0 {
+			t.Fatalf("@%d the title is indented %d cells; §4.4 puts it at column 0: %q", w, indentOf(lines[0]), lines[0])
+		}
+		// Locate the declared sections by their first line. Facts and Steps are
+		// found by content, not by position, so the ORDER assertion below is a
+		// real check rather than a restatement of how the slices were indexed.
+		idx := func(want string) int {
+			for i, l := range lines {
+				if strings.HasPrefix(strings.TrimLeft(l, " "), want) {
+					return i
+				}
+			}
+			return -1
+		}
+		iCause := idx("Cannot connect")
+		iFacts := idx(p.Facts[0].K)
+		iSteps := idx("1.")
+		if iCause < 0 || iFacts < 0 || iSteps < 0 {
+			t.Fatalf("@%d a declared section is missing: cause=%d facts=%d steps=%d\n%s",
+				w, iCause, iFacts, iSteps, strings.Join(lines, "\n"))
+		}
+		// §4.4's declared ORDER: Title, Cause, Facts, Steps. This is the
+		// assertion that a Facts/Steps swap fails — and, measured, that swap
+		// left the reference's entire suite green.
+		// Written as the disjunction rather than as `!(a && b && c)`: staticcheck's
+		// QF1001 flags the negated conjunction, and `golangci-lint run` is part of
+		// this task's acceptance gate.
+		if iCause <= 0 || iCause >= iFacts || iFacts >= iSteps {
+			t.Fatalf("@%d §4.4 orders Title, Cause, Facts, Steps; got title=0 cause=%d facts=%d steps=%d\n%s",
+				w, iCause, iFacts, iSteps, strings.Join(lines, "\n"))
+		}
+
+		// Cause: indented 2. This is the assertion an indent change fails.
+		if got := indentOf(lines[iCause]); got != 2 {
+			t.Fatalf("@%d Cause is indented %d cells; §4.4 says 2: %q", w, got, lines[iCause])
+		}
+
+		// Facts: 2sp + key padded to the widest key + 2sp + value. Checked on
+		// the SHORTEST key, where padding is observable: a renderer that did not
+		// pad would put the value two cells earlier.
+		//
+		// EACH FACT LINE IS LOCATED BY ITS OWN `"  " + key` PREFIX, NOT BY AN
+		// OFFSET FROM iFacts. A fact occupies one line only while its value
+		// fits the value column; a value that does not fit wraps at the hanging
+		// indent and the next fact is no longer at iFacts+k. This fixture
+		// happens never to wrap — measured, its three facts are on consecutive
+		// lines at all 172 widths from 29 to 200 — and that is exactly why an
+		// offset index here would be an assumption nothing states.
+		//
+		// Below the point where renderPairs stacks the pair (§4.4: when
+		// budget − valueIndent < 12), the aligned form does not apply.
+		valueIndent := 2 + widestKey + 2
+		if budget-valueIndent >= 12 {
+			cursor := iFacts
+			for _, f := range p.Facts {
+				pfx := "  " + f.K
+				for cursor < len(lines) && !strings.HasPrefix(lines[cursor], pfx) {
+					cursor++
+				}
+				if cursor >= len(lines) {
+					t.Fatalf("@%d no line begins with %q, so fact %q is not `2sp + key`:\n%s",
+						w, pfx, f.K, strings.Join(lines, "\n"))
+				}
+				line := lines[cursor]
+				cursor++
+				want := strings.Repeat(" ", 2) + f.K + strings.Repeat(" ", widestKey-ansi.StringWidth(f.K)+2)
+				if !strings.HasPrefix(line, want+f.V) {
+					t.Fatalf("@%d fact %q is not `2sp + key padded to %d + 2sp + value`: %q",
+						w, f.K, widestKey, line)
+				}
+			}
+		}
+
+		// Steps: 2sp + "N." + sp + label padded + 2sp + command — when the
+		// command fits its aligned slot. This is the assertion that dropping the
+		// "N." numbering fails.
+		numberWidth := ansi.StringWidth(strconv.Itoa(len(p.Steps))) + 2 // "N." plus one space
+		cmdIndent := 2 + numberWidth + widestLabel + 2
+
+		// EACH STEP HEADER IS LOCATED BY ITS OWN `"  N."` PREFIX, NOT BY AN
+		// OFFSET FROM iSteps. A step occupies ONE line only while its command
+		// fits the aligned slot; §4.4 — the rule this same loop asserts further
+		// down — drops a command that does not fit onto its own line, and a
+		// command of C cells then wraps below C + 5 columns. Measured on this
+		// fixture: step 1's 27-cell command is on its own line at the 17 widths
+		// from 29 to 45, and wrapped at 29, 30 and 31. So lines[iSteps+k] is
+		// step k only from 46 up. Measured against the implementation this task
+		// prescribes, by replacing the scan below with `stepLine[k] = iSteps+k`:
+		// the offset form is red at every width from 29 to 45 and green from 46
+		// up. At budget 29 the block is
+		//     11  "  1. start docker"
+		//     12  "     sudo systemctl start"
+		//     13  "     docker"
+		//     14  "  2. check"
+		//     15  "     ws proxy check"
+		// so lines[iSteps+1] is step 1's wrapped command, and the assertion
+		// fails with `@29 step 2 does not start with 2sp + "2."`.
+		stepLine := make([]int, len(p.Steps))
+		cursor := iSteps
+		for k := range p.Steps {
+			pfx := "  " + strconv.Itoa(k+1) + "."
+			for cursor < len(lines) && !strings.HasPrefix(lines[cursor], pfx) {
+				cursor++
+			}
+			if cursor >= len(lines) {
+				t.Fatalf("@%d step %d header line not found:\n%s", w, k+1, strings.Join(lines, "\n"))
+			}
+			stepLine[k] = cursor
+			cursor++
+		}
+		for k, s := range p.Steps {
+			line := lines[stepLine[k]]
+			prefix := "  " + strconv.Itoa(k+1) + "."
+			// This one CANNOT fail while the scan above locates the header,
+			// because the scan requires the same prefix. It is kept as the
+			// guard for the offset form the comment above warns against:
+			// measured, with `stepLine[k] = iSteps + k` planted in place of the
+			// scan, this is the line that fires, at every width from 29 to 45
+			// (`@29 step 2 does not start with 2sp + "2."`, on step 1's wrapped
+			// command line). A renumbered or missing header reddens at the scan
+			// instead, with `step N header line not found`.
+			if !strings.HasPrefix(line, prefix) {
+				t.Fatalf("@%d step %d does not start with `2sp + \"%d.\"`: %q", w, k+1, k+1, line)
+			}
+			if ansi.StringWidth(s.Cmd) <= budget-cmdIndent {
+				want := prefix + " " + s.Label + strings.Repeat(" ", widestLabel-ansi.StringWidth(s.Label)+2) + s.Cmd
+				if line != want {
+					t.Fatalf("@%d step %d is not `2sp + \"N.\" + sp + label padded to %d + 2sp + command`:\n got  %q\n want %q",
+						w, k+1, widestLabel, line, want)
+				}
+			} else {
+				// §4.4: the command drops to its OWN line rather than being
+				// truncated, and below roughly 60 columns it wraps — because the
+				// width contract outranks copy-pasteability.
+				if strings.Contains(line, s.Cmd) {
+					t.Fatalf("@%d step %d kept a %d-cell command in a %d-cell slot: %q",
+						w, k+1, ansi.StringWidth(s.Cmd), budget-cmdIndent, line)
+				}
+				// The command line is the line AFTER the header, which holds
+				// only while the label itself did not wrap — a wrapped label's
+				// continuation carries the same indent as the command and would
+				// satisfy the indent check below for the wrong reason. So the
+				// header is pinned to `2sp + "N." + sp + the WHOLE label` first.
+				// Measured: with the label's wrap width cut to 6 the indent
+				// check alone stays GREEN and this pin is what reddens.
+				if wantHeader := prefix + " " + s.Label; line != wantHeader {
+					t.Fatalf("@%d step %d's own-line header is not `2sp + \"N.\" + sp + label`:\n got  %q\n want %q",
+						w, k+1, line, wantHeader)
+				}
+				// Hoisted above the index, as everywhere else in this file: a
+				// renderer that emitted no command line must fail with the
+				// diagnosis this branch was written to give, not panic the
+				// sweep with an index-out-of-range.
+				if stepLine[k]+1 >= len(lines) {
+					t.Fatalf("@%d step %d dropped its command to its own line and then wrote no such line:\n%s",
+						w, k+1, strings.Join(lines, "\n"))
+				}
+				cmdLine := lines[stepLine[k]+1]
+				if indentOf(cmdLine) != 2+numberWidth {
+					t.Fatalf("@%d step %d's command line is indented %d cells, want %d: %q",
+						w, k+1, indentOf(cmdLine), 2+numberWidth, cmdLine)
+				}
+			}
+		}
+	}
+}
+
+// TestProblemCauseIsSanitised is §6.7, with a fixture that CONTAINS escape
+// sequences rather than one merely checked for their absence.
+//
+// Without the survivor half, "zero ESC bytes on the TTY path" is satisfied by a
+// renderer that emits nothing at all.
+func TestProblemCauseIsSanitised(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	if n := strings.Count(fxEscCause, "\x1b"); n == 0 {
+		t.Fatal("the §6.7 fixture carries no ESC bytes, so the assertion below cannot fail")
+	}
+	p := Problem{Title: "pull failed", Cause: fxEscCause}
+	for w := MinWidth; w <= 200; w++ {
+		// Rendered on a stream where colour is ON and the fd is a TTY: the
+		// claim is that the layer strips the CHILD's sequences, not that it
+		// happens to be running somewhere colour was already off.
+		out := p.Render(blockStream(w))
+		body := ansi.Strip(out)
+		if strings.Contains(body, "\x1b") {
+			t.Fatalf("@%d the sanitised body still carries an ESC byte: %q", w, body)
+		}
+		if strings.Contains(out, "OWNED") {
+			t.Fatalf("@%d the OSC 0 title payload survived into the render: %q", w, out)
+		}
+		for _, want := range fxEscSurvivors {
+			if !strings.Contains(squash(body), squash(want)) {
+				t.Fatalf("@%d the prose %q did not survive sanitising: %q", w, want, body)
+			}
+		}
+	}
+}
+
+// TestKVStacksBelowTwelve pins §4.4's stacking rule at its boundary, from both
+// sides. The 12 here is the value column's readability threshold; the 12 in
+// TestChecksFloorIsVocabularyWide below is the vocabulary-wide floor set by
+// "degraded". They are different numbers that happen to be equal.
+func TestKVStacksBelowTwelve(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	key := strings.Repeat("k", 20) // valueIndent = 2 + 20 + 2 = 24
+	const value = "de-fra-01.example-vpn.net:443"
+	k := KV{Title: "Report", Pairs: []Fact{{key, value}}}
+	const valueIndent = 24
+
+	// The pair lines start at index 1 only while the title occupies exactly one
+	// line, which this fixture's six-cell title does at both budgets below.
+	// Asserted rather than assumed: every index into these two renders is an
+	// offset, and a title that wrapped would shift all of them.
+	mustTitled := func(what string, lines []string, want int) {
+		t.Helper()
+		if len(lines) < want || lines[0] != "Report" {
+			t.Fatalf("%s: want at least %d lines with %q on line 1, got %d lines:\n%s",
+				what, want, "Report", len(lines), strings.Join(lines, "\n"))
+		}
+	}
+
+	// budget − valueIndent == 12: aligned. The value starts on the key's line.
+	aligned := plainLines(k.Render(blockStream(valueIndent + 12)))
+	mustTitled("at budget − valueIndent = 12", aligned, 2)
+	if !strings.HasPrefix(aligned[1], "  "+key+"  ") {
+		t.Errorf("at budget − valueIndent = 12 the pair must stay aligned: %q", aligned[1])
+	}
+	if strings.TrimSpace(aligned[1]) == key {
+		t.Errorf("at budget − valueIndent = 12 the pair stacked; §4.4 stacks below 12, not at it: %q", aligned[1])
+	}
+
+	// budget − valueIndent == 11: stacked. Key alone, value indented beneath.
+	stacked := plainLines(k.Render(blockStream(valueIndent + 11)))
+	mustTitled("at budget − valueIndent = 11", stacked, 3)
+	if strings.TrimSpace(stacked[1]) != key {
+		t.Errorf("at budget − valueIndent = 11 the key must stand alone on its line: %q", stacked[1])
+	}
+	if got := indentOf(stacked[2]); got != 4 {
+		t.Errorf("a stacked value is indented %d cells, want 4 (the key's indent + 2): %q", got, stacked[2])
+	}
+}
+
+// TestChecksFloorIsVocabularyWide asserts that the badge column is sized from
+// §4.5's whole vocabulary and not from the items present.
+//
+// The fixture contains ONLY StateOK. A content-sized implementation would
+// render `✓ ok  binary present` and pass any assertion written against the
+// items it was given; this one fails it. The reason the rule matters is that a
+// content-sized column re-aligns between two runs of the same command — `ws
+// proxy doctor` would indent its names at column 6 with everything passing and
+// at column 14 with one check degraded.
+func TestChecksFloorIsVocabularyWide(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	// The expected geometry, re-derived from the code under test — the badge
+	// column is whatever widestStateMark and widestStateWord say it is, so the
+	// loop below fails a renderer that sized the column from c.Items even
+	// though it cannot fail a change to the vocabulary. The literal 12 after
+	// the loop is the independent expectation that catches THAT: §4.4 fixes the
+	// floor at 2 + mark 1 + sp + "degraded" 8. An earlier draft computed
+	// wantFloor from four constants declared three lines above it and then
+	// compared it to 12, so nothing under test could make it fail.
+	markCells := widestStateMark(GlyphUTF8)
+	wordCells := widestStateWord()
+	const indent, gap = 2, 2
+	wantNameIndent := indent + markCells + 1 + wordCells + gap // 14
+	wantFloor := indent + markCells + 1 + wordCells            // 12
+
+	c := Checks{Title: "Doctor", Items: []Check{
+		{"binary present", StateOK, ""},
+		{"config exists", StateOK, ""},
+	}}
+	for w := MinWidth; w <= 200; w++ {
+		lines := plainLines(c.Render(blockStream(w)))
+		// Line 1+k is item k only while no name wraps and no item carries a
+		// note. The fixture is built so that neither happens — its widest name
+		// is 14 cells against a name column of budget − 14 = 15 at MinWidth —
+		// and this is the precondition that says so, rather than leaving the
+		// offset index below resting on it silently.
+		if len(lines) != 1+len(c.Items) {
+			t.Fatalf("@%d the fixture rendered %d lines, want %d (title plus one per item); "+
+				"the offset index below would be reading the wrong line:\n%s",
+				w, len(lines), 1+len(c.Items), strings.Join(lines, "\n"))
+		}
+		for k := range c.Items {
+			line := lines[1+k]
+			badge := "✓ ok"
+			want := strings.Repeat(" ", indent) + badge +
+				strings.Repeat(" ", markCells+1+wordCells-ansi.StringWidth(badge)) +
+				strings.Repeat(" ", gap)
+			if !strings.HasPrefix(line, want) {
+				t.Fatalf("@%d item %d: the badge column is sized from the items present, not from §4.5's vocabulary; "+
+					"want the name to start at column %d (2 + mark 1 + sp + %q 8 + gap 2): %q",
+					w, k, wantNameIndent, "degraded", line)
+			}
+		}
+	}
+	if wantFloor != 12 {
+		t.Fatalf("the Checks floor arithmetic drifted: 2 + mark %d + 1 + widest word %d is %d, not 12",
+			markCells, wordCells, wantFloor)
+	}
+	// And the block still fits at the product floor, where the name column is
+	// budget − nameIndent = 29 − 14 = 15 cells wide.
+	lines := plainLines(c.Render(blockStream(MinWidth)))
+	for i, l := range lines {
+		if got := ansi.StringWidth(l); got > MinWidth {
+			t.Fatalf("@%d line %d is %d cells: %q", MinWidth, i+1, got, l)
+		}
+	}
+}
+
+// TestEmptyNamesTheNextStep is §4.9's one shape: exit 0, always naming the next
+// step, no numbering. The assertion is that Empty's remedies are NOT numbered —
+// the shape differs from Problem's on purpose, and nothing else would notice.
+func TestEmptyNamesTheNextStep(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	e := Empty{Subject: "workspaces", Steps: []Remedy{
+		{"Create one", "ws new <name>"},
+		{"See profiles", "ws profiles"},
+	}}
+	for w := MinWidth; w <= 200; w++ {
+		lines := plainLines(e.Render(blockStream(w)))
+		if lines[0] != "No workspaces yet." {
+			t.Fatalf("@%d the subject line is %q, want %q", w, lines[0], "No workspaces yet.")
+		}
+		// Line 1+k is remedy k only while the subject line, every label and
+		// every command stay on one line each. The fixture is built so that
+		// they do — its widest command is 13 cells against an aligned slot of
+		// budget − 16 = 13 at MinWidth — and this precondition says so instead
+		// of leaving the offset index resting on it silently.
+		if len(lines) != 1+len(e.Steps) {
+			t.Fatalf("@%d the fixture rendered %d lines, want %d (subject plus one per remedy); "+
+				"the offset index below would be reading the wrong line:\n%s",
+				w, len(lines), 1+len(e.Steps), strings.Join(lines, "\n"))
+		}
+		for k, s := range e.Steps {
+			line := lines[1+k]
+			if strings.HasPrefix(strings.TrimLeft(line, " "), strconv.Itoa(k+1)+".") {
+				t.Fatalf("@%d Empty's remedies are numbered; §4.9 numbers Problem's, not these: %q", w, line)
+			}
+			if indentOf(line) != 2 {
+				t.Fatalf("@%d remedy %q is indented %d cells, want 2: %q", w, s.Label, indentOf(line), line)
+			}
+		}
+		for i, l := range lines {
+			if got := ansi.StringWidth(l); got > clampBudget(w) {
+				t.Fatalf("@%d line %d is %d cells: %q", w, i+1, got, l)
+			}
+		}
+	}
+}
+
+// TestStreamStateHelpers covers §4.5's stream-level seam: the two exported
+// methods a call site uses when it builds a one-off line rather than a block.
+// They have no caller inside the layer, so without this they would ship
+// unexercised — and an exported symbol is invisible to golangci-lint's
+// `unused`, which is the check that catches the unexported ones.
+//
+// The expectations come from fxBadge/fxMark — the harness's own copy of §4.5's
+// table — and not from stateText, so a self-consistent renaming of the
+// vocabulary cannot satisfy them.
+func TestStreamStateHelpers(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+		s := sweepStream(80, mode)
+		for _, st := range allStates {
+			if got, want := s.StateMark(st), fxMark(st, mode); got != want {
+				t.Errorf("mode %d: StateMark(%v) = %q, want %q", mode, st, got, want)
+			}
+			if got, want := s.StateText(st, ""), fxBadge(st, "", mode); got != want {
+				t.Errorf("mode %d: StateText(%v, \"\") = %q, want %q", mode, st, got, want)
+			}
+			if got, want := s.StateText(st, "running"), fxBadge(st, "running", mode); got != want {
+				t.Errorf("mode %d: StateText(%v, \"running\") = %q, want %q", mode, st, got, want)
+			}
+		}
+	}
 }

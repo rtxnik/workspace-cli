@@ -84,3 +84,35 @@ func stateText(st State, label string, mode GlyphMode) string {
 	}
 	return stateMark(st, mode) + " " + label
 }
+
+// widestStateMark is the mark column. Every mark is width 1 in both modes and
+// under both Ambiguous conventions, but it is measured rather than assumed so
+// that a future addition to the vocabulary cannot silently break alignment.
+// Its caller is Checks.Render in blocks.go, which sizes the badge column from
+// the vocabulary rather than from the items present.
+func widestStateMark(mode GlyphMode) int {
+	widest := 0
+	for _, st := range allStates {
+		if w := W(stateMark(st, mode)); w > widest {
+			widest = w
+		}
+	}
+	return widest
+}
+
+// StateMark exposes this stream's glyph for a state, for call sites that
+// build their own one-off line rather than a block.
+//
+// Nothing inside this layer calls it, and that is §4.5's seam rather than an
+// oversight: the first caller is phase 2's migration of the status commands.
+// An exported identifier is invisible to the `unused` linter, so it would ship
+// unexercised — TestStreamStateHelpers in acceptance_test.go is the one thing
+// that runs it.
+func (s *Stream) StateMark(st State) string { return stateMark(st, s.mode) }
+
+// StateText renders "mark + label" for this stream, defaulting the label to
+// the state's fixed word. It has no caller inside the layer either; see
+// StateMark above.
+func (s *Stream) StateText(st State, label string) string {
+	return stateText(st, label, s.mode)
+}
