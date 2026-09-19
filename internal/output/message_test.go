@@ -272,7 +272,10 @@ func TestDieChildProcess(t *testing.T) {
 	if os.Getenv(dieChildEnv) != "1" {
 		t.Skip("child half of probeDie; runs only in the subprocess")
 	}
-	// The child-side re-apply. Inert while the seam above is inert.
+	// The child-side re-apply. mutants.DieUnwrapped is a package global of a
+	// FRESH process here, at its zero value however the parent was set, so
+	// die_stops_wrapping reaches the code being measured only through this
+	// line. Without it the mutant is reported as survived.
 	if os.Getenv(dieMutantEnv) == "1" {
 		applyDieChildMutant()
 	}
@@ -296,7 +299,9 @@ func runDieChild(t *testing.T) (exitCode int, stdout, stderr string) {
 		"WS_ASCII=",
 		"RUNEWIDTH_EASTASIAN=",
 	)
-	// The parent-side propagation. Inert while the seam above is inert.
+	// The parent-side propagation: the parent's mutants.DieUnwrapped decides
+	// whether the child is told to set its own, and the environment is the
+	// only channel across the process boundary.
 	if dieChildMutantEnabled() {
 		cmd.Env = append(cmd.Env, dieMutantEnv+"=1")
 	}
