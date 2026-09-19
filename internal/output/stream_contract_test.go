@@ -20,9 +20,18 @@ import (
 // probe, asserted as behaviour.
 //
 // None of this is reachable from a render test: the §6.1 sweep renders through
-// NewStreamAt and never resolves a real file descriptor. With no test between
-// them, probing the width of the wrong fd, regressing the COLUMNS clamp and
-// resolving every stream's colour from stdout all leave the suite green.
+// NewStreamAt and never resolves a real file descriptor. The sweep exists now,
+// so that is measured rather than predicted — each defect was planted in
+// stream.go itself and both TestAcceptanceSweep and the whole untagged package
+// were run against it:
+//
+//	newStream probing fd 0, not its own fd        sweep ok, resolve_width red
+//	COLUMNS below MinWidth rejected, not clamped  sweep ok, resolve_width red
+//	colour probed on os.Stdout for every stream   sweep ok, stream_identity red
+//
+// In each case the only red anywhere in the package was one subtest of
+// TestStreamContract below. With no test between the render sweep and the file
+// descriptor, all three would leave the suite green.
 
 // ------------------------------------------------------------ result sink
 //

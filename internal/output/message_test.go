@@ -344,8 +344,18 @@ func widestLine(lines []string) int {
 // probeDie is §6.1's corpus entry for Die, taken to the exported function.
 //
 // The §6.1 sweep renders Die's SHAPE through renderMessage and never calls Die,
-// so a change made inside Die — dropping the wrap, writing to the wrong stream,
-// exiting with the wrong code — is invisible to it.
+// so a change made inside Die is invisible to it. That was a prediction when
+// this probe was written and the sweep did not yet exist. It is now a
+// measurement: each defect below was planted in Die's own body and both
+// TestAcceptanceSweep and the whole untagged package were run against it.
+//
+//	Die's wrap dropped           sweep ok, TestMessageContract/die_contract red
+//	Die's emit pointed at Out()  sweep ok, TestMessageContract/die_contract red
+//	os.Exit(0) for os.Exit(1)    sweep ok, TestMessageContract/die_contract red
+//
+// In all three the only red anywhere in the package was that one subtest —
+// this probe. The limitation the sentence claims is real, and this is what
+// stands between the layer and it.
 //
 // All eight clauses below were planted in this tree and observed red, rather
 // than claimed. Six plants cover the eight: three of them trip two clauses at

@@ -15,9 +15,23 @@ import (
 // The §6.1 width sweep is end-to-end: it can only see a cut defect that
 // survives the allocator, the padding and the block geometry wrapped around
 // it, and when it does go red it says a render overflowed, not which
-// primitive let it. These are properties of cutAt and cutAtEnd THEMSELVES,
-// stated over a corpus of hostile strings and every budget from 0 to 40, so
-// they hold for inputs nobody thought to write a golden for.
+// primitive let it. The sweep exists now, so the difference was measured
+// rather than argued. With firstCell stepping by RUNE instead of by grapheme
+// cluster — a defect that does survive all three layers — the two report the
+// same thing like this:
+//
+//	TestAcceptanceSweep  width_budget 2398 violations, first
+//	                     `table/emoji-presentation @ 29 (mode 0): line 1 is
+//	                     44 cells, budget 29`, plus grid_pairing 3290
+//	this file            cut_boundary 88, first `cutAtEnd(
+//	                     emoji-presentation-run, 1) = … cut inside a grapheme
+//	                     cluster at byte 63`, plus cut_budget 230 and
+//	                     cut_maximal 163
+//
+// One names a fixture and a width; the other names the function, the input and
+// the byte. These are properties of cutAt and cutAtEnd THEMSELVES, stated over
+// a corpus of hostile strings and every budget from 0 to 40, so they hold for
+// inputs nobody thought to write a golden for.
 //
 // The measurement here is ansi.StringWidth and never the package's own W: a
 // check that measured with the function under test would agree with a defect
