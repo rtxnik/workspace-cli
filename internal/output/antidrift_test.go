@@ -173,24 +173,103 @@ func scanWidthPinning(root string) (found []string, guarded int, err error) {
 	return found, guarded, err
 }
 
+// ------------------------------------------- §4.1 / §6.6: no parallel tests
+//
+// stream_contract_test.go writes the invariant down: no test in this package
+// may call t.Parallel(). withStdStreams reassigns os.Stdout and os.Stderr, and
+// this package carries three more process globals its own tests mutate —
+// `mutants` (mutants.go), where a leaked plant makes a deliberate defect the
+// shipped behaviour of every later test in the run; `allocStats`
+// (alloc_policy_test.go), which TestAcceptanceSweep zeroes and then reads back
+// as a non-zero count; and `fxCorpusOnce` (corpus_test.go), an unsynchronised
+// memo.
+//
+// HALF THE HAZARD IS CAUGHT FOR FREE AND HALF IS NOT, which is what makes a
+// source scan the only guard available. Measured in stream_contract_test.go: a
+// t.Parallel() in a subtest that also calls t.Setenv panics on the Go
+// runtime's own rule, while one in a test that swaps the same globals and
+// calls no t.Setenv — TestStreamMemoisationIsRaceFree is the live example — is
+// accepted silently and the package stays green under -race. So the failure a
+// guard has to catch is the one that arrives with no message naming its cause.
+//
+// parallelCall is spelled in two pieces deliberately. This scanner reads the
+// _test.go files of THIS package and antidrift_test.go is one of them, so a
+// single literal in the code below would make the guard report its own source.
+// Prose is free to spell it out: the comment skip covers that, and the four
+// mentions in stream_contract_test.go are the reason the skip exists.
+const parallelCall = "." + "Parallel("
+
+// scanParallelTests reports every _test.go file under root that calls
+// t.Parallel().
+//
+// IT IS THE MIRROR OF scanWidthPinning, NOT A COPY. That scanner reports
+// non-test files and skips `_test.go`; this one reports `_test.go` and skips
+// everything else, because the rule each enforces lives on the opposite side
+// of that line. A guard that read the whole tree would report nothing extra —
+// production code has no reason to name the call — and would lose the one
+// property that makes this cheap: the file set it reads is the file set the
+// rule is about.
+//
+// Occurrences inside a line comment are not calls, and the skip is not
+// optional: this package states the invariant in prose twice over — in
+// stream_contract_test.go, which writes it down, and in this file, which
+// enforces it — so a comment-blind scan reports the documentation and nothing
+// else. Measured at this commit, every `.Parallel(` match in the package's
+// test files sits behind a `//`, the scanner reports no violations, and that
+// zero is the only number assertAntiDrift reads back. No tally of the prose
+// matches is pinned here: it moves whenever one of those comments is edited
+// and nothing consumes it. (stream_contract_test.go:329 names t.Parallel
+// without its parenthesis and is not matched by the call shape at all.)
+//
+// Named return `found`, for the same reason the two scanners above have one.
+func scanParallelTests(root string) (found []string, err error) {
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for i, line := range strings.Split(string(body), "\n") {
+			at := strings.Index(line, parallelCall)
+			if at < 0 {
+				continue
+			}
+			if c := strings.Index(line, "//"); c >= 0 && c < at {
+				continue // prose about the call, not the call
+			}
+			found = append(found, filepath.ToSlash(path)+":"+strconv.Itoa(i+1))
+		}
+		return nil
+	})
+	return found, err
+}
+
 // assertAntiDrift is §6.8 and §6.1's source-level half.
 //
 // Goes red when: any file other than theme.go names a colour value — and, in
 // the OTHER direction, when theme.go stops naming any, which would make the
 // guard pass for the wrong reason; or when a width is handed to a renderer
-// anywhere outside the mutation switch.
+// anywhere outside the mutation switch; or when a test file in this package
+// calls t.Parallel().
 //
-// That is FOUR reds, and every one of them is planted against the scanners in
-// TestAntiDriftGuardCanFail and TestWidthPinningGuardCanFail rather than
-// assumed — a colour literal outside theme.go, a theme.go that names none, an
-// unguarded .Width(, and a .Width( one line too far below its guard. No
-// runtime mutant can redden an assertion about source text, so the
+// That is FIVE reds, and every one of them is planted against the scanners in
+// TestAntiDriftGuardCanFail, TestWidthPinningGuardCanFail and
+// TestParallelCallGuardCanFail rather than assumed — a colour literal outside
+// theme.go, a theme.go that names none, an unguarded .Width(, a .Width( one
+// line too far below its guard, and a _test.go file that calls t.Parallel().
+// No runtime mutant can redden an assertion about source text, so the
 // planted-source controls are the only way this body is shown able to fail.
 var assertAntiDrift = globalAssertion{
 	name: "anti_drift",
 	spec: "§6.8 / §6.1",
 	what: `lipgloss.Color("#` + " appears in no non-test file outside theme.go and does appear in theme.go; " +
-		".Width( appears in no non-test file outside the mutants.PinTableWidth branch",
+		".Width( appears in no non-test file outside the mutants.PinTableWidth branch; " +
+		"no _test.go file in this package calls t" + parallelCall + ")",
 	check: func(r *results) {
 		root, err := repoRoot()
 		if err != nil {
@@ -228,6 +307,22 @@ var assertAntiDrift = globalAssertion{
 		if guarded != 1 {
 			r.fail("anti_drift", "%d guarded .Width( call(s) in the package; the mutation switch that "+
 				"proves the paired assertion is expected to be the one and only", guarded)
+		}
+
+		// The PARALLEL half is package-scoped and reads the _test.go files —
+		// the opposite of the width half on both axes. The invariant is about
+		// what this package's own tests do to process globals, so the file set
+		// it reads is the file set the rule is about.
+		racy, err := scanParallelTests(".")
+		if err != nil {
+			r.fail("anti_drift", "parallel scan failed: %v", err)
+			return
+		}
+		for _, v := range racy {
+			r.fail("anti_drift", "a test calls t%s) at %s; os.Stdout, os.Stderr, mutants, allocStats "+
+				"and fxCorpusOnce are process globals this package's tests swap, and a concurrent "+
+				"test corrupts them intermittently, under another test's name, with no message "+
+				"naming this cause", parallelCall, v)
 		}
 	},
 }
@@ -430,4 +525,68 @@ func TestWidthPinningGuardCanFail(t *testing.T) {
 		t.Fatalf("a call two lines below the guard was accepted: %v", violations)
 	}
 	t.Logf("a .Width( call not directly under the switch is reported at %s", violations[0])
+}
+
+// TestParallelCallGuardCanFail is the parallel guard's control, and it mirrors
+// TestWidthPinningGuardCanFail on the axis that decides whether a control is a
+// control: THE PLANTED CALL GOES IN A _test.go FILE, because that is the only
+// kind scanParallelTests reads. A plant in a non-test file could never be
+// reported however wrong it was, and this test would be an assertion that
+// cannot fail — the exact mistake the width control avoids by planting in the
+// other direction.
+//
+// The live baseline is ZERO: measured on this tree, no file in this repository
+// calls t.Parallel(). So the clause assertAntiDrift runs has nothing real to
+// go red on, and a planted tree is the only way it is ever exercised. The
+// plants go in a t.TempDir(); the real tree is never written to.
+//
+// Four shapes are planted, and the pair that is NOT reported matters as much
+// as the pair that is: prose naming the call, a non-test file making it, the
+// call itself, and the call followed by a trailing comment — which is the
+// shape a skip keyed on "does this line have a //" would wave through.
+func TestParallelCallGuardCanFail(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call := "\tt" + parallelCall + ")"
+
+	// The shape the package really has: the invariant stated in prose in a
+	// test file, and a non-test file this scanner does not read at all.
+	write("stream_contract_test.go", "package output\n\n// NO TEST IN THIS PACKAGE MAY CALL t"+parallelCall+").\n")
+	write("stream.go", "package output\n\nfunc f(t *testing.T) {\n"+call+"\n}\n")
+
+	violations, err := scanParallelTests(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("prose in a test file, or a non-test file, was reported: %v", violations)
+	}
+
+	// Plant the call the guard exists to catch, in a _test.go file.
+	write("racy_test.go", "package output\n\nfunc TestRacy(t *testing.T) {\n"+call+"\n}\n")
+	violations, err = scanParallelTests(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || !strings.HasSuffix(violations[0], "racy_test.go:4") {
+		t.Fatalf("planted parallel call not reported at racy_test.go:4: %v", violations)
+	}
+	t.Logf("planted parallel call reported at %s", violations[0])
+
+	// And the same call with a comment BEHIND it. The skip tests where the
+	// "//" sits, not whether the line carries one; keyed the other way, this
+	// is how the call comes back.
+	write("racy_test.go", "package output\n\nfunc TestRacy(t *testing.T) {\n"+call+" // the globals are fine\n}\n")
+	violations, err = scanParallelTests(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || !strings.HasSuffix(violations[0], "racy_test.go:4") {
+		t.Fatalf("a call with a trailing comment was waved through: %v", violations)
+	}
+	t.Logf("a call with a comment behind it is still reported at %s", violations[0])
 }
