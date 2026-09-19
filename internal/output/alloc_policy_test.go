@@ -201,9 +201,10 @@ func fxChrome(n int) int {
 // test-side vocabulary (fxBadge) rather than through stateText. The width
 // primitive is not re-derived and is not claimed to be — W(s) is literally
 // ansi.StringWidth(s), so calling one in place of the other proves nothing
-// about it; §6.4's glyph-width checks are what pin the cell widths. The
-// sanitiser is consumed rather than re-derived for the same reason, and is
-// pinned by text_invariants_test.go.
+// about it. §6.4's TestGlyphWidths pins the width of the glyphs THIS LAYER
+// emits; the width of arbitrary cell content is x/ansi's to get right and
+// nothing here re-derives it. The sanitiser is consumed rather than
+// re-derived for the same reason, and is pinned by text_invariants_test.go.
 func fxNatural(cols []Col, rows [][]Cell, mode GlyphMode) []int {
 	natural := make([]int, len(cols))
 	for i, c := range cols {
@@ -437,7 +438,7 @@ func allocFixtures() []allocFixture {
 // zero. Whichever test drives the assertion zeroes the counter first; the
 // counter is package-global because a sweepAssertion's check signature carries
 // only a renderCase and a results sink, and threading a counter through it
-// would change a shape five other files depend on.
+// would change a shape every later harness file depends on.
 type allocPolicyStats struct {
 	allocations, naturalFit, shrunk, dropped, relaxed, squeezed, captionOnly int
 }
