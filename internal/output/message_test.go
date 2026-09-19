@@ -228,13 +228,14 @@ const (
 )
 
 // dieChildMutantEnabled reports whether the Die mutant is on in THIS process,
-// and applyDieChildMutant turns it on. This phase declares no mutation
-// switches at all, so both are inert here: the first always answers false and
-// the second does nothing. A later phase replaces the two bodies with a read
-// and a write of the switch it introduces, in the same change that wires that
-// switch into Die itself. They are seams rather than direct reads for exactly
-// one reason — this file ships before the switch is declared, and a reference
-// to a symbol that does not exist yet does not compile.
+// and applyDieChildMutant turns it on. mutants.go declares only the allocator
+// switches of §4.3 today and the Die switch is not among them, so both are
+// inert here: the first always answers false and the second does nothing. A
+// later change replaces the two bodies with a read and a write of that switch,
+// in the same change that wires it into Die itself. They are seams rather than
+// direct reads for exactly one reason — this file shipped before the switch is
+// declared, and a reference to a symbol that does not exist yet does not
+// compile.
 func dieChildMutantEnabled() bool { return false }
 
 func applyDieChildMutant() {}
