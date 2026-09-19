@@ -381,9 +381,14 @@ func TestCutMeasuredDefect(t *testing.T) {
 
 // §4.4: Sanitise strips CSI and OSC sequences and C0/C1 controls and PRESERVES
 // tab and newline. Preserving newline is what makes a multi-line upstream
-// error wrap as paragraphs; preserving tab is what allows a tab to reach a
-// table cell, where ansi.StringWidth measures U+0009 at zero cells and the
-// terminal does not — the defect Task 10 fixes at the renderer.
+// error wrap as paragraphs.
+//
+// Preserving tab is a statement about this function alone, and it no longer
+// means a tab reaches the terminal: expandTabs in text.go replaces it with
+// spaces to the next 8-column stop at every primitive that measures, cuts,
+// pads or wraps, because ansi.StringWidth measures U+0009 at zero cells and a
+// terminal does not. The byte survives HERE so that a caller off the render
+// path — --json — still has it; the cases below pin that and nothing more.
 func TestSanitise(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{"plain", "ws workspace create api", "ws workspace create api"},

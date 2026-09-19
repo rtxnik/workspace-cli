@@ -201,9 +201,9 @@ func fxChrome(n int) int {
 // What it re-derives is the COMPOSITION, not the measurement: the widest of a
 // column's heading and its cells, with a state cell composed through §4.5's
 // test-side vocabulary (fxBadge) rather than through stateText. The width
-// primitive is not re-derived and is not claimed to be — W(s) is literally
-// ansi.StringWidth(s), so calling one in place of the other proves nothing
-// about it. §6.4's TestGlyphWidths pins the width of the glyphs THIS LAYER
+// primitive is not re-derived and is not claimed to be — W(s) is
+// ansi.StringWidth(s) on tab-free text, which is every fixture in the corpus
+// but one, so calling one in place of the other proves nothing about it. §6.4's TestGlyphWidths pins the width of the glyphs THIS LAYER
 // emits; the width of arbitrary cell content is x/ansi's to get right and
 // nothing here re-derives it. The sanitiser is consumed rather than
 // re-derived for the same reason, and is pinned by text_invariants_test.go.
