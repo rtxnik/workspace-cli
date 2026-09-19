@@ -50,13 +50,12 @@ package output
 //     forbid: it turns a deliberate defect into the shipped behaviour for the
 //     rest of the run, with `go test -race ./...` green and nothing to say so.
 //
-// This file is NEVER build-tagged (decision D-11). Production code reads
-// these switches — measured as the table block lands: 6 references in
-// alloc.go and 5 in blocks.go, and more as each later task re-threads the
-// switches it held back — so tagging the declaration out breaks the ordinary
-// build. The tag
-// goes on the mutation harness and only there. The cost in the shipped binary
-// is one zero-valued struct.
+// This file is NEVER build-tagged (decision D-11). Production code branches
+// on these switches directly — measured with the last of them wired: 27
+// references over six files, alloc.go 6, blocks.go 6, stream.go 5, glyph.go 4,
+// text.go 3, message.go 3 — so tagging the DECLARATION out breaks the ordinary
+// build rather than the harness. The tag goes on the mutation harness and only
+// there. The cost in the shipped binary is one zero-valued struct.
 type mutantSwitches struct {
 	// ------------------------------------------------------------ §4.3 chrome
 	ChromeOff int // chromeFor undercounts the border and padding by this many cells

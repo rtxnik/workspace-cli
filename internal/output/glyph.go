@@ -103,7 +103,11 @@ func glyphModeFromEnv(getenv func(string) string) GlyphMode {
 		if locale == "" {
 			continue
 		}
-		if !isUTF8Locale(locale) || isCJKLocale(locale) {
+		// The CJK clause is the half §4.5 adds over a plain UTF-8 check, and
+		// IgnoreCJKTag drops it: a ja_JP.UTF-8 terminal then keeps the UTF-8
+		// glyph set whose marker and eleven border glyphs it draws at two
+		// cells.
+		if !isUTF8Locale(locale) || (isCJKLocale(locale) && !mutants.IgnoreCJKTag) {
 			return GlyphASCII
 		}
 		return GlyphUTF8
