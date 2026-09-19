@@ -12,10 +12,11 @@ import (
 // selecting the UTF-8 set on ja_JP passed the entire suite.
 //
 // glyphModeCases is declared at package scope and NOT inside the test,
-// because Task 4's probeGlyphMode drives the same table: the contract
-// mutation harness of Task 11 asks which assertion noticed `IgnoreCJKTag`,
-// and it must ask it of the same cases this test runs, not of a second
-// weaker copy. One table, two drivers.
+// because probeGlyphMode in stream_contract_test.go drives the same table:
+// TestContractMutationHarness in mutation_test.go asks which assertion
+// noticed `IgnoreCJKTag`, and it must ask it of the same cases this test
+// runs, not of a second weaker copy. One table, two drivers. Measured:
+// the mutant is killed by glyph_mode_selection(6).
 var glyphModeCases = []struct {
 	name string
 	env  map[string]string

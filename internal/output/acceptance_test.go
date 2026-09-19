@@ -190,9 +190,9 @@ func gridFields(rc renderCase, a Alloc, r *results) ([][]string, bool) {
 // assertGridPairing is §6.1's paired assertion, on the grid alone.
 //
 // It is a sweepAssertion rather than a plain function because sweepAssertions()
-// registers it beside the corpus-wide checks and Task 11 asks which assertion
-// killed which mutant. TestTableGridPairing below is the standalone entry
-// point.
+// registers it beside the corpus-wide checks and TestMutationHarness in
+// mutation_test.go asks which assertion killed which mutant. TestTableGridPairing
+// below is the standalone entry point.
 //
 // THE WIDTH HALF IS NOT HERE ANY MORE. It began life as this body's first
 // loop, and assertWidthBudget in this file now owns it, so that every fixture
