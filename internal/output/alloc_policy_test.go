@@ -450,13 +450,20 @@ var allocStats allocPolicyStats
 // Task 10's registry consumes.
 //
 // It is registered in sweepAssertions(). What it contributes today is
-// measured rather than asserted: TestAllocatorMutantsRedenTheDirectChecks
-// plants each §4.3 switch in turn and logs which assertion bodies went red,
-// and over its seven plants the split is
+// measured AND asserted: TestAllocatorMutantsRedenTheDirectChecks plants each
+// §4.3 switch in turn and holds the set of assertion bodies that went red
+// against a per-plant lower bound, so this split cannot drift out from under
+// the comment. Over its seven plants:
 //
 //	alloc_golden   red on 7 of 7
 //	alloc_policy   red on 6 of 7 — it misses state_column_not_exempt_from_5b
 //	relax_clauses  red on 6 of 7 — it misses drop_against_natural_sum
+//
+// Those two misses are the two wantRed sets in that test that are not all
+// three bodies. If a change makes a body stop catching a plant, the control
+// fails and names it rather than staying green on the strength of another
+// body's catch — and if a change makes a body start catching one, the control
+// stays green and these three lines are what needs re-measuring.
 //
 // So no §4.3 switch is caught by alloc_policy alone at this point in the
 // plan, and the value it adds over the goldens is reach: it holds every
@@ -1181,6 +1188,16 @@ func TestRelaxClauses(t *testing.T) {
 // it is the one assertion no invariant can adjudicate, and the measurement
 // above shows the sort call alone does not guarantee it.
 //
+// It does not only ask WHETHER something went red. Each plant carries the set
+// of assertion bodies that MUST redden, and the set is asserted as a lower
+// bound — extra reds are welcome, a missing one is a failure. Without that,
+// the pass condition would be "at least one of the three noticed", the
+// per-body matrix published in assertAllocPolicy's doc comment would be
+// guarded by nothing, and a change that stopped alloc_policy catching
+// drop_against_natural_sum would leave the goldens catching it, this test
+// green, and that comment silently false. The sets below were taken from a run
+// of this test, not from the comment; if the two ever disagree the run wins.
+//
 // This test is one of the controls mutants.go's rule 3 carves out by name: it
 // is untagged, it assigns `mutants`, and it therefore registers the restore
 // with t.Cleanup before the first plant AND restores the zero value between
@@ -1192,18 +1209,39 @@ func TestAllocatorMutantsRedenTheDirectChecks(t *testing.T) {
 	}
 	t.Cleanup(func() { mutants = mutantSwitches{} })
 
+	const (
+		golden  = "alloc_golden"
+		policy  = "alloc_policy"
+		clauses = "relax_clauses"
+	)
 	planted := []struct {
 		name   string
 		defect string
 		apply  func(*mutantSwitches)
+		// wantRed is the LOWER BOUND on the assertion bodies this plant must
+		// redden, measured by running this test rather than predicted.
+		wantRed []string
 	}{
-		{"relax_skips_atomic_squeeze", "step 5(a) removed", func(m *mutantSwitches) { m.NoAtomicSqueeze = true }},
-		{"relax_order_swapped", "step 5(b) before step 5(a)", func(m *mutantSwitches) { m.RelaxOrderSwapped = true }},
-		{"relax_floor_is_one", "step 5(b) floor back to 1", func(m *mutantSwitches) { m.RelaxFloorOne = true }},
-		{"state_column_not_exempt_from_5b", "the ColState exemption removed", func(m *mutantSwitches) { m.NoStateExemption = true }},
-		{"drop_against_natural_sum", "step 2 worded against the natural sum", func(m *mutantSwitches) { m.DropAgainstNatural = true }},
-		{"chrome_off_by_one", "chromeFor undercounts by a cell", func(m *mutantSwitches) { m.ChromeOff = 1 }},
-		{"chrome_over_by_one", "chromeFor overcounts by a cell", func(m *mutantSwitches) { m.ChromeOff = -1 }},
+		{"relax_skips_atomic_squeeze", "step 5(a) removed", func(m *mutantSwitches) { m.NoAtomicSqueeze = true },
+			[]string{golden, policy, clauses}},
+		{"relax_order_swapped", "step 5(b) before step 5(a)", func(m *mutantSwitches) { m.RelaxOrderSwapped = true },
+			[]string{golden, policy, clauses}},
+		{"relax_floor_is_one", "step 5(b) floor back to 1", func(m *mutantSwitches) { m.RelaxFloorOne = true },
+			[]string{golden, policy, clauses}},
+		// The ColState exemption is invisible to alloc_policy: removing it
+		// produces an allocation that breaks no §4.3 arithmetic, only the
+		// vocabulary rule. The goldens and the clause checks are what hold it.
+		{"state_column_not_exempt_from_5b", "the ColState exemption removed", func(m *mutantSwitches) { m.NoStateExemption = true },
+			[]string{golden, clauses}},
+		// checkRelaxClauses works at MinWidth on the step-5 fixtures, where
+		// the step-2 wording makes no difference; the sweep and the goldens
+		// are what reach the widths at which it does.
+		{"drop_against_natural_sum", "step 2 worded against the natural sum", func(m *mutantSwitches) { m.DropAgainstNatural = true },
+			[]string{golden, policy}},
+		{"chrome_off_by_one", "chromeFor undercounts by a cell", func(m *mutantSwitches) { m.ChromeOff = 1 },
+			[]string{golden, policy, clauses}},
+		{"chrome_over_by_one", "chromeFor overcounts by a cell", func(m *mutantSwitches) { m.ChromeOff = -1 },
+			[]string{golden, policy, clauses}},
 	}
 	for _, p := range planted {
 		mutants = mutantSwitches{}
@@ -1220,6 +1258,21 @@ func TestAllocatorMutantsRedenTheDirectChecks(t *testing.T) {
 			continue
 		}
 		names := r.redAssertions()
+		red := make(map[string]bool, len(names))
+		for _, n := range names {
+			red[n] = true
+		}
+		var missing []string
+		for _, want := range p.wantRed {
+			if !red[want] {
+				missing = append(missing, want)
+			}
+		}
+		if len(missing) > 0 {
+			t.Errorf("%s (%s): %v no longer catches it — red: %v, expected at least %v. "+
+				"The per-body split in assertAllocPolicy's doc comment is now false; re-measure it and re-pin both.",
+				p.name, p.defect, missing, names, p.wantRed)
+		}
 		t.Logf("%-34s %-44s red: %v", p.name, p.defect, names)
 		t.Logf("    first violation: %s", r.first[names[0]])
 	}
