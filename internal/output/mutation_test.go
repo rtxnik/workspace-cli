@@ -23,9 +23,11 @@ import (
 // out breaks the ordinary build, while tagging the HARNESS out keeps a sweep
 // per mutant out of `go test -race ./...`. The `test-mutation` target in the
 // Makefile and the `mutation` job in .github/workflows/ci.yml are what keep it
-// a hard gate. That target carries NO `-run` filter, on purpose: the tag
-// already scopes it, and the filter an earlier draft used would have excluded
-// TestMutantSwitchesAreRestored below.
+// a hard gate. That target carries NO `-run` filter, on purpose: the tag is
+// what brings this file into the run at all and should be the only thing
+// deciding what runs there. Measured — the filter an earlier draft used runs
+// exactly three tests, and TestMutantSwitchesAreRestored below is not one of
+// them.
 //
 // THE TAG ALSO HIDES THIS FILE FROM THE LINTER, AND THE CI JOB UNDOES THAT.
 // `golangci-lint run` never compiles a build-tagged file, so the repository's
@@ -504,8 +506,9 @@ func TestMutationHarness(t *testing.T) {
 //	  which no runtime value can change.
 //	  The source change that would fail it: a lipgloss.Color("#…") added
 //	  outside theme.go, theme.go losing its palette, or .Width( re-introduced
-//	  on the grid outside the mutants.PinTableWidth branch. All four were
-//	  planted against the real tree and observed red.
+//	  on the grid outside the mutants.PinTableWidth branch. Each was planted
+//	  against the real tree and observed red, the last in both of its forms —
+//	  an unguarded call, and one a line too far below the guard.
 //	  Its control: TestAntiDriftGuardCanFail and TestWidthPinningGuardCanFail
 //	  in antidrift_test.go, which point the two scanners at planted trees and
 //	  require the drift back at the right file and line.
