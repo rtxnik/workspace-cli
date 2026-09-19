@@ -38,12 +38,15 @@ test-integration-proxy:
 # `go test ./...`; this target is how it still runs as a hard gate, and
 # .github/workflows/ci.yml's `mutation` job is where it runs on every push.
 #
-# THERE IS NO -run FILTER, deliberately. The build tag already scopes the run to
-# the one file that carries it, and a filter is a second list that has to be
-# kept in step with the first: an earlier draft filtered on
+# THERE IS NO -run FILTER, deliberately. The build tag is what brings the
+# harness into the run at all, and it should be the only thing deciding what
+# runs here: a -run filter is a second list that has to be kept in step with
+# the first. Measured — an earlier draft filtered on
 # 'TestMutationHarness|TestContractMutationHarness|TestPairedAssertion', which
-# silently excluded TestMutantSwitchesAreRestored — the detector that proves a
-# planted defect cannot leak into the rest of the run.
+# runs exactly three tests and silently excludes TestMutantSwitchesAreRestored,
+# the detector that proves a planted defect cannot leak into the rest of the
+# run. The package's untagged tests run here a second time as a side effect,
+# and that is the cheap half: the harness is about 100s of the ~117s total.
 test-mutation:
 	go test -tags mutation ./internal/output/ -v
 
