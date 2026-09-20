@@ -348,9 +348,12 @@ func (run mutationRun) vacuous() bool { return !run.perturbed }
 //
 // THE WIDTH RANGE IS THE ACCEPTANCE SWEEP'S, AND NARROWING IT IS A SAVING THAT
 // HAS ALREADY BEEN MEASURED AND REJECTED. The cost is linear in the width
-// count and nothing else: over the complete roster, MinWidth..200 (172 widths)
-// runs in 93.06s and MinWidth..114 (86 widths) in 47.67s — 4.23s against
-// 2.15s per mutant. BOTH DIRECTIONS OF THE COVERAGE TABLE CAME BACK IDENTICAL,
+// count and nothing else: measured on the 49-fixture corpus this comparison
+// predates, the complete roster over MinWidth..200 (172 widths) runs in 93.06s
+// and over MinWidth..114 (86 widths) in 47.67s — 4.23s against 2.15s per
+// mutant. The corpus has gained one fixture since and the full-roster run is
+// 100.24s; only the 172-width half of the pair has been re-timed, and the
+// conclusion rests on the ratio rather than on either figure. BOTH DIRECTIONS OF THE COVERAGE TABLE CAME BACK IDENTICAL,
 // diffed with the per-assertion counts stripped: the same mutants killed, by
 // the same assertions, with the same one declared vacuous and none surviving.
 // So the saving is real, and the null result is recorded here rather than left
@@ -550,10 +553,12 @@ func TestPairedAssertionCatchesWhatTheSweepCannot(t *testing.T) {
 	// assertion bodies in the full registry report under that one name,
 	// because assertStateStructure calls gridFields as well as
 	// assertGridPairing does. Measured over this corpus with chrome
-	// off-by-one AND pinning planted: assertGridPairing alone 6192,
-	// assertStateStructure alone 3096, the whole registry 9288. With the
+	// off-by-one AND pinning planted: assertGridPairing alone 6536,
+	// assertStateStructure alone 3096, the whole registry 9632. With the
 	// chrome defect alone, assertStateStructure contributes 0 and both
-	// numbers are 6192.
+	// numbers are 6536. The state-structure share did not move when the
+	// corpus gained table/right-aligned-counts, which declares no state
+	// column; the grid-pairing share did.
 	measure := func(apply func(m *mutantSwitches)) (width, pairing int) {
 		r := newResults()
 		withMutant(t, apply, func() {

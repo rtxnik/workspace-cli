@@ -481,7 +481,7 @@ var allocStats allocPolicyStats
 // and the value it adds over the goldens is reach: it holds every
 // fixture at every width in both glyph modes rather than seven hand-picked
 // points — and that reach is now the corpus's: sweepAssertions() runs this
-// same body over fxCorpus()'s 49 fixtures as well as over the eight below.
+// same body over fxCorpus()'s 50 fixtures as well as over the eight below.
 // It IS the sole killer of four mutants once the whole roster runs rather than
 // the §4.3 seven. Measured by TestMutationHarness over the complete
 // 21-mutant corpus roster: relax_skips_atomic_squeeze (10 violations),

@@ -35,10 +35,10 @@ import (
 // mode is clean. The forced-UTF-8 run is the control that proves the clean
 // result is not vacuous.
 //
-// Measured on this tree, over fxCorpus()'s 49 fixtures at widths 29..200:
+// Measured on this tree, over fxCorpus()'s 50 fixtures at widths 29..200:
 //
-//	Ambiguous-wide, mode selected by §4.5: ascii, 0 of 58852 lines overflow
-//	Ambiguous-wide, glyph mode forced to utf8: 14550 of 58852 lines overflow
+//	Ambiguous-wide, mode selected by §4.5: ascii, 0 of 60243 lines overflow
+//	Ambiguous-wide, glyph mode forced to utf8: 14711 of 60243 lines overflow
 //
 // Only the SHAPE of that pair is asserted — zero for the selected mode, some
 // non-zero number for the forced control — because both counts move with the
@@ -48,8 +48,8 @@ import (
 // Each claim this file makes was planted rather than argued. Running the child
 // with RUNEWIDTH_EASTASIAN unset trips the U+2026 guard ("U+2026 measures 1
 // cells, expected 2"). Deleting the RUNEWIDTH_EASTASIAN clause from
-// glyphModeFromEnv makes the parent report mode "utf8" and 14550 overflows in
-// the SELECTED run — the same 14550 the forced control reports, which is the
+// glyphModeFromEnv makes the parent report mode "utf8" and 14711 overflows in
+// the SELECTED run — the same 14711 the forced control reports, which is the
 // two halves cross-checking each other. Emptying two fields of
 // lipgloss.RoundedBorder() makes the census report 9 distinct glyphs. Putting
 // an Ambiguous glyph into asciiBorder makes it report 4 ASCII glyphs and
