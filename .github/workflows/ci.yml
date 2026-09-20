@@ -68,10 +68,9 @@ jobs:
     name: Output mutation harness (hard gate)
     runs-on: ubuntu-latest
     # The harness re-runs the whole corpus once per mutant — measured at about
-    # two minutes in a 10-core container, and a hosted runner is slower. This
-    # ceiling sits ABOVE the target's own `-timeout 20m` on purpose: a genuine
-    # hang should produce Go's stack dump naming the test, not a bare
-    # cancellation.
+    # two minutes in a 10-core container. This ceiling sits ABOVE the target's
+    # own `-timeout 20m` on purpose: a genuine hang should produce Go's stack
+    # dump naming the test, not a bare cancellation.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
@@ -94,6 +93,16 @@ jobs:
       # locally. The flag itself is not taken on trust either: with a lint
       # error planted in the tagged file, plain `golangci-lint run` stays at
       # 0 issues while `make lint-mutation` reports it and exits non-zero.
+      #
+      # WHAT THIS COSTS, since the paragraph above only names what it buys:
+      # `go install` resolves the linter from the module proxy at job time, so
+      # this step is the one place in this workflow not pinned to a commit SHA
+      # — measured, 17 of 17 `uses:` here are — and it trades the action's
+      # own download caching for a build on every run, 26s in a 10-core
+      # container with a cold build cache. The version is pinned exactly and
+      # the module checksum database still authenticates the download, so what
+      # is given up is the stronger pin and the cache, not the integrity
+      # check.
       - name: Lint what the build tag hides from the lint job
         run: |
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
