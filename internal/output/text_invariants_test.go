@@ -603,6 +603,59 @@ func TestPadMeasuresCells(t *testing.T) {
 	}
 }
 
+// §4.4's tab rule on the one axis no render can reach: expandTabs counts
+// display columns FROM THE START OF EACH LOGICAL LINE, and the reset is the
+// `case '\n'` branch.
+//
+// WHY THE PRIMITIVE AND NOT A FIXTURE. Measured before this test, that branch
+// had a coverage count of 0 — no string in the corpus carried a tab AND a
+// newline — and deleting it outright left the whole package suite green, so
+// the column reset was shipping unguarded.
+//
+// A corpus fixture buys the coverage and not the guard, and that was measured
+// rather than reasoned about. Putting a tab on the second line of
+// fxMultilineErr — §6.2's multi-line upstream error, which reaches
+// Problem.Cause, a Check note, a KV value and two message helpers — takes the
+// branch from 0 to 3982 executions, and with the branch then deleted the suite
+// is STILL green. Wrap splits each paragraph on its whitespace and re-joins it
+// on single spaces, which its own header pins (Wrap("a\tb", 80) is ["a b"]), so
+// the expansion is erased before any assertion sees it; and the one place the
+// harness adjudicates a tab independently — fxCellSource, through fxExpandTabs
+// — is a GRID CELL, which cannot carry a newline without breaking gridFields'
+// line count first. Measured on the same plant: Problem.Render over that Cause
+// is BYTE-IDENTICAL with the branch and without it, while expandTabs itself
+// returns two different strings and W returns 56 against 61.
+//
+// So the rule is asserted here, against a literal this file owns. Only
+// expandTabs can satisfy it: fxExpandTabs, the harness's independent copy in
+// corpus_test.go, is a second opinion beside the expectation rather than the
+// expectation itself.
+func TestExpandTabsResetsTheColumnAtEachLine(t *testing.T) {
+	// "abcdef" is 6 cells, so a tab on THAT line advances 2. The next line
+	// starts the count again at 0, "x" is 1 cell, and the tab there advances
+	// 7. A counter that did not reset would stand at 7 and advance 1.
+	const src = "abcdef\nx\ty"
+	want := "abcdef\nx" + strings.Repeat(" ", 7) + "y"
+
+	if got := expandTabs(src); got != want {
+		t.Errorf("expandTabs(%q) = %q, want %q: the tab stop on the second line is counted from the start of that line, not of the string",
+			src, got, want)
+	}
+	if got := fxExpandTabs(src); got != want {
+		t.Errorf("fxExpandTabs(%q) = %q, want %q: the harness's own copy of the rule disagrees with the rule",
+			src, got, want)
+	}
+	// And through the exported surface the renderer reaches it by. Pad
+	// expands tabs before it measures, and at width 0 it has nothing to add,
+	// so what comes back is the expansion alone.
+	if got := Pad(src, 0); got != want {
+		t.Errorf("Pad(%q, 0) = %q, want %q", src, got, want)
+	}
+	if got, wantWidth := W(src), ansi.StringWidth(want); got != wantWidth {
+		t.Errorf("W(%q) = %d, want %d", src, got, wantWidth)
+	}
+}
+
 // --------------------------------------------------------------------- Wrap
 
 // §4.4 and §6.2: Wrap honours existing newlines as paragraph breaks, never
