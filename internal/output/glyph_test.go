@@ -12,10 +12,11 @@ import (
 // selecting the UTF-8 set on ja_JP passed the entire suite.
 //
 // glyphModeCases is declared at package scope and NOT inside the test,
-// because Task 4's probeGlyphMode drives the same table: the contract
-// mutation harness of Task 11 asks which assertion noticed `IgnoreCJKTag`,
-// and it must ask it of the same cases this test runs, not of a second
-// weaker copy. One table, two drivers.
+// because probeGlyphMode in stream_contract_test.go drives the same table:
+// TestContractMutationHarness in mutation_test.go asks which assertion
+// noticed `IgnoreCJKTag`, and it must ask it of the same cases this test
+// runs, not of a second weaker copy. One table, two drivers. Measured:
+// the mutant is killed by glyph_mode_selection(6).
 var glyphModeCases = []struct {
 	name string
 	env  map[string]string
@@ -111,12 +112,24 @@ func TestIsCJKLocale(t *testing.T) {
 // rune count is not their cell width, and never here.
 //
 // A NOTE, NOT A DEFECT: with RUNEWIDTH_EASTASIAN=1 exported this test goes red
-// and is the only red in the package — measured, markerWidth(GlyphUTF8) is 2,
-// because `…` is East-Asian Ambiguous. That is the whole reason §4.5 gives the
-// marker an ASCII counterpart. CI exports no such variable, and §6.4 asks for a
-// sweep under exactly that setting in a SUBPROCESS of its own, so the variable
-// belongs to a later phase's environment rather than to this one's defences.
-// Nothing warns a developer who has it exported in their shell; this is that
+// — measured, markerWidth(GlyphUTF8) is 2, because `…` is East-Asian
+// Ambiguous. That is the whole reason §4.5 gives the marker an ASCII
+// counterpart.
+//
+// It is no longer the ONLY red, and the sentence that said so was written
+// before the acceptance corpus existed. Measured on this tree,
+// `RUNEWIDTH_EASTASIAN=1 go test ./internal/output/` fails SIX top-level
+// tests: TestGlyphWidths, TestAcceptanceGlobals (its glyph_widths subtest),
+// TestAcceptanceSweep, TestTableGridPairing, TestControlBudget28 and
+// TestTableMutantsRedenTheBlockChecks. They redden for one reason — the corpus
+// draws UTF-8 box drawing at every width while the process measures it narrow.
+//
+// TestAmbiguousWideSweep is NOT among them, and that is by construction: it
+// forces the convention in a child of its own and asserts nothing about the
+// parent's, so it passes with the variable exported and without it. CI exports
+// no such variable, and §6.4's sweep under that setting is
+// TestAmbiguousWideSweep in ambiguous_wide_test.go rather than a developer's
+// shell. Nothing warns a developer who has it exported in theirs; this is that
 // warning.
 func TestGlyphWidths(t *testing.T) {
 	if got := markerWidth(GlyphUTF8); got != 1 {

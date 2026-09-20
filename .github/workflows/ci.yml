@@ -64,6 +64,53 @@ jobs:
             fi
           fi
 
+  mutation:
+    name: Output mutation harness (hard gate)
+    runs-on: ubuntu-latest
+    # The harness re-runs the whole corpus once per mutant — measured at about
+    # two minutes in a 10-core container. This ceiling sits ABOVE the target's
+    # own `-timeout 20m` on purpose: a genuine hang should produce Go's stack
+    # dump naming the test, not a bare cancellation.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version: "1.26.6"
+      # The lint job above never sees internal/output/mutation_test.go:
+      # golangci-lint does not compile a //go:build-tagged file, so ~700 lines
+      # would ship unlinted without this step.
+      #
+      # The linter is installed and invoked directly, at the version the lint
+      # job pins, rather than through golangci-lint-action with
+      # `args: --build-tags mutation`. That is deliberate: an `args:` the
+      # action did not forward would leave a GREEN step over an unlinted file,
+      # so the failure would be silent rather than loud. Running
+      # `make lint-mutation` takes the forwarding out of the chain instead of
+      # trusting it, and makes CI execute the same string a developer runs
+      # locally. The flag itself is not taken on trust either: with a lint
+      # error planted in the tagged file, plain `golangci-lint run` stays at
+      # 0 issues while `make lint-mutation` reports it and exits non-zero.
+      #
+      # WHAT THIS COSTS, since the paragraph above only names what it buys:
+      # `go install` resolves the linter from the module proxy at job time, so
+      # this step is the one place in this workflow not pinned to a commit SHA
+      # — measured, 17 of 17 `uses:` here are — and it trades the action's
+      # own download caching for a build on every run, 26s in a 10-core
+      # container with a cold build cache. The version is pinned exactly and
+      # the module checksum database still authenticates the download, so what
+      # is given up is the stronger pin and the cache, not the integrity
+      # check.
+      - name: Lint what the build tag hides from the lint job
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          make lint-mutation
+      - name: Plant every defect switch and require each one dies
+        run: make test-mutation
+
   datapath:
     runs-on: ubuntu-latest
     # Hard ceiling: every docker command in the gate is also timeout-wrapped, but

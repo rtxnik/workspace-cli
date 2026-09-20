@@ -63,6 +63,24 @@ func Detail(msg string) { emit(Err(), shapeDetail, msg) }
 // plan's repository gates. The marker belongs to the PR that starts moving
 // those call sites, where the flags are the work list rather than noise.
 func Die(msg string) {
+	if mutants.DieUnwrapped {
+		// The defect §6.1 cannot otherwise see: Die is swept only through
+		// renderMessage, so a change made in Die itself — here, printing the
+		// message as one unwrapped line — leaves the whole corpus green.
+		// probeDie in message_test.go is what reaches it, and it has to carry
+		// this switch across a process boundary to do so.
+		//
+		// THE BRANCH IS DELIBERATELY SINGLE-AXIS. It is renderMessage's own
+		// output with NoMessageWrap on, for Die alone: the mark, the role and
+		// the sanitising all survive and only the wrap goes. An earlier form
+		// dropped s.paint too, which made one switch stand for two changes —
+		// invisible in probeDie, whose child writes to a pipe at ColourNone
+		// where paint emits nothing, and exactly the ambiguity this harness
+		// exists to catch everywhere else.
+		s := Err()
+		_, _ = fmt.Fprintln(s, s.paint(shapeFail.role, stateMark(shapeFail.state, s.mode)+" "+Sanitise(msg)))
+		os.Exit(1)
+	}
 	emit(Err(), shapeFail, msg)
 	os.Exit(1)
 }
@@ -76,6 +94,9 @@ func Die(msg string) {
 // call sites, and reporting a failed stderr write on stderr is not a thing
 // that can work.
 func emit(s *Stream, shape messageShape, msg string) {
+	if mutants.MessagesToStdout {
+		s = Out() // §4.7 inverted: chatter written onto the answer's stream
+	}
 	_, _ = fmt.Fprintln(s, renderMessage(s, shape, msg))
 }
 
@@ -95,6 +116,11 @@ func renderMessage(s *Stream, shape messageShape, msg string) string {
 	prefix := strings.Repeat(" ", shape.indent)
 	if shape.hasState {
 		prefix = stateMark(shape.state, s.mode) + " "
+	}
+	if mutants.NoMessageWrap {
+		// One unwrapped line: what the five helpers did before this file
+		// existed, and the reason the sweep reaches them at all.
+		return s.paint(shape.role, prefix+msg)
 	}
 
 	budget := s.budget()

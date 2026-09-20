@@ -35,6 +35,11 @@ const (
 
 // marker returns the truncation marker for a glyph mode.
 func marker(mode GlyphMode) string {
+	if mutants.ASCIIMarkerMismeasure {
+		// The three-cell ASCII marker emitted in every mode, while
+		// markerWidth below reserves one cell for it.
+		return markerASCII
+	}
 	if mode == GlyphASCII {
 		return markerASCII
 	}
@@ -44,7 +49,15 @@ func marker(mode GlyphMode) string {
 // markerWidth is the display width of the truncation marker in this mode.
 // It is also the floor of §4.3 step 5(b): a column narrower than its own
 // marker could not place it and would either overflow or silently clip.
-func markerWidth(mode GlyphMode) int { return W(marker(mode)) }
+func markerWidth(mode GlyphMode) int {
+	if mutants.ASCIIMarkerMismeasure {
+		return 1 // wrong on purpose: "..." is three cells
+	}
+	if mutants.NoEllipsisReserve {
+		return 0
+	}
+	return W(marker(mode))
+}
 
 // asciiBorder is the ASCII counterpart of lipgloss.RoundedBorder():
 // `- | + + + + + + + + +` for the eleven Ambiguous box-drawing glyphs.
@@ -90,7 +103,11 @@ func glyphModeFromEnv(getenv func(string) string) GlyphMode {
 		if locale == "" {
 			continue
 		}
-		if !isUTF8Locale(locale) || isCJKLocale(locale) {
+		// The CJK clause is the half §4.5 adds over a plain UTF-8 check, and
+		// IgnoreCJKTag drops it: a ja_JP.UTF-8 terminal then keeps the UTF-8
+		// glyph set whose marker and eleven border glyphs it draws at two
+		// cells.
+		if !isUTF8Locale(locale) || (isCJKLocale(locale) && !mutants.IgnoreCJKTag) {
 			return GlyphASCII
 		}
 		return GlyphUTF8

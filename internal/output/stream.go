@@ -77,14 +77,31 @@ func NewStream(f *os.File) *Stream { return newStream(f, os.Getenv, terminalWidt
 // a test that can only look at the resolved number.
 func newStream(f *os.File, getenv func(string) string, probe widthProbe) *Stream {
 	fd := f.Fd()
-	tty := term.IsTerminal(fd)
+	if mutants.ProbeWrongFd {
+		fd = 0 // stdin — the defect this seam exists to make visible
+	}
+	// term.IsTerminal reads f.Fd() rather than fd so that ProbeWrongFd moves
+	// the WIDTH probe and nothing else. Measured over /dev/ptmx with the
+	// switch on, reading the local instead gives tty=false level=0 against
+	// the clean tty=true level=2, so one switch would perturb TTY status and
+	// colour level as well and the mutant would be a different defect from
+	// the one it names. Reading f.Fd() here, the same run gives tty=true
+	// level=2 and only the probed fd moves.
+	tty := term.IsTerminal(f.Fd())
 	// Width, TTY status and colour are all resolved from f — the descriptor
-	// this Stream writes to — and never from another one (§4.1).
+	// this Stream writes to — and never from another one (§4.1). The two
+	// locals are that rule made explicit, and they are f and tty unless the
+	// switch below plants the measured defect of probing stdout for every
+	// stream.
+	colourFd, colourTTY := f, tty
+	if mutants.ColourProbedOnStdout {
+		colourFd, colourTTY = os.Stdout, term.IsTerminal(os.Stdout.Fd())
+	}
 	return NewStreamAt(
 		f,
 		ResolveWidth(fd, getenv, probe),
 		tty,
-		probeColour(f, tty, getenv),
+		probeColour(colourFd, colourTTY, getenv),
 		glyphModeFromEnv(getenv) == GlyphASCII,
 	)
 }
@@ -152,12 +169,18 @@ func newStdStream(f *os.File, err bool) *Stream {
 // imports this package today, so -race is currently quiet — the race is
 // latent, which is exactly why a nil check would survive review.
 func Out() *Stream {
+	if mutants.NoStreamMemo {
+		return newStdStream(os.Stdout, false)
+	}
 	outOnce.Do(func() { outStream = newStdStream(os.Stdout, false) })
 	return outStream
 }
 
 // Err is stderr: everything about producing the answer (§4.7).
 func Err() *Stream {
+	if mutants.NoStreamMemo {
+		return newStdStream(os.Stderr, true)
+	}
 	errOnce.Do(func() { errStream = newStdStream(os.Stderr, true) })
 	return errStream
 }
@@ -242,7 +265,12 @@ func terminalWidth(fd uintptr) (int, error) {
 func ResolveWidth(fd uintptr, getenv func(string) string, probe widthProbe) int {
 	if v := strings.TrimSpace(getenv("COLUMNS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return clampBudget(n)
+			if !mutants.ColumnsRejectBelowMin || n >= MinWidth {
+				return clampBudget(n)
+			}
+			// The rejected behaviour of accepted finding #13, planted: a
+			// COLUMNS below MinWidth falls through to the probe, so COLUMNS=28
+			// in a pipe renders unbounded while COLUMNS=29 renders at 29.
 		}
 	}
 	if probe != nil {

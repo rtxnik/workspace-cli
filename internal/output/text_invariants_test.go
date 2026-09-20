@@ -15,9 +15,23 @@ import (
 // The §6.1 width sweep is end-to-end: it can only see a cut defect that
 // survives the allocator, the padding and the block geometry wrapped around
 // it, and when it does go red it says a render overflowed, not which
-// primitive let it. These are properties of cutAt and cutAtEnd THEMSELVES,
-// stated over a corpus of hostile strings and every budget from 0 to 40, so
-// they hold for inputs nobody thought to write a golden for.
+// primitive let it. The sweep exists now, so the difference was measured
+// rather than argued. With firstCell stepping by RUNE instead of by grapheme
+// cluster — a defect that does survive all three layers — the two report the
+// same thing like this:
+//
+//	TestAcceptanceSweep  width_budget 2398 violations, first
+//	                     `table/emoji-presentation @ 29 (mode 0): line 1 is
+//	                     44 cells, budget 29`, plus grid_pairing 3290
+//	this file            cut_boundary 88, first `cutAtEnd(
+//	                     emoji-presentation-run, 1) = … cut inside a grapheme
+//	                     cluster at byte 63`, plus cut_budget 230 and
+//	                     cut_maximal 163
+//
+// One names a fixture and a width; the other names the function, the input and
+// the byte. These are properties of cutAt and cutAtEnd THEMSELVES, stated over
+// a corpus of hostile strings and every budget from 0 to 40, so they hold for
+// inputs nobody thought to write a golden for.
 //
 // The measurement here is ansi.StringWidth and never the package's own W: a
 // check that measured with the function under test would agree with a defect
@@ -381,9 +395,14 @@ func TestCutMeasuredDefect(t *testing.T) {
 
 // §4.4: Sanitise strips CSI and OSC sequences and C0/C1 controls and PRESERVES
 // tab and newline. Preserving newline is what makes a multi-line upstream
-// error wrap as paragraphs; preserving tab is what allows a tab to reach a
-// table cell, where ansi.StringWidth measures U+0009 at zero cells and the
-// terminal does not — the defect Task 10 fixes at the renderer.
+// error wrap as paragraphs.
+//
+// Preserving tab is a statement about this function alone, and it no longer
+// means a tab reaches the terminal: expandTabs in text.go replaces it with
+// spaces to the next 8-column stop at every primitive that measures, cuts,
+// pads or wraps, because ansi.StringWidth measures U+0009 at zero cells and a
+// terminal does not. The byte survives HERE so that a caller off the render
+// path — --json — still has it; the cases below pin that and nothing more.
 func TestSanitise(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{"plain", "ws workspace create api", "ws workspace create api"},
@@ -581,6 +600,59 @@ func TestPadMeasuresCells(t *testing.T) {
 	}
 	if got := PadLeft("api", 6); got != "   api" {
 		t.Errorf("PadLeft(%q, 6) = %q", "api", got)
+	}
+}
+
+// §4.4's tab rule on the one axis no render can reach: expandTabs counts
+// display columns FROM THE START OF EACH LOGICAL LINE, and the reset is the
+// `case '\n'` branch.
+//
+// WHY THE PRIMITIVE AND NOT A FIXTURE. Measured before this test, that branch
+// had a coverage count of 0 — no string in the corpus carried a tab AND a
+// newline — and deleting it outright left the whole package suite green, so
+// the column reset was shipping unguarded.
+//
+// A corpus fixture buys the coverage and not the guard, and that was measured
+// rather than reasoned about. Putting a tab on the second line of
+// fxMultilineErr — §6.2's multi-line upstream error, which reaches
+// Problem.Cause, a Check note, a KV value and two message helpers — takes the
+// branch from 0 to 3982 executions, and with the branch then deleted the suite
+// is STILL green. Wrap splits each paragraph on its whitespace and re-joins it
+// on single spaces, which its own header pins (Wrap("a\tb", 80) is ["a b"]), so
+// the expansion is erased before any assertion sees it; and the one place the
+// harness adjudicates a tab independently — fxCellSource, through fxExpandTabs
+// — is a GRID CELL, which cannot carry a newline without breaking gridFields'
+// line count first. Measured on the same plant: Problem.Render over that Cause
+// is BYTE-IDENTICAL with the branch and without it, while expandTabs itself
+// returns two different strings and W returns 56 against 61.
+//
+// So the rule is asserted here, against a literal this file owns. Only
+// expandTabs can satisfy it: fxExpandTabs, the harness's independent copy in
+// corpus_test.go, is a second opinion beside the expectation rather than the
+// expectation itself.
+func TestExpandTabsResetsTheColumnAtEachLine(t *testing.T) {
+	// "abcdef" is 6 cells, so a tab on THAT line advances 2. The next line
+	// starts the count again at 0, "x" is 1 cell, and the tab there advances
+	// 7. A counter that did not reset would stand at 7 and advance 1.
+	const src = "abcdef\nx\ty"
+	want := "abcdef\nx" + strings.Repeat(" ", 7) + "y"
+
+	if got := expandTabs(src); got != want {
+		t.Errorf("expandTabs(%q) = %q, want %q: the tab stop on the second line is counted from the start of that line, not of the string",
+			src, got, want)
+	}
+	if got := fxExpandTabs(src); got != want {
+		t.Errorf("fxExpandTabs(%q) = %q, want %q: the harness's own copy of the rule disagrees with the rule",
+			src, got, want)
+	}
+	// And through the exported surface the renderer reaches it by. Pad
+	// expands tabs before it measures, and at width 0 it has nothing to add,
+	// so what comes back is the expansion alone.
+	if got := Pad(src, 0); got != want {
+		t.Errorf("Pad(%q, 0) = %q, want %q", src, got, want)
+	}
+	if got, wantWidth := W(src), ansi.StringWidth(want); got != wantWidth {
+		t.Errorf("W(%q) = %d, want %d", src, got, wantWidth)
 	}
 }
 

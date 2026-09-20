@@ -20,9 +20,18 @@ import (
 // probe, asserted as behaviour.
 //
 // None of this is reachable from a render test: the §6.1 sweep renders through
-// NewStreamAt and never resolves a real file descriptor. With no test between
-// them, probing the width of the wrong fd, regressing the COLUMNS clamp and
-// resolving every stream's colour from stdout all leave the suite green.
+// NewStreamAt and never resolves a real file descriptor. The sweep exists now,
+// so that is measured rather than predicted — each defect was planted in
+// stream.go itself and both TestAcceptanceSweep and the whole untagged package
+// were run against it:
+//
+//	newStream probing fd 0, not its own fd        sweep ok, resolve_width red
+//	COLUMNS below MinWidth rejected, not clamped  sweep ok, resolve_width red
+//	colour probed on os.Stdout for every stream   sweep ok, stream_identity red
+//
+// In each case the only red anywhere in the package was one subtest of
+// TestStreamContract below. With no test between the render sweep and the file
+// descriptor, all three would leave the suite green.
 
 // ------------------------------------------------------------ result sink
 //
@@ -39,8 +48,8 @@ import (
 // same invariant bodies a second time over deliberately wrong primitives, with
 // named assertions REQUIRED to come back red. Folding the two would change no
 // assertion, would rewrite two settled files for nothing gained, and would not
-// spare a later phase's harness from knowing both shapes anyway. So the
-// duplication is declared here rather than left to look like an oversight.
+// spare the harnesses in mutation_test.go from knowing both shapes anyway. So
+// the duplication is declared here rather than left to look like an oversight.
 //
 // Assertions report HERE rather than into *testing.T so that a mutation
 // harness can run exactly the same assertion BODIES and ask which ones went
@@ -100,10 +109,11 @@ func (r *results) report(t *testing.T) {
 // real environment rather than a pass over the render corpus.
 //
 // It reports into the same results sink the §6.1 assertions use, and returns a
-// DIGEST OF WHAT IT OBSERVED. The digest is what lets Task 11's contract
-// mutation harness tell a mutant that changed behaviour from one that changed
-// nothing at all — the same job the sha256 over rendered bytes does for the
-// corpus harness, and for the same reason: a mutation that perturbs nothing
+// DIGEST OF WHAT IT OBSERVED. The digest is what lets
+// TestContractMutationHarness in mutation_test.go tell a mutant that changed
+// behaviour from one that changed nothing at all — the same job the sha256
+// over rendered bytes does for the corpus harness, and for the same reason:
+// a mutation that perturbs nothing
 // cannot be killed by anything, and reporting it as killed would be the
 // harness certifying coverage it does not have.
 //
@@ -133,13 +143,14 @@ type contractProbe struct {
 	run  func(t *testing.T, r *results) string
 }
 
-// contractProbes is the registry Task 11 plants its contract defects against.
+// contractProbes is the registry TestContractMutationHarness in
+// mutation_test.go plants its contract defects against.
 //
 // The two MESSAGE probes are not here: probeMessageRouting and probeDie live
 // in message_test.go and are registered by messageProbes(), because the
-// helpers do not have their §4.7 behaviour until Task 5 lands and a probe over
-// them here would be red at THIS task's own acceptance gate. Task 11 runs
-// append(contractProbes(), messageProbes()...).
+// helpers did not have their §4.7 behaviour when this registry landed and a
+// probe over them here would have been red at that point's own acceptance
+// gate. The harness runs append(contractProbes(), messageProbes()...).
 func contractProbes() []contractProbe {
 	return []contractProbe{probeStreamIdentity, probeResolveWidth, probeGlyphMode}
 }
@@ -553,7 +564,8 @@ var probeGlyphMode = contractProbe{
 // ------------------------------------------------------------ the tests
 
 // TestStreamContract runs every probe on the shipped behaviour. It is the
-// ordinary entry point; Task 11 runs the same bodies with a defect planted.
+// ordinary entry point; TestContractMutationHarness in mutation_test.go runs
+// the same bodies with a defect planted.
 func TestStreamContract(t *testing.T) {
 	for _, p := range contractProbes() {
 		t.Run(p.name, func(t *testing.T) {
