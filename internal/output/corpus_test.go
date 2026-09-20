@@ -467,6 +467,42 @@ func fxEscTable() fixture {
 	}
 }
 
+// fxCountsTable is the corpus's only right-aligned column, and it is here
+// because Col.Right shipped as exported API with nothing rendering it:
+// measured before this fixture, `grep -rn "Right: *true" internal/ cmd/`
+// returned nothing across the whole repository and the coverage profile gave
+// blocks.go's PadLeft branch (blocks.go:133.23,135.5) a count of 0. §4.4's
+// "right-align (counts, deltas)" is what the field is for, so the fixture is
+// the shape the field names: a run count and a signed delta.
+//
+// IT IS SIZED TO FIT AT EVERY SWEPT WIDTH, deliberately. Natural widths 7, 4
+// and 5 plus chrome 3(3−1)+4 = 10 come to 26 against a budget of 29 at
+// MinWidth, so nothing here is ever dropped, relaxed or truncated.
+// assertGridPairing's alignment clause only adjudicates a cell whose content
+// FITS its allocation — below that the cell is abbreviated and which end the
+// padding went on stops being the question — so a fixture that fits
+// everywhere puts every one of its cells in front of that clause at every
+// width. The cells that make the clause discriminate are the ones NARROWER
+// than their column: "37" and "5" against a four-cell RUNS, "+12" and "-4"
+// against a five-cell DELTA. At alloc == the cell's own width the field reads
+// " "+src+" " whichever way it was padded, and both spellings of the clause
+// hold.
+func fxCountsTable() *Table {
+	return &Table{
+		Cols: []Col{
+			{Title: "PROFILE", Prio: 1, Min: 7, Trunc: TruncTail},
+			{Title: "RUNS", Prio: 2, Min: 4, Trunc: TruncTail, Right: true},
+			{Title: "DELTA", Prio: 3, Min: 5, Trunc: TruncTail, Right: true},
+		},
+		Rows: [][]Cell{
+			fxRow(Text("go"), Text("1284"), Text("+12")),
+			fxRow(Text("python"), Text("37"), Text("-4")),
+			fxRow(Text("web"), Text("5"), Text("+1284")),
+		},
+		Caption: "3 profiles, 1326 runs since the last rebuild",
+	}
+}
+
 // ------------------------------------------------------------- the corpus
 
 // fxCorpus IS MEMOISED, AND THE MEMOISATION IS LOAD-BEARING.
@@ -526,6 +562,7 @@ func fxCorpusBuild() []fixture {
 		fxTabTable(),
 		fxEscTable(),
 		tableFixtureFrom("table/emoji-presentation", "§6.2 emoji-presentation sequences (base + U+FE0F)", fxEmojiTable()),
+		tableFixtureFrom("table/right-aligned-counts", "§4.4 right-aligned counts and deltas (Col.Right)", fxCountsTable()),
 	}...)
 
 	problems := []struct {

@@ -284,6 +284,44 @@ var assertGridPairing = sweepAssertion{
 					if content != src {
 						r.fail("grid_pairing", "%s @ %d (mode %d): %q allocated %d cells for %q but rendered %q — content lost",
 							rc.fx.name, rc.width, rc.mode, title, alloc, src, content)
+						continue
+					}
+					// WHICH END THE PADDING WENT ON, read from the UNTRIMMED
+					// field. Everything above this line reads the field
+					// through strings.TrimSpace or ansi.StringWidth, and
+					// left-padding and right-padding are indistinguishable to
+					// both — so §4.4's "right-align (counts, deltas)", a
+					// property of the exported Col.Right, had no assertion in
+					// this package that could be made to fail on it.
+					//
+					// The one cell of padding on each side is the 2n half of
+					// the 3(n−1)+4 chrome, so a left-aligned cell's field
+					// begins with " " + src and a right-aligned one's ends
+					// with src + " ". Where alloc equals the cell's own width
+					// both spellings hold, which is why the corpus has to
+					// carry a Col.Right cell NARROWER than its column for this
+					// to discriminate; TestAcceptanceSweep asserts that it
+					// does rather than leaving it to a fixture edit.
+					//
+					// THE HEADER ROW IS EXCLUDED, measured rather than
+					// assumed: renderGrid draws every heading through Pad,
+					// left-aligned, whatever its column's Right says. That is
+					// the shipped layer's behaviour, and an assertion that
+					// demanded otherwise here would redden on it rather than
+					// on a defect.
+					if rowIdx > 0 {
+						switch {
+						case rc.fx.cols[col].Right:
+							if !strings.HasSuffix(field, src+" ") {
+								r.fail("grid_pairing", "%s @ %d (mode %d): %q is a Right column, but its field %q does not end in %q plus the padding cell",
+									rc.fx.name, rc.width, rc.mode, title, field, src)
+							}
+						default:
+							if !strings.HasPrefix(field, " "+src) {
+								r.fail("grid_pairing", "%s @ %d (mode %d): %q is left-aligned, but its field %q does not begin with the padding cell plus %q",
+									rc.fx.name, rc.width, rc.mode, title, field, src)
+							}
+						}
 					}
 				default:
 					// A cut that lands on a wide cluster loses a cell, because a
@@ -1251,19 +1289,22 @@ var assertStateStructure = sweepAssertion{
 		// Parts (3) and (4) report on ColState columns and on nothing else, so
 		// a table with none of them can be answered without an Allocate and a
 		// gridFields — both of which assertGridPairing has already run over
-		// this same render. Measured: 9 of the 18 table fixtures declare no
-		// state column, exactly half, which is 3,096 of the sweep's Allocate
-		// calls removed.
+		// this same render. Measured: 10 of the 19 table fixtures declare no
+		// state column, which is 3,440 of the sweep's Allocate calls removed.
 		//
 		// IT DOES NOT MAKE THE SWEEP FASTER, and the number is recorded here
-		// so nobody looks for the saving again. Measured five runs each way,
-		// the sweep is 4.15-4.30s with this early return and 4.18-4.32s
-		// without: one noise band. The cost is not in the assertions. Timed
-		// separately over the same 16,856 renders, building the renderCases
-		// alone takes 3.88s, and no single assertion in sweepAssertions()
-		// adds more than 64ms on top of it. A harness that needs the sweep to
-		// be cheaper has to render fewer times — fewer widths or fewer
-		// fixtures — not assert less.
+		// so nobody looks for the saving again. Measured five runs each way ON
+		// THE 49-FIXTURE CORPUS THESE TIMINGS PREDATE — 16,856 renders, before
+		// table/right-aligned-counts took the sweep to 17,200 — the sweep is
+		// 4.15-4.30s with this early return and 4.18-4.32s without: one noise
+		// band. The cost is not in the assertions. Timed separately over those
+		// same 16,856 renders, building the renderCases alone takes 3.88s, and
+		// no single assertion in sweepAssertions() adds more than 64ms on top
+		// of it. The timings are left attributed to the run that produced them
+		// rather than restated over a sweep nobody has timed; what they
+		// support is durable, and a harness that needs the sweep to be cheaper
+		// has to render fewer times — fewer widths or fewer fixtures — not
+		// assert less.
 		hasStateCol := false
 		for _, col := range rc.fx.cols {
 			if col.Kind == ColState {
@@ -1640,6 +1681,39 @@ func TestAcceptanceSweep(t *testing.T) {
 	if allocStats.dropped == 0 || allocStats.relaxed == 0 || allocStats.squeezed == 0 || allocStats.captionOnly == 0 {
 		t.Errorf("the corpus does not reach every branch the §4.3 invariants police: %+v", allocStats)
 	}
+
+	// And what grid_pairing's ALIGNMENT clause had in front of it. That clause
+	// tells left padding from right padding, and it can only do so where a
+	// Col.Right cell is NARROWER than the column it sits in: at equal widths
+	// the field reads " "+src+" " whichever way it was padded and the clause
+	// is satisfied by both. A corpus with no such cell would leave the
+	// right-aligned half green over nothing, so the count is asserted rather
+	// than assumed — one fixture edit is all it takes to lose it.
+	padded := 0
+	for _, fx := range fxCorpus() {
+		if !fx.isTable {
+			continue
+		}
+		for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+			a := Allocate(fx.cols, fx.rows, fxBudget(sweepMaxWidth), mode)
+			for _, col := range a.Kept {
+				if !fx.cols[col].Right {
+					continue
+				}
+				for _, row := range fx.rows {
+					if col < len(row) && ansi.StringWidth(fxCellSource(row[col], mode)) < a.Widths[col] {
+						padded++
+					}
+				}
+			}
+		}
+	}
+	if padded == 0 {
+		t.Error("no cell of a Col.Right column is narrower than its allocation anywhere in the corpus: " +
+			"grid_pairing's right-alignment clause cannot fail")
+	}
+	t.Logf("  %d right-aligned cells are narrower than their column at width %d, which is what lets the "+
+		"alignment clause tell left padding from right", padded, sweepMaxWidth)
 }
 
 // TestAcceptanceGlobals runs the assertions that need their own renders.
@@ -1671,19 +1745,24 @@ func TestAcceptanceGlobals(t *testing.T) {
 // reviewer must be told about rather than have absorbed silently. Record in
 // this comment what moved it and by how much, every time.
 //
-// Measured over 49 fixtures, 18 of them tables: 455 overflowing lines of 1171.
-// It moved twice while this corpus was being built, and each move is one table
-// fixture's worth of geometry at the floor:
+// Measured over 50 fixtures, 19 of them tables: 455 overflowing lines of 1189.
+// The pair has moved with every fixture set the corpus gained, and each move
+// is that set's worth of geometry at the floor:
 //
 //	43 fixtures, 16 tables                431 of 1109
 //	+ table/tab-in-cell and the fix       443 of 1123
 //	+ table/esc-in-cell                   455 of 1137
 //	+ the four block escape fixtures      455 of 1171 (they add 34 lines at
 //	                                      the floor and overflow none of them)
+//	+ table/right-aligned-counts          455 of 1189 (18 lines at the floor,
+//	                                      none of them over it: the fixture's
+//	                                      natural widths and chrome come to 26
+//	                                      cells, under the budget everywhere)
 //
 // The sweep's own line count moved the other way across the tab fix, 111464 to
 // 111120, because expanded tabs are wider than the zero cells the layer used
-// to measure them at and the wraps land differently.
+// to measure them at and the wraps land differently. It has grown with the
+// corpus since: 117,700 lines over 49 fixtures, 120,482 over 50.
 const control28Overflows = 455
 
 func TestControlBudget28(t *testing.T) {
