@@ -353,7 +353,8 @@ func (run mutationRun) vacuous() bool { return !run.perturbed }
 // and over MinWidth..114 (86 widths) in 47.67s — 4.23s against 2.15s per
 // mutant. The corpus has gained one fixture since and the full-roster run is
 // 100.24s; only the 172-width half of the pair has been re-timed, and the
-// conclusion rests on the ratio rather than on either figure. BOTH DIRECTIONS OF THE COVERAGE TABLE CAME BACK IDENTICAL,
+// conclusion rests on the ratio rather than on either figure. BOTH DIRECTIONS
+// OF THE COVERAGE TABLE CAME BACK IDENTICAL,
 // diffed with the per-assertion counts stripped: the same mutants killed, by
 // the same assertions, with the same one declared vacuous and none surviving.
 // So the saving is real, and the null result is recorded here rather than left

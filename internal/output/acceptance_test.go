@@ -1701,7 +1701,17 @@ func TestAcceptanceSweep(t *testing.T) {
 					continue
 				}
 				for _, row := range fx.rows {
-					if col < len(row) && ansi.StringWidth(fxCellSource(row[col], mode)) < a.Widths[col] {
+					if col >= len(row) {
+						continue
+					}
+					// An EMPTY cell does not discriminate: its field is
+					// padding either way, so both spellings of the clause
+					// hold whatever the renderer did. Not live today — every
+					// cell of the one Right column is non-empty — but a
+					// counter that accepted one would certify a corpus on
+					// which the clause cannot fail.
+					src := fxCellSource(row[col], mode)
+					if src != "" && ansi.StringWidth(src) < a.Widths[col] {
 						padded++
 					}
 				}

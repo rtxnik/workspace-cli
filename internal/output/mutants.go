@@ -117,12 +117,15 @@ type mutantSwitches struct {
 	//	130 of them, 70 through the abbreviation-width clause and 60 through
 	//	gridFields' bordered-row check;
 	//
-	//	the corpus sweep TestMutationHarness runs — 16,856 renders over 49
-	//	fixtures — reports grid_pairing 1465 violations and
-	//	state_mark_and_word 681, first `table/list @ 29 (mode 0): "STATUS"
-	//	allocated 9 cells but rendered 1 ("…")`. grid_pairing there is a NAME
-	//	rather than one body: assertGridPairing and assertStateStructure both
-	//	report through gridFields, so 1465 is the total across the two.
+	//	the corpus sweep TestMutationHarness runs — 17,200 renders over 50
+	//	fixtures, and that pair moves with every fixture the corpus gains;
+	//	TestAcceptanceSweep prints it at run time — reports grid_pairing 1465
+	//	violations and state_mark_and_word 681, first `table/list @ 29
+	//	(mode 0): "STATUS" allocated 9 cells but rendered 1 ("…")`. Those
+	//	three did NOT move when the corpus gained its right-aligned fixture,
+	//	which has no state column and is never truncated. grid_pairing is a
+	//	NAME rather than one body: assertGridPairing and assertStateStructure
+	//	both report through gridFields, so 1465 is the total across the two.
 	//
 	// TestTableMutantsRedenTheBlockChecks plants it and requires that red.
 	PaintBeforeFit bool
