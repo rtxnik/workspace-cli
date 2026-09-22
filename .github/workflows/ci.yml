@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version-file: go.mod
       - run: go vet ./...
       - name: assert-ran guard self-test (H7 anti-false-green guard-of-the-guard)
         run: bash scripts/ci/assert-ran_test.sh
@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version-file: go.mod
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         with:
           version: v2.12.2
@@ -78,7 +78,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version-file: go.mod
       # The lint job above never sees internal/output/mutation_test.go:
       # golangci-lint does not compile a //go:build-tagged file, so ~700 lines
       # would ship unlinted without this step.
@@ -144,7 +144,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version-file: go.mod
       - name: Preflight — load TPROXY kernel modules
         run: |
           sudo modprobe xt_TPROXY xt_socket || {
@@ -225,7 +225,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version-file: go.mod
           cache: false
       - name: Install minisign
         run: |
@@ -275,6 +275,6 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version-file: go.mod
       - name: Run govulncheck gate
         run: bash scripts/ci/govulncheck-gate.sh
