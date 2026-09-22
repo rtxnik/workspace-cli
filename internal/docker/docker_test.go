@@ -12,6 +12,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -20,7 +21,7 @@ import (
 
 // mockClient implements DockerClient for testing.
 type mockClient struct {
-	inspectFn           func(ctx context.Context, id string) (types.ContainerJSON, error)
+	inspectFn           func(ctx context.Context, id string) (container.InspectResponse, error)
 	createFn            func(ctx context.Context, cfg *container.Config, host *container.HostConfig, net *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error)
 	startFn             func(ctx context.Context, id string, opts container.StartOptions) error
 	stopFn              func(ctx context.Context, id string, opts container.StopOptions) error
@@ -31,15 +32,15 @@ type mockClient struct {
 	renameFn            func(ctx context.Context, id, newName string) error
 	networkConnectFn    func(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error
 	networkDisconnectFn func(ctx context.Context, networkID, containerID string, force bool) error
-	imageInspFn         func(ctx context.Context, id string) (types.ImageInspect, []byte, error)
+	imageInspFn         func(ctx context.Context, id string) (image.InspectResponse, []byte, error)
 	pingFn              func(ctx context.Context) (types.Ping, error)
 }
 
-func (m *mockClient) ContainerInspect(ctx context.Context, id string) (types.ContainerJSON, error) {
+func (m *mockClient) ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error) {
 	if m.inspectFn != nil {
 		return m.inspectFn(ctx, id)
 	}
-	return types.ContainerJSON{}, errdefs.NotFound(errors.New("not found"))
+	return container.InspectResponse{}, errdefs.NotFound(errors.New("not found"))
 }
 
 func (m *mockClient) ContainerCreate(ctx context.Context, cfg *container.Config, host *container.HostConfig, net *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error) {
@@ -112,11 +113,11 @@ func (m *mockClient) NetworkDisconnect(ctx context.Context, networkID, container
 	return nil
 }
 
-func (m *mockClient) ImageInspectWithRaw(ctx context.Context, id string) (types.ImageInspect, []byte, error) {
+func (m *mockClient) ImageInspectWithRaw(ctx context.Context, id string) (image.InspectResponse, []byte, error) {
 	if m.imageInspFn != nil {
 		return m.imageInspFn(ctx, id)
 	}
-	return types.ImageInspect{}, nil, errdefs.NotFound(errors.New("not found"))
+	return image.InspectResponse{}, nil, errdefs.NotFound(errors.New("not found"))
 }
 
 func (m *mockClient) Ping(ctx context.Context) (types.Ping, error) {
@@ -149,10 +150,10 @@ func withMock(mock *mockClient) func() {
 
 func TestProxyStatus_Running(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{
 						Running:   true,
 						StartedAt: "2025-01-01T00:00:00Z",
 					},
@@ -177,10 +178,10 @@ func TestProxyStatus_Running(t *testing.T) {
 
 func TestProxyStatus_Stopped(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: false},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: false},
 				},
 				Config: &container.Config{Image: "ws-proxy:latest"},
 			}, nil
@@ -212,8 +213,8 @@ func TestProxyStatus_NotFound(t *testing.T) {
 
 func TestProxyStatus_DockerError(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{}, errors.New("daemon unreachable")
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, errors.New("daemon unreachable")
 		},
 	}
 	defer withMock(mock)()
@@ -269,13 +270,13 @@ func TestProxyCheck_AllPass(t *testing.T) {
 		pingFn: func(_ context.Context) (types.Ping, error) {
 			return types.Ping{}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true},
 				},
 				Config: &container.Config{},
 			}, nil
@@ -574,13 +575,13 @@ func TestProxyFixRoutes_NetworkInspectError(t *testing.T) {
 
 func TestWaitForHealth_Healthy(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{
 						Running: true,
 						Status:  "running",
-						Health:  &types.Health{Status: "healthy"},
+						Health:  &container.Health{Status: "healthy"},
 					},
 				},
 				Config: &container.Config{},
@@ -596,10 +597,10 @@ func TestWaitForHealth_Healthy(t *testing.T) {
 
 func TestWaitForHealth_NoHealthCheck(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true, Status: "running", Health: nil},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true, Status: "running", Health: nil},
 				},
 				Config: &container.Config{},
 			}, nil
@@ -616,13 +617,13 @@ func TestWaitForHealth_NoHealthCheck(t *testing.T) {
 
 func TestWaitForHealth_Unhealthy(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{
 						Running: true,
 						Status:  "running",
-						Health:  &types.Health{Status: "unhealthy"},
+						Health:  &container.Health{Status: "unhealthy"},
 					},
 				},
 				Config: &container.Config{},
@@ -650,18 +651,18 @@ func TestWaitForHealth_SlowCreatedStartTolerated(t *testing.T) {
 	shrinkHealthTimers(t)
 	var polls int
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
 			polls++
 			if polls <= 2 {
 				// Still coming up: not running, non-terminal, healthcheck "starting".
-				return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: false, Status: "created",
-						Health: &types.Health{Status: "starting"}}},
+				return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: false, Status: "created",
+						Health: &container.Health{Status: "starting"}}},
 					Config: &container.Config{}}, nil
 			}
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true, Status: "running",
-					Health: &types.Health{Status: "healthy"}}},
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true, Status: "running",
+					Health: &container.Health{Status: "healthy"}}},
 				Config: &container.Config{}}, nil
 		},
 	}
@@ -679,10 +680,10 @@ func TestWaitForHealth_SlowCreatedStartTolerated(t *testing.T) {
 // and fail FAST — well before the timeout — instead of reporting healthy.
 func TestWaitForHealth_ExitedFailsFast(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
 			// Crashed: terminal "exited", no healthcheck ever reported.
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: false, Status: "exited", Health: nil}},
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: false, Status: "exited", Health: nil}},
 				Config: &container.Config{}}, nil
 		},
 	}
@@ -705,9 +706,9 @@ func TestWaitForHealth_ExitedFailsFast(t *testing.T) {
 // warning (liveness unverified) instead of returning a silent green.
 func TestWaitForHealth_NoHealthcheckSurfacesWarning(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true, Status: "running", Health: nil}},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true, Status: "running", Health: nil}},
 				Config: &container.Config{}}, nil
 		},
 	}
@@ -762,10 +763,10 @@ func TestBindMountIsWholeDir_DetectsLegacySingleFile(t *testing.T) {
 // shape `<host-dir>:/etc/xray:ro`.
 func TestBindMountIsWholeDir_WholeDirBind(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true},
 					HostConfig: &container.HostConfig{
 						Binds: []string{"/home/test/.config/xray:/etc/xray:ro"},
 					},
@@ -794,10 +795,10 @@ func TestBindMountIsWholeDir_WholeDirBind(t *testing.T) {
 // single-file shape `<host-file>:/etc/xray/config.json:ro`.
 func TestBindMountIsWholeDir_LegacySingleFile(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true},
 					HostConfig: &container.HostConfig{
 						Binds: []string{"/home/test/.config/xray/config.json:/etc/xray/config.json:ro"},
 					},
@@ -829,10 +830,10 @@ func TestBindMountIsWholeDir_LegacySingleFile(t *testing.T) {
 // to recognize this form and falsely reported a legacy single-file bind.
 func TestBindMountIsWholeDir_TrailingSlash(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true},
 					HostConfig: &container.HostConfig{
 						// docker-normalized form: ProxyUp writes "/etc/xray/"
 						// with a trailing slash on the container path.
@@ -865,10 +866,10 @@ func TestBindMountIsWholeDir_TrailingSlash(t *testing.T) {
 // API version. Symmetrical companion of TestBindMountIsWholeDir_TrailingSlash.
 func TestBindMountIsWholeDir_NoSlash(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true},
 					HostConfig: &container.HostConfig{
 						Binds: []string{"/home/test/.config/xray:/etc/xray:ro"},
 					},
@@ -899,10 +900,10 @@ func TestBindMountIsWholeDir_NoSlash(t *testing.T) {
 // named failure.
 func TestBindMountIsWholeDir_SingleFile(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true},
 					HostConfig: &container.HostConfig{
 						Binds: []string{"/home/test/.config/xray/config.json:/etc/xray/config.json:ro"},
 					},
@@ -932,10 +933,10 @@ func TestVerifyProxyReadyForReload_HappyPath(t *testing.T) {
 	cfg := testCfg()
 	wholeDirHost := filepath.Dir(cfg.XrayConfig)
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{
 						Running: true,
 						Status:  "running",
 					},
@@ -972,10 +973,10 @@ func TestVerifyProxyReadyForReload_ContainerNotFound(t *testing.T) {
 
 func TestVerifyProxyReadyForReload_ContainerStopped(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{
 						Running: false,
 						Status:  "exited",
 					},
@@ -1002,10 +1003,10 @@ func TestVerifyProxyReadyForReload_ContainerStopped(t *testing.T) {
 func TestVerifyProxyReadyForReload_LegacyBind(t *testing.T) {
 	cfg := testCfg()
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{
 						Running: true,
 						Status:  "running",
 					},
@@ -1033,8 +1034,8 @@ func TestVerifyProxyReadyForReload_LegacyBind(t *testing.T) {
 
 func TestVerifyProxyReadyForReload_InspectError(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{}, errors.New("daemon unreachable")
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, errors.New("daemon unreachable")
 		},
 	}
 	defer withMock(mock)()
@@ -1062,8 +1063,8 @@ func TestProxyUp_HostConfigHasTproxySysctls(t *testing.T) {
 
 	var gotHost *container.HostConfig
 	mock := &mockClient{
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil // image present
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil // image present
 		},
 		createFn: func(_ context.Context, _ *container.Config, host *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
 			gotHost = host
@@ -1121,8 +1122,8 @@ func TestProxyUp_ForeignIPAbortsBeforeCreate(t *testing.T) {
 
 	created := false
 	mock := &mockClient{
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil // image present
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil // image present
 		},
 		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
 			return network.Inspect{
@@ -1166,8 +1167,8 @@ func TestProxyUp_OwnAndBackupEndpointsNotForeign(t *testing.T) {
 
 	created := false
 	mock := &mockClient{
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
 			return network.Inspect{
@@ -1201,9 +1202,9 @@ func TestProxyUp_OwnAndBackupEndpointsNotForeign(t *testing.T) {
 
 func TestImageLabels_ParsesRawConfigLabels(t *testing.T) {
 	mock := &mockClient{
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
 			raw := []byte(`{"Config":{"Labels":{"ws.proxy.datapath":"tproxy","ws.proxy.recipe":"abc123"}}}`)
-			return types.ImageInspect{}, raw, nil
+			return image.InspectResponse{}, raw, nil
 		},
 	}
 	defer withMock(mock)()
@@ -1222,8 +1223,8 @@ func TestImageLabels_ParsesRawConfigLabels(t *testing.T) {
 
 func TestImageLabels_NoLabelsReturnsEmptyMap(t *testing.T) {
 	mock := &mockClient{
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, []byte(`{"Config":{}}`), nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, []byte(`{"Config":{}}`), nil
 		},
 	}
 	defer withMock(mock)()
@@ -1255,10 +1256,10 @@ func TestBindMountIsWholeDir_StillWorks(t *testing.T) {
 
 	// Whole-dir case -> true.
 	mockWhole := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true},
 					HostConfig: &container.HostConfig{
 						Binds: []string{wholeDirHost + ":/etc/xray/:ro"},
 					},
@@ -1279,10 +1280,10 @@ func TestBindMountIsWholeDir_StillWorks(t *testing.T) {
 
 	// Single-file case -> false.
 	mockLegacy := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: true},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: true},
 					HostConfig: &container.HostConfig{
 						Binds: []string{cfg.XrayConfig + ":/etc/xray/config.json:ro"},
 					},
@@ -1314,9 +1315,9 @@ func TestProxyRestart_HealthyNoSwapOps(t *testing.T) {
 
 	mock := &mockClient{
 		// ProxyUp sees a running container after the stop -> fix routes, no create.
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
 		renameFn:            func(_ context.Context, _, _ string) error { t.Error("restart must not rename"); return nil },
 		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { t.Error("restart must not disconnect"); return nil },
@@ -1343,9 +1344,9 @@ func TestProxyRestart_UnhealthyHonestNoMutation(t *testing.T) {
 	cfg := testCfg()
 	cfg.XrayConfig = tmp
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
 		removeFn: func(_ context.Context, _ string, _ container.RemoveOptions) error {
 			t.Error("restart failure must not remove the container (D-10)")
@@ -1373,14 +1374,14 @@ func TestProxyRestart_MissingContainerComesUp(t *testing.T) {
 	created := false
 	mock := &mockClient{
 		// primary absent -> ProxyDown tolerates NotFound, ProxyUp creates.
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{}, errdefs.NotFound(errors.New("absent"))
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, errdefs.NotFound(errors.New("absent"))
 		},
 		stopFn: func(_ context.Context, _ string, _ container.StopOptions) error {
 			return errdefs.NotFound(errors.New("absent"))
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
 			created = true
@@ -1412,14 +1413,14 @@ func TestProxyRestart_StartFails_ProxyIsDown(t *testing.T) {
 	cfg.XrayConfig = tmp
 	mock := &mockClient{
 		// primary absent -> ProxyDown tolerates NotFound, ProxyUp takes cold-create path.
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{}, errdefs.NotFound(errors.New("absent"))
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, errdefs.NotFound(errors.New("absent"))
 		},
 		stopFn: func(_ context.Context, _ string, _ container.StopOptions) error {
 			return errdefs.NotFound(errors.New("absent"))
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil // image present -> preflight passes
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil // image present -> preflight passes
 		},
 		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
 			return container.CreateResponse{ID: "new-id"}, nil

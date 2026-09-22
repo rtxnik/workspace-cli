@@ -8,7 +8,8 @@ package mcp
 //  1. ONE place calls exec.CommandContext — leaves call mcp.NewClient.
 //  2. The mark3labs/mcp-go library's Close() signals the LEADER process only
 //     (verified at v0.52.0 against the library's stdio.go source per
-//     RESEARCH §Pitfall 4). Because `uv run python ...` spawns multiple
+//     RESEARCH §Pitfall 4, and again at v1.0.0, whose Stdio.Close is
+//     unchanged in this respect). Because `uv run python ...` spawns multiple
 //     descendants, our wrapper MUST signal the process GROUP itself via
 //     syscall.Kill(-pgid, SIGTERM/SIGKILL).
 //  3. Setpgid is configured on the subprocess via the library's

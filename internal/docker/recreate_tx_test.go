@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -66,9 +66,9 @@ func indexOf(ss []string, want string) int {
 
 func TestVerifyHealthy_Healthy(t *testing.T) {
 	shrinkHealthTimers(t)
-	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-		return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-			State: &types.ContainerState{Running: true, Health: &types.Health{Status: "healthy"}}},
+	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+		return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+			State: &container.State{Running: true, Health: &container.Health{Status: "healthy"}}},
 			Config: &container.Config{}}, nil
 	}}
 	ok, weak, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
@@ -79,9 +79,9 @@ func TestVerifyHealthy_Healthy(t *testing.T) {
 
 func TestVerifyHealthy_Unhealthy(t *testing.T) {
 	shrinkHealthTimers(t)
-	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-		return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-			State: &types.ContainerState{Running: true, Health: &types.Health{Status: "unhealthy"}}},
+	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+		return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+			State: &container.State{Running: true, Health: &container.Health{Status: "unhealthy"}}},
 			Config: &container.Config{}}, nil
 	}}
 	ok, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
@@ -92,9 +92,9 @@ func TestVerifyHealthy_Unhealthy(t *testing.T) {
 
 func TestVerifyHealthy_Timeout(t *testing.T) {
 	shrinkHealthTimers(t)
-	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-		return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-			State: &types.ContainerState{Running: true, Health: &types.Health{Status: "starting"}}},
+	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+		return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+			State: &container.State{Running: true, Health: &container.Health{Status: "starting"}}},
 			Config: &container.Config{}}, nil
 	}}
 	start := time.Now()
@@ -109,9 +109,9 @@ func TestVerifyHealthy_Timeout(t *testing.T) {
 
 func TestVerifyHealthy_NilHealthIsWeak(t *testing.T) {
 	shrinkHealthTimers(t)
-	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-		return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-			State: &types.ContainerState{Running: true, Health: nil}},
+	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+		return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+			State: &container.State{Running: true, Health: nil}},
 			Config: &container.Config{}}, nil
 	}}
 	ok, weak, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
@@ -122,9 +122,9 @@ func TestVerifyHealthy_NilHealthIsWeak(t *testing.T) {
 
 func TestVerifyHealthy_FastExitWhenNotRunning(t *testing.T) {
 	shrinkHealthTimers(t) // healthStartGrace = 0 -> fail on first observation
-	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-		return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-			State: &types.ContainerState{Running: false}},
+	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+		return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+			State: &container.State{Running: false}},
 			Config: &container.Config{}}, nil
 	}}
 	start := time.Now()
@@ -139,8 +139,8 @@ func TestVerifyHealthy_FastExitWhenNotRunning(t *testing.T) {
 
 func TestVerifyHealthy_InspectError(t *testing.T) {
 	shrinkHealthTimers(t)
-	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-		return types.ContainerJSON{}, errors.New("daemon down")
+	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+		return container.InspectResponse{}, errors.New("daemon down")
 	}}
 	if _, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace); err == nil {
 		t.Fatal("want inspect error propagated")
@@ -152,8 +152,8 @@ func TestVerifyHealthy_InspectError(t *testing.T) {
 // nil-pointer dereference.
 func TestVerifyHealthy_NilStateIsOwnedError(t *testing.T) {
 	shrinkHealthTimers(t)
-	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-		return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{State: nil}}, nil
+	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+		return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{State: nil}}, nil
 	}}
 	_, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
 	if err == nil {
@@ -168,17 +168,17 @@ func TestProxyRecreate_HappyCommitOrderAndStaticIP(t *testing.T) {
 	shrinkHealthTimers(t)
 	var seq []string
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+				return container.InspectResponse{}, errdefs.NotFound(errors.New("no backup"))
 			}
 			// primary: exists+running for the classify inspect.
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true, Health: &types.Health{Status: "healthy"}}},
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true, Health: &container.Health{Status: "healthy"}}},
 				Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		stopFn: func(_ context.Context, id string, _ container.StopOptions) error {
 			seq = append(seq, "stop:"+id)
@@ -224,15 +224,15 @@ func TestProxyRecreate_PreflightBeforeDestroy(t *testing.T) {
 	shrinkHealthTimers(t)
 	var seq []string
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+				return container.InspectResponse{}, errdefs.NotFound(errors.New("no backup"))
 			}
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, errdefs.NotFound(errors.New("no image")) // image MISSING
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, errdefs.NotFound(errors.New("no image")) // image MISSING
 		},
 		stopFn: func(_ context.Context, id string, _ container.StopOptions) error {
 			seq = append(seq, "stop")
@@ -266,15 +266,15 @@ func TestProxyRecreate_ForeignIPAbortsBeforeDestroy(t *testing.T) {
 	shrinkHealthTimers(t)
 	var seq []string
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+				return container.InspectResponse{}, errdefs.NotFound(errors.New("no backup"))
 			}
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
 			return network.Inspect{
@@ -311,11 +311,11 @@ func TestProxyRecreate_ColdCreateNoRename(t *testing.T) {
 	shrinkHealthTimers(t)
 	var seq []string
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{}, errdefs.NotFound(errors.New("absent")) // primary AND backup absent
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, errdefs.NotFound(errors.New("absent")) // primary AND backup absent
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		renameFn:            func(_ context.Context, _, _ string) error { seq = append(seq, "rename"); return nil },
 		networkDisconnectFn: func(_ context.Context, _, _ string, _ bool) error { seq = append(seq, "disconnect"); return nil },
@@ -352,15 +352,15 @@ func TestProxyRecreate_WeakHealthCommitsWithBackupDropped(t *testing.T) {
 	shrinkHealthTimers(t)
 	var seq []string
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+				return container.InspectResponse{}, errdefs.NotFound(errors.New("no backup"))
 			}
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		stopFn:              func(_ context.Context, _ string, _ container.StopOptions) error { return nil },
 		renameFn:            func(_ context.Context, _, _ string) error { return nil },
@@ -395,15 +395,15 @@ func TestProxyRecreate_CommitBestEffort_RemoveBackupFails(t *testing.T) {
 	shrinkHealthTimers(t)
 	var seq []string
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+				return container.InspectResponse{}, errdefs.NotFound(errors.New("no backup"))
 			}
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		stopFn:              func(_ context.Context, _ string, _ container.StopOptions) error { return nil },
 		renameFn:            func(_ context.Context, _, _ string) error { return nil },
@@ -439,13 +439,13 @@ func TestProxyRecreate_StaleBackupCaseA_RemovesGarbage(t *testing.T) {
 	shrinkHealthTimers(t)
 	var seq []string
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
 			// both primary and backup "exist".
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		removeFn: func(_ context.Context, id string, _ container.RemoveOptions) error {
 			seq = append(seq, "remove:"+id)
@@ -484,12 +484,12 @@ func TestProxyRecreate_StaleBackupCaseB_RestoresAndReturnsSuccess(t *testing.T) 
 	shrinkHealthTimers(t)
 	var seq []string
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-					State: &types.ContainerState{Running: false}}, Config: &container.Config{}}, nil // backup present
+				return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+					State: &container.State{Running: false}}, Config: &container.Config{}}, nil // backup present
 			}
-			return types.ContainerJSON{}, errdefs.NotFound(errors.New("primary gone")) // primary absent
+			return container.InspectResponse{}, errdefs.NotFound(errors.New("primary gone")) // primary absent
 		},
 		networkConnectFn: func(_ context.Context, _, id string, c *network.EndpointSettings) error {
 			seq = append(seq, "connect:"+id)
@@ -523,15 +523,15 @@ func TestProxyRecreate_StaleBackupCaseB_RestoresAndReturnsSuccess(t *testing.T) 
 func recreateForwardMock(t *testing.T, seq *[]string) *mockClient {
 	t.Helper()
 	return &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+				return container.InspectResponse{}, errdefs.NotFound(errors.New("no backup"))
 			}
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		stopFn: func(_ context.Context, id string, _ container.StopOptions) error {
 			*seq = append(*seq, "stop:"+id)
@@ -808,15 +808,15 @@ func TestProxyRecreate_ContextBudget_NoFalseRollbackVerifyOutlivesMutateCtx(t *t
 	var committedUnderExpiredCtx bool
 	var removedBackup bool
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+				return container.InspectResponse{}, errdefs.NotFound(errors.New("no backup"))
 			}
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		createFn: func(_ context.Context, _ *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, _ string) (container.CreateResponse, error) {
 			return container.CreateResponse{ID: "n"}, nil

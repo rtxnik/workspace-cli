@@ -12,11 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/errdefs"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/procx"
@@ -62,7 +61,7 @@ func ProxyStatus(cfg config.Config) (Status, error) {
 
 	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return Status{Running: false}, nil
 		}
 		return Status{}, fmt.Errorf("inspect proxy: %w", err)
@@ -259,7 +258,7 @@ func ProxyDown(cfg config.Config) error {
 
 	timeout := 10
 	if err := cli.ContainerStop(ctx, cfg.ProxyContainer, container.StopOptions{Timeout: &timeout}); err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("stop proxy: %w", err)
@@ -566,7 +565,7 @@ func ProxyConnectedContainers(cfg config.Config) ([]string, error) {
 
 	info, err := cli.NetworkInspect(ctx, cfg.ProxyNetwork, network.InspectOptions{})
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("inspect proxy network: %w", err)
@@ -700,7 +699,7 @@ func ProxyExec(cfg config.Config, args ...string) ([]byte, error) {
 // entry whose host side is cfg.XrayConfig itself (legacy single-file
 // mount). Returns (false, nil) if no xray-related bind is found at all
 // — the caller decides whether that's legacy or missing.
-func bindMountIsWholeDir(info types.ContainerJSON, cfg config.Config) (bool, error) {
+func bindMountIsWholeDir(info container.InspectResponse, cfg config.Config) (bool, error) {
 	wholeDirHost := filepath.Dir(cfg.XrayConfig)
 	for _, b := range info.HostConfig.Binds {
 		parts := strings.SplitN(b, ":", 3)
@@ -769,7 +768,7 @@ func VerifyProxyReadyForReload(cfg config.Config) error {
 
 	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
 	if err != nil {
-		if errdefs.IsNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return fmt.Errorf("proxy container %q not found — run 'ws proxy up' first", cfg.ProxyContainer)
 		}
 		return fmt.Errorf("inspect proxy container: %w", err)

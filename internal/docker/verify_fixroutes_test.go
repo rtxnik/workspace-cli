@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/errdefs"
 
@@ -108,9 +108,9 @@ func TestFixRoutesReportErr_NilOnCleanReport(t *testing.T) {
 // must name the failed workspace on stderr instead of discarding the report.
 func TestProxyUp_RunningBranch_WarnsRouteFixFailures(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{State: &types.ContainerState{Running: true}},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{State: &container.State{Running: true}},
 				Config:            &container.Config{},
 			}, nil
 		},
@@ -137,9 +137,9 @@ func TestProxyUp_RunningBranch_WarnsRouteFixFailures(t *testing.T) {
 // stopped-container start branch.
 func TestProxyUp_StartBranch_WarnsRouteFixFailures(t *testing.T) {
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, _ string) (types.ContainerJSON, error) {
-			return types.ContainerJSON{
-				ContainerJSONBase: &types.ContainerJSONBase{State: &types.ContainerState{Running: false}},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{State: &container.State{Running: false}},
 				Config:            &container.Config{},
 			}, nil
 		},
@@ -167,8 +167,8 @@ func TestProxyUp_StartBranch_WarnsRouteFixFailures(t *testing.T) {
 func TestProxyUp_ColdCreateBranch_WarnsRouteFixFailures(t *testing.T) {
 	mock := &mockClient{
 		// default inspectFn returns not-found -> cold-create path
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
 			return network.Inspect{
@@ -202,15 +202,15 @@ func TestProxyUp_ColdCreateBranch_WarnsRouteFixFailures(t *testing.T) {
 func TestProxyRecreate_CommitSurfacesRouteFixFailures(t *testing.T) {
 	shrinkHealthTimers(t)
 	mock := &mockClient{
-		inspectFn: func(_ context.Context, id string) (types.ContainerJSON, error) {
+		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
-				return types.ContainerJSON{}, errdefs.NotFound(errors.New("no backup"))
+				return container.InspectResponse{}, errdefs.NotFound(errors.New("no backup"))
 			}
-			return types.ContainerJSON{ContainerJSONBase: &types.ContainerJSONBase{
-				State: &types.ContainerState{Running: true}}, Config: &container.Config{}}, nil
+			return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Running: true}}, Config: &container.Config{}}, nil
 		},
-		imageInspFn: func(_ context.Context, _ string) (types.ImageInspect, []byte, error) {
-			return types.ImageInspect{}, nil, nil
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, nil
 		},
 		networkInspFn: fixRoutesNetworkInspFn,
 	}

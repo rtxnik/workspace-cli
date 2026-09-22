@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/errdefs"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
 )
@@ -127,12 +127,12 @@ func proxyRecreate(cfg config.Config) error {
 
 	_, perr := cli.ContainerInspect(cctx, cfg.ProxyContainer)
 	primaryExists := perr == nil
-	if perr != nil && !errdefs.IsNotFound(perr) {
+	if perr != nil && !cerrdefs.IsNotFound(perr) {
 		return fmt.Errorf("inspect proxy: %w", perr)
 	}
 	_, berr := cli.ContainerInspect(cctx, backupName(cfg))
 	backupExists := berr == nil
-	if berr != nil && !errdefs.IsNotFound(berr) {
+	if berr != nil && !cerrdefs.IsNotFound(berr) {
 		return fmt.Errorf("inspect backup: %w", berr)
 	}
 
@@ -168,7 +168,7 @@ func proxyRecreate(cfg config.Config) error {
 	// a manually-stopped container, so once stopped the backup cannot resurrect
 	// and re-grab the name/IP mid-swap. Do not optimize this stop away (spec §2.2).
 	stopTimeout := 10
-	if err := cli.ContainerStop(cctx, cfg.ProxyContainer, container.StopOptions{Timeout: &stopTimeout}); err != nil && !errdefs.IsNotFound(err) {
+	if err := cli.ContainerStop(cctx, cfg.ProxyContainer, container.StopOptions{Timeout: &stopTimeout}); err != nil && !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("stop proxy: %w -- proxy left running, no changes made", err)
 	}
 	if err := cli.ContainerRename(cctx, cfg.ProxyContainer, backupName(cfg)); err != nil {
@@ -241,7 +241,7 @@ func verifyNew(cli DockerClient, cfg config.Config) error {
 // returns success without re-running the swap (DR-3).
 func triageStaleBackup(ctx context.Context, cli DockerClient, cfg config.Config, primaryExists bool) error {
 	if primaryExists {
-		if err := cli.ContainerRemove(ctx, backupName(cfg), container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		if err := cli.ContainerRemove(ctx, backupName(cfg), container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			return fmt.Errorf("remove stale backup: %w", err)
 		}
 		return nil
@@ -283,7 +283,7 @@ func rollbackToBackup(cli DockerClient, cfg config.Config, origErr error) error 
 	// 1+2: remove the broken NEW first (frees IP+endpoint before reattaching).
 	stopTimeout := 10
 	_ = cli.ContainerStop(ctx, cfg.ProxyContainer, container.StopOptions{Timeout: &stopTimeout})
-	if err := cli.ContainerRemove(ctx, cfg.ProxyContainer, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+	if err := cli.ContainerRemove(ctx, cfg.ProxyContainer, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 		return criticalRollback(cfg, st, origErr, fmt.Errorf("remove broken new proxy: %w", err))
 	}
 	st.newExists = false
