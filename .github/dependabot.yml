@@ -14,6 +14,15 @@ updates:
       go-deps:
         patterns:
           - "*"
+    ignore:
+      # From v0.11.7, x/ansi's StringWidth measures a grapheme cluster that
+      # starts with an ASCII character as one unit, while its Truncate, Wrap
+      # and DecodeSequence still count that character on its own. lipgloss
+      # sizes a table cell with the first and lays it out with the second, so a
+      # cell fitted exactly to its column re-wraps onto a second line. Held at
+      # v0.11.6 until the two agree; a later release is proposed as usual.
+      - dependency-name: "github.com/charmbracelet/x/ansi"
+        versions: ["0.11.7", "0.11.8"]
     # Version updates wait for a package to settle; security updates bypass this.
     cooldown:
       default-days: 7
