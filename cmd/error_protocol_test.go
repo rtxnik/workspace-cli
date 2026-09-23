@@ -33,9 +33,9 @@ import (
 // the environment and the child assigns the seams itself, before Execute().
 //
 // testdata/error-protocol.golden holds each case's exit code and both
-// streams, recorded from the tree before phase 1 changed anything. A
-// difference is a finding until the commit that makes it names it. Re-record
-// with:
+// streams, first recorded from the tree before phase 1 changed anything; a
+// commit that changes it names each case it changes (`git log -p` on the
+// file shows them). Re-record with:
 //
 //	go test ./cmd -run '^TestErrorOutputBaseline$' -update-error-baseline
 
@@ -75,8 +75,8 @@ type errorCase struct {
 
 // errorCases covers the four branches of the root protocol, the argument
 // and runtime halves of the usage distinction, the spinner's known second
-// print, and every helper and in-body exit that phase 1 moved onto a returned
-// value and a hermetic process can reach.
+// print, and every helper and in-body exit that phase 1 moves onto a
+// returned value and a hermetic process can reach.
 var errorCases = []errorCase{
 	// A successful command: no error text, exit 0.
 	{name: "success/detect", args: []string{"detect", emptyDirArg}},
@@ -89,9 +89,10 @@ var errorCases = []errorCase{
 	{name: "arg-error/unknown-command", args: []string{"nosuch"}},
 	{name: "arg-error/unknown-flag", args: []string{"start", "--bogus", "wsx"}},
 	// An extra argument to a NoArgs command carries cobra's "unknown command"
-	// text too, but cobra prints its "Run … --help for usage." hint only for
-	// the one the root itself raises. This case is the other side of
-	// arg-error/unknown-command: the hint must NOT appear here.
+	// text too, but the usage hint follows only the one the root itself
+	// raises (cobra printed it only there; Execute reproduces that). This
+	// case is the other side of arg-error/unknown-command: the hint must NOT
+	// appear here.
 	{name: "arg-error/noargs-extra", args: []string{"status", "x"}},
 
 	// A runtime error prints no Usage: block. A plain error returned from a
@@ -129,7 +130,8 @@ var errorCases = []errorCase{
 	{name: "helper/connected-declined", args: []string{"proxy", "down"}, stub: "connected-declined"},
 
 	// The paths that reach the Docker SDK: every one of them fails on the
-	// unreachable DOCKER_HOST above, which is what makes them hermetic.
+	// unreachable DOCKER_HOST that runExecuteChild sets, which is what makes
+	// them hermetic.
 	{name: "body-exit/proxy-up-unreachable", args: []string{"proxy", "up"}, spinner: true},
 	{name: "body-exit/proxy-doctor-unreachable", args: []string{"proxy", "doctor"}},
 	{name: "body-exit/proxy-doctor-json-unreachable", args: []string{"proxy", "doctor", "--json"}},
@@ -222,9 +224,10 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	// Setsid, so the child has no controlling terminal. Its stdin is the null
 	// device, and huh's terminal layer answers that by opening /dev/tty
 	// instead — which, when `go test` is run from a real terminal, is the
-	// developer's: the selector case then draws a live prompt there and the
-	// case blocks until the test times out. Measured: 45 s timeout panic under
-	// `script -qec`, clean with this line.
+	// developer's: the selector case then draws a live prompt there. The
+	// 45 s timeout panic under `script -qec` was measured before the
+	// per-case 30 s deadline below existed; with the deadline, the same
+	// regression fails the case by name after 30 s instead.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	// The environment is built, not inherited: a COLUMNS, NO_COLOR, CI or
 	// VAULT_AI_REPO_ROOT in the developer's shell must not reach the case.

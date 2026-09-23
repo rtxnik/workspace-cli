@@ -50,9 +50,9 @@ var rootCmd = &cobra.Command{
 // envelope into a cliErrorWithExit{code, msg} and the process exits with code.
 //
 // A non-empty msg is printed once, by the root, like any other error. An
-// empty msg prints nothing: the command has already printed everything the
-// operator needs — vault-health-score's score on stdout, a status report —
-// and the exit code is the rest of its interface.
+// empty msg, unwrapped, prints nothing: the command has already printed
+// everything the operator needs — vault-health-score's score on stdout, a
+// status report — and the exit code is the rest of its interface.
 type cliErrorWithExit struct {
 	code int
 	msg  string
@@ -84,8 +84,8 @@ func run(err error) (msg string, code int) {
 	return err.Error(), 1
 }
 
-// Execute runs the command tree. An error that reaches it is printed once,
-// through output.Fail, and the process exits with the code run chose.
+// Execute runs the command tree. An error that reaches it is printed at most
+// once, through output.Fail, and the process exits with the code run chose.
 func Execute() {
 	cmd, err := rootCmd.ExecuteC()
 	msg, code := run(err)

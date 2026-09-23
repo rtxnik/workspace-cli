@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// The five message helpers.
+// The message helpers.
 //
 // When phase 0 replaced their bodies it kept their signatures, and all 137
 // call sites across 18 files recompiled untouched. What changed was the body:
