@@ -16,10 +16,10 @@ import (
 
 // The five message helpers.
 //
-// They are phase 0's entire deliverable and the dominant call volume — 137 of
-// the call sites — and they were at 0.0 % coverage on main, which is why
-// routing every one of them to stdout, or leaving them unwrapped, passed the
-// whole suite before these assertions existed.
+// They are phase 0's entire deliverable and the dominant call volume — 137
+// call sites when phase 0 landed — and they were at 0.0 % coverage on main,
+// which is why routing every one of them to stdout, or leaving them
+// unwrapped, passed the whole suite before these assertions existed.
 //
 // The two assertions TestContractMutationHarness in mutation_test.go plants
 // defects against are contractProbe values, not plain tests: the mutation
@@ -211,8 +211,11 @@ var probeMessageRouting = contractProbe{
 // The other half of Fail's contract — that it RETURNS, because the exit
 // belongs to its caller — cannot be asserted from inside this process: an
 // exiting Fail takes the test binary with it, and the run reports
-// "exit status 1" naming no test. That is the red here, and phase 1's PR 3
-// gives the clause a name by driving Fail in a child process.
+// "exit status 1" naming no test. That is the red here. probeFail drives
+// Fail in a child process and names this clause when run on its own (go test
+// -run TestMessageContract ./internal/output); in a whole-package run this
+// in-process test runs first, so an exiting Fail kills the binary here too,
+// naming no test.
 func TestFailReturnsAndRendersTheFailShape(t *testing.T) {
 	const msg = "workspace \"a\" could not be created: Cannot connect to the Docker daemon at " +
 		"unix:///var/run/docker.sock. Is the docker daemon running?"
@@ -235,7 +238,10 @@ func TestFailReturnsAndRendersTheFailShape(t *testing.T) {
 // one half of it only by dying: a Fail that exits takes the test binary with
 // it, which fails the run and names nothing. probeFail runs Fail in a process
 // of its own, where ending the process is an observable exit code, and where a
-// mutation switch the parent sets can be carried across.
+// mutation switch the parent sets can be carried across — but that naming
+// only happens when probeFail runs on its own; in a whole-package run this
+// test runs first, and an exiting Fail kills the binary before probeFail gets
+// a turn.
 //
 // It matters because sweeping the shared body satisfies §6.1's letter and not
 // its purpose: measured, with the fail shape alone made to print one unwrapped
@@ -254,7 +260,10 @@ const (
 	failColumns   = 40
 	// failReturnedExit is the code the child exits with once Fail has returned
 	// to it. Fail never chooses an exit code — the root's error protocol does —
-	// so any other code means Fail ended the process itself.
+	// so any other code means either Fail did not return to its caller (it
+	// ended the process itself) or the child never reached Fail at all: a
+	// -test.run that matches nothing or a skipped child exits 0, and a panic
+	// exits 2.
 	failReturnedExit = 7
 )
 
@@ -267,8 +276,9 @@ const (
 // restore to: it runs in the re-exec'd child of runFailChild, which exits as
 // soon as Fail returns.
 //
-// Measured when the two bodies were still inert and the probe drove Die: the
-// mutant came back `false — SURVIVED —`, on the digest
+// Measured when the two seams were still inert — this file shipped before
+// the switch existed — and the probe drove Die: the mutant came back
+// `false — SURVIVED —`, on the digest
 // "exit=1 lines=7 widest=40" — exactly what the probe observed clean — because
 // the child was the only process being measured and the parent's switch never
 // reached it.
@@ -413,7 +423,7 @@ var probeFail = contractProbe{
 		digest := fmt.Sprintf("exit=%d lines=%d widest=%d", code, len(lines), widestLine(lines))
 
 		if code != failReturnedExit {
-			r.fail("fail_contract", "the child exited %d, not %d: Fail ended the process instead of returning to its caller",
+			r.fail("fail_contract", "the child exited %d, not %d: Fail did not return to its caller, or the child never reached it",
 				code, failReturnedExit)
 		}
 		if stdout != "" {
