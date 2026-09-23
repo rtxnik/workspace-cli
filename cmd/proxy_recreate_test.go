@@ -12,7 +12,7 @@ import (
 )
 
 // captureStderr redirects os.Stderr for the duration of fn and returns
-// everything written to it. Needed because output.Info/Die write directly to
+// everything written to it. Needed because output.Info writes directly to
 // os.Stderr rather than through the cobra command's configured error writer.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
