@@ -370,3 +370,60 @@ func TestErrorOutputBaseline(t *testing.T) {
 		t.Errorf("the baseline differs from the rendering outside any case block; re-record deliberately, not by accident")
 	}
 }
+
+// TestRootProtocolBranches drives run() directly: which of its four branches
+// an error takes, and the exit code each one routes. The bytes those branches
+// print are TestErrorOutputBaseline's; this is the selection.
+//
+// Planted and observed red: run() printing cerr.msg instead of err.Error()
+// fails the two wrapped cases; the plain branch returning exit 0 fails
+// "plain"; errors.As replaced with a bare type assertion fails both wrapped
+// cases.
+func TestRootProtocolBranches(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		err      error
+		wantMsg  string
+		wantCode int
+	}{
+		{"nil", nil, "", 0},
+		{"silent", &cliErrorWithExit{code: 2, msg: ""}, "", 2},
+		{"cli-exit", &cliErrorWithExit{code: 4, msg: "backup-verify: no logs"}, "backup-verify: no logs", 4},
+		{"wrapped cli-exit keeps the wrapper's text",
+			fmt.Errorf("vault: %w", &cliErrorWithExit{code: 5, msg: "inner"}), "vault: inner", 5},
+		{"wrapped silent prints the wrapper's text",
+			fmt.Errorf("context: %w", &cliErrorWithExit{code: 3, msg: ""}), "context: ", 3},
+		{"plain", errors.New("plain failure"), "plain failure", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			msg, code := run(c.err)
+			if msg != c.wantMsg || code != c.wantCode {
+				t.Errorf("run(%v) = (%q, %d); want (%q, %d)", c.err, msg, code, c.wantMsg, c.wantCode)
+			}
+		})
+	}
+}
+
+// TestUnknownCommandIsRecognised pins isUnknownCommand against the error
+// cobra actually builds, not against a copy of its text: if cobra rewords it,
+// this goes red instead of the hint silently disappearing.
+func TestUnknownCommandIsRecognised(t *testing.T) {
+	_, _, err := rootCmd.Find([]string{"nosuch"})
+	if err == nil {
+		t.Fatal("cobra found a command named nosuch")
+	}
+	if !isUnknownCommand(err) {
+		t.Errorf("isUnknownCommand(%q) = false; Execute would drop the usage hint", err)
+	}
+	if isUnknownCommand(errors.New("proxy not ready for reload")) || isUnknownCommand(nil) {
+		t.Error("isUnknownCommand matched an error cobra did not raise")
+	}
+	// cobra.NoArgs raises the same sentence for an extra argument to a command
+	// that takes none (args.go NoArgs), and cobra prints no hint for that one.
+	// The text cannot tell the two apart, which is why Execute gates the hint
+	// on the command having no parent. If this stops matching, the guard in
+	// Execute needs re-reading, not just this test.
+	if noArgs := cobra.NoArgs(newWorkspaceStatusCmd(), []string{"x"}); noArgs == nil || !isUnknownCommand(noArgs) {
+		t.Errorf("cobra.NoArgs no longer carries the unknown-command text (%v); re-read Execute's hint guard", noArgs)
+	}
+}
