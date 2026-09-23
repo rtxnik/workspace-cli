@@ -17,10 +17,11 @@ type SelectOption struct {
 // Select displays an interactive selector and returns the chosen value.
 //
 // ok is false when the selector did not produce a choice — the operator
-// cancelled it, or it could not run, which is what a stdin that is not a
-// terminal makes of it. A blank line has already been written to stderr and
-// the caller returns without an error. An empty option list is the caller's
-// mistake and comes back as one.
+// cancelled it, or it could not run — with no terminal to draw on (stdin
+// is not a terminal and there is no controlling terminal to open), huh
+// fails. A blank line has already been written to stderr and the caller
+// returns without an error. An empty option list is the caller's mistake
+// and comes back as one.
 func Select(title string, options []SelectOption) (string, bool, error) {
 	if len(options) == 0 {
 		return "", false, errors.New("no items to select")

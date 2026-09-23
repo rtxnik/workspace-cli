@@ -408,8 +408,9 @@ var logsCmd = &cobra.Command{
 }
 
 // selectWorkspace shows an interactive selector of workspaces and returns the
-// selected name. ok is false when the operator cancelled the selector; the
-// caller returns nil and the process exits 0, as it did before phase 1.
+// selected name. ok is false when the selector produced no choice — the
+// operator cancelled it, or it could not run (see output.Select); the
+// caller returns nil and the process exits 0.
 func selectWorkspace() (string, bool, error) {
 	cfg := config.Load()
 	workspaces, err := workspace.List(cfg)

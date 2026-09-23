@@ -142,9 +142,9 @@ var commonTools = []huh.Option[string]{
 }
 
 // runProfileWizard walks the operator through a new profile's settings. ok is
-// false when the operator backed out — the form was cancelled, or the final
-// confirmation declined — and the wizard has already said so; the caller
-// returns nil, and the process exits 0.
+// false when the operator backed out or the form could not run — a blank
+// line after the first form, "Aborted" after the final confirmation — the
+// caller returns nil, and the process exits 0.
 func runProfileWizard(name string) (profile.CreateOpts, bool) {
 	var baseImage string
 	var packages string
