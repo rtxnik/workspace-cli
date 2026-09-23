@@ -29,7 +29,8 @@ var proxyCmd = &cobra.Command{
 var proxyUpCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Start the proxy container",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		noWait, _ := cmd.Flags().GetBool("no-wait")
 
@@ -61,37 +62,43 @@ var proxyUpCmd = &cobra.Command{
 
 		if err := output.NewStepRunner(steps...).Run(); err != nil {
 			fmt.Fprintln(os.Stderr, output.RenderError(upFailureDetail(err)))
-			os.Exit(1)
+			return &cliErrorWithExit{code: 1, msg: ""}
 		}
+		return nil
 	},
 }
 
 var proxyDownCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Stop the proxy container",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			warnProxyConnectedRun(cfg)
+			if proceed, err := confirmProxyMutation(cfg); !proceed {
+				return err
+			}
 		}
 
 		if err := output.RunWithSpinner("Stopping proxy", func() error {
 			return docker.ProxyDown(cfg)
 		}); err != nil {
-			output.Die(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 
 var proxyStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show proxy container status",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		st, err := docker.ProxyStatus(cfg)
 		if err != nil {
-			output.Die(err.Error())
+			return err
 		}
 
 		jsonFlag, _ := cmd.Flags().GetBool("json")
@@ -120,7 +127,7 @@ var proxyStatusCmd = &cobra.Command{
 				WorkspaceProtection: protectionJSON(prot),
 				ProtectionScanError: scanErr,
 			})
-			return
+			return nil
 		}
 
 		stateStatus := "stopped"
@@ -174,13 +181,15 @@ var proxyStatusCmd = &cobra.Command{
 			Render(output.StyleHeader.Render("Proxy") + "\n\n" + strings.Join(lines, "\n"))
 
 		fmt.Println(box)
+		return nil
 	},
 }
 
 var proxyCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Verify proxy prerequisites",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		results := docker.ProxyCheck(cfg)
 
@@ -201,30 +210,36 @@ var proxyCheckCmd = &cobra.Command{
 		} else {
 			output.Warn(fmt.Sprintf("%d/%d checks passed", passed, total))
 		}
+		return nil
 	},
 }
 
 var proxyLogsCmd = &cobra.Command{
 	Use:   "logs",
 	Short: "Show proxy container logs",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		logs, err := docker.ProxyLogs(cfg, 50)
 		if err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		fmt.Print(logs)
+		return nil
 	},
 }
 
 var proxyRebuildCmd = &cobra.Command{
 	Use:   "rebuild",
 	Short: "Rebuild proxy image from scratch",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			warnProxyConnectedRun(cfg)
+			if proceed, err := confirmProxyMutation(cfg); !proceed {
+				return err
+			}
 		}
 		allowDrift, _ := cmd.Flags().GetBool("allow-drift")
 
@@ -250,26 +265,28 @@ var proxyRebuildCmd = &cobra.Command{
 			}},
 		)
 		if err := runner.Run(); err != nil {
-			output.Die(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 
 var proxyTestCmd = &cobra.Command{
 	Use:   "test",
 	Short: "Prove tunnel is active by comparing direct vs proxied exit IP",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		st, err := docker.ProxyStatus(cfg)
 		if err != nil || !st.Running {
-			output.Die("proxy is not running — start it first: ws proxy up")
+			return errors.New("proxy is not running — start it first: ws proxy up")
 		}
 
 		output.Info("Probing tunnel (comparing direct vs proxied exit IP)...")
 
 		result, err := proxyengine.Default().Probe(cfg)
 		if err != nil {
-			output.Die(fmt.Sprintf("probe failed: %s", err))
+			return fmt.Errorf("probe failed: %s", err)
 		}
 
 		jsonFlag, _ := cmd.Flags().GetBool("json")
@@ -293,9 +310,9 @@ var proxyTestCmd = &cobra.Command{
 				DNSExitIP: dnsExit,
 			})
 			if exitNonZero {
-				os.Exit(1)
+				return &cliErrorWithExit{code: 1, msg: ""}
 			}
-			return
+			return nil
 		}
 
 		tunnelMark := "✗"
@@ -315,7 +332,7 @@ var proxyTestCmd = &cobra.Command{
 			switch proxyengine.ClassifyDNS(result.DirectIP, result.ProxiedIP, dnsRes.ExitIP) {
 			case proxyengine.DNSLeak:
 				output.Warn(fmt.Sprintf("UDP/DNS LEAK -- resolver saw your real IP %s (untunnelled)", dnsRes.ExitIP))
-				os.Exit(1)
+				return &cliErrorWithExit{code: 1, msg: ""}
 			case proxyengine.DNSInconclusive:
 				output.Info("UDP/DNS: inconclusive (no UDP/DNS egress observed)")
 			default:
@@ -323,8 +340,9 @@ var proxyTestCmd = &cobra.Command{
 			}
 		} else {
 			output.Warn("Tunnel NOT active — direct and proxied exit IPs are the same")
-			os.Exit(1)
+			return &cliErrorWithExit{code: 1, msg: ""}
 		}
+		return nil
 	},
 }
 
@@ -332,11 +350,14 @@ var proxyDebugCmd = &cobra.Command{
 	Use:   "debug <on|off>",
 	Short: "Toggle debug logging",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			warnProxyConnectedRun(cfg)
+			if proceed, err := confirmProxyMutation(cfg); !proceed {
+				return err
+			}
 		}
 		mode := args[0]
 
@@ -347,11 +368,11 @@ var proxyDebugCmd = &cobra.Command{
 		case "off":
 			level = "warning"
 		default:
-			output.Die("usage: ws proxy debug <on|off>")
+			return errors.New("usage: ws proxy debug <on|off>")
 		}
 
 		if err := setXrayLogLevel(cfg, level); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		output.Success(fmt.Sprintf("Log level set to %q", level))
 
@@ -360,10 +381,11 @@ var proxyDebugCmd = &cobra.Command{
 		if st.Running {
 			output.Info("Restarting proxy...")
 			if err := docker.ProxyRestart(cfg); err != nil {
-				output.Die(err.Error())
+				return err
 			}
 			output.Success("Proxy restarted")
 		}
+		return nil
 	},
 }
 
@@ -371,11 +393,14 @@ var proxyUpdateCmd = &cobra.Command{
 	Use:   "update [version]",
 	Short: "Update xray-core version",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			warnProxyConnectedRun(cfg)
+			if proceed, err := confirmProxyMutation(cfg); !proceed {
+				return err
+			}
 		}
 
 		version := ""
@@ -385,7 +410,7 @@ var proxyUpdateCmd = &cobra.Command{
 			output.Info("Fetching latest xray-core version...")
 			v, err := fetchLatestXrayVersion()
 			if err != nil {
-				output.Die(err.Error())
+				return err
 			}
 			version = v
 			output.Detail(fmt.Sprintf("Latest: %s", version))
@@ -394,7 +419,7 @@ var proxyUpdateCmd = &cobra.Command{
 		if err := output.RunWithSpinner(fmt.Sprintf("Building proxy image with xray-core %s", version), func() error {
 			return docker.BuildProxyImage(cfg, version, false)
 		}); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 
 		// Recreate proxy container to use the new image. A failed recreate now
@@ -406,6 +431,7 @@ var proxyUpdateCmd = &cobra.Command{
 		} else {
 			output.Success(m)
 		}
+		return nil
 	},
 }
 
@@ -413,16 +439,17 @@ var proxyFixRoutesCmd = &cobra.Command{
 	Use:   "fix-routes",
 	Short: "Fix default routes in workspace containers after reboot",
 	Long:  "Restores the default route via proxy in all workspace containers on the proxy network. Useful after a system reboot when Docker restarts containers without running devcontainer lifecycle hooks.",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		st, err := docker.ProxyStatus(cfg)
 		if err != nil || !st.Running {
-			output.Die("Proxy is not running. Start it first: ws proxy up")
+			return errors.New("Proxy is not running. Start it first: ws proxy up") //nolint:staticcheck // ST1005: operator-facing text, printed verbatim by the root
 		}
 
 		rep, err := docker.ProxyFixRoutes(cfg)
 		if err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		switch {
 		case rep.Attempted == 0:
@@ -433,8 +460,9 @@ var proxyFixRoutesCmd = &cobra.Command{
 			for _, f := range rep.Failures {
 				output.Warn(f)
 			}
-			output.Die(fmt.Sprintf("Fixed routes in %d of %d container(s)", rep.Fixed, rep.Attempted))
+			return fmt.Errorf("Fixed routes in %d of %d container(s)", rep.Fixed, rep.Attempted) //nolint:staticcheck // ST1005: operator-facing text, printed verbatim by the root
 		}
+		return nil
 	},
 }
 
@@ -442,49 +470,51 @@ var proxyInitCmd = &cobra.Command{
 	Use:   "init <proxy-uri>",
 	Short: "Generate xray config from a VLESS or Hysteria2 URI",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		uri := args[0]
 
 		scheme, _, ok := strings.Cut(uri, "://")
 		if !ok {
-			output.Die("unsupported URI scheme (want vless://, hysteria2://, or hy2://)")
+			return errors.New("unsupported URI scheme (want vless://, hysteria2://, or hy2://)")
 		}
 		switch strings.ToLower(scheme) {
 		case "vless":
 			parsed, err := vless.Parse(uri)
 			if err != nil {
-				output.Die(err.Error())
+				return err
 			}
 			target, _, rerr := xrayconf.ResolveConfigTarget(cfg.XrayConfig, xrayConfigRoots(cfg))
 			if rerr != nil {
-				output.Die(rerr.Error())
+				return rerr
 			}
 			if err := vless.WriteNewConfig(target, parsed); err != nil {
-				output.Die(err.Error())
+				return err
 			}
 			output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))
 			output.Detail(fmt.Sprintf("Transport: %s, Security: %s", parsed.Network, parsed.Security))
 		case "hysteria2", "hy2":
 			parsed, err := hysteria2.Parse(uri)
 			if err != nil {
-				output.Die(err.Error())
+				return err
 			}
 			if parsed.AllowInsecure && parsed.PinSHA256 == "" {
 				output.Warn("hysteria2 'insecure' is unsupported on xray-core v26.2.6; ignoring. For a self-signed endpoint, pin the cert: add ?pinSHA256=<sha256> (run 'ws proxy doctor' to print it).")
 			}
 			target, _, rerr := xrayconf.ResolveConfigTarget(cfg.XrayConfig, xrayConfigRoots(cfg))
 			if rerr != nil {
-				output.Die(rerr.Error())
+				return rerr
 			}
 			if err := hysteria2.WriteNewConfig(target, parsed); err != nil {
-				output.Die(err.Error())
+				return err
 			}
 			output.Success(fmt.Sprintf("Config written to %s", cfg.XrayConfig))
 			output.Detail("Transport: hysteria, Security: tls")
 		default:
-			output.Die("unsupported URI scheme (want vless://, hysteria2://, or hy2://)")
+			return errors.New("unsupported URI scheme (want vless://, hysteria2://, or hy2://)")
 		}
+		return nil
 	},
 }
 
@@ -496,8 +526,9 @@ var proxyInitCmd = &cobra.Command{
 var warnConfirmFn = output.Confirm
 
 // errAborted signals the operator declined a mutation at the connected-workspace
-// prompt. RunE mutators return it verbatim so cobra keeps a clean exit (no usage
-// dump); Run mutators translate it back to the interactive exit(0) no-op.
+// prompt. Every mutator turns it into the same clean no-op — "Aborted" on stderr
+// and exit 0: proxy restart and recreate inline, the others through
+// confirmProxyMutation.
 var errAborted = errors.New("aborted by user")
 
 // warnProxyConnected gates a mutating proxy operation on operator confirmation
@@ -524,18 +555,24 @@ func warnProxyConnected(cfg config.Config) error {
 	return nil
 }
 
-// warnProxyConnectedRun adapts warnProxyConnected to the cobra Run (non-error)
-// mutators: an operator decline is a clean exit(0) no-op, a genuine enumeration
-// failure is fail-closed via output.Die (non-zero). RunE mutators call
-// warnProxyConnected directly and return the sentinel instead.
-func warnProxyConnectedRun(cfg config.Config) {
+// confirmProxyMutation gates a mutating proxy command on the connected-
+// workspace prompt. proceed is false when the command must stop: either the
+// operator declined — "Aborted" has been printed and err is nil, so the
+// command returns nil and exits 0 — or the connected workspaces could not be
+// enumerated, and err says why (fail-closed). Every caller is therefore
+//
+//	if proceed, err := confirmProxyMutation(cfg); !proceed {
+//		return err
+//	}
+func confirmProxyMutation(cfg config.Config) (proceed bool, err error) {
 	if err := warnProxyConnected(cfg); err != nil {
 		if errors.Is(err, errAborted) {
 			output.Info("Aborted")
-			os.Exit(0)
+			return false, nil
 		}
-		output.Die(err.Error())
+		return false, err
 	}
+	return true, nil
 }
 
 func init() {

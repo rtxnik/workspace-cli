@@ -14,7 +14,7 @@ import (
 func TestProxyInitHysteria2(t *testing.T) {
 	dir := t.TempDir()
 	xrayConfig := filepath.Join(dir, "config.json")
-	t.Setenv("XRAY_CONFIG", xrayConfig) // proxyInitCmd.Run calls config.Load(), which honors XRAY_CONFIG
+	t.Setenv("XRAY_CONFIG", xrayConfig) // proxyInitCmd.RunE calls config.Load(), which honors XRAY_CONFIG
 	out, _, err := execCapture(t, "proxy", "init", "hysteria2://pw@h.example:443?sni=h.example")
 	if err != nil {
 		t.Fatalf("init: %v (%s)", err, out)
