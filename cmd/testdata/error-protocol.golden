@@ -1,0 +1,239 @@
+=== success/detect
+exit 0
+--- stdout (0 bytes)
+--- stderr (20 bytes)
+|No profile detected
+=== arg-error/runE-command
+exit 1
+--- stdout (0 bytes)
+--- stderr (336 bytes)
+|Usage:
+|  ws proxy profile use <name> [flags]
+|
+|Flags:
+|  -h, --help        help for use
+|      --no-reload   Skip proxy restart after switching profile (advanced — operator must run 'ws proxy restart' manually to apply)
+|
+|Use "ws proxy profile use [command] --help" for more information about a command.
+|
+|✗ accepts 1 arg(s), received 0
+=== arg-error/converted-body
+exit 1
+--- stdout (0 bytes)
+--- stderr (176 bytes)
+|Usage:
+|  ws start <name> [flags]
+|
+|Flags:
+|  -h, --help   help for start
+|
+|Use "ws start [command] --help" for more information about a command.
+|
+|✗ accepts 1 arg(s), received 0
+=== arg-error/unknown-command
+exit 1
+--- stdout (0 bytes)
+--- stderr (65 bytes)
+|✗ unknown command "nosuch" for "ws"
+|Run 'ws --help' for usage.
+=== arg-error/unknown-flag
+exit 1
+--- stdout (0 bytes)
+--- stderr (169 bytes)
+|Usage:
+|  ws start <name> [flags]
+|
+|Flags:
+|  -h, --help   help for start
+|
+|Use "ws start [command] --help" for more information about a command.
+|
+|✗ unknown flag: --bogus
+=== arg-error/noargs-extra
+exit 1
+--- stdout (0 bytes)
+--- stderr (179 bytes)
+|Usage:
+|  ws status [flags]
+|
+|Flags:
+|  -h, --help   help for status
+|
+|Use "ws status [command] --help" for more information about a command.
+|
+|✗ unknown command "x" for "ws status"
+=== runtime/runE-plain
+exit 1
+--- stdout (0 bytes)
+--- stderr (70 bytes)
+|✗ proxy not ready for reload: stub: proxy container not inspectable
+=== runtime/die-non-spinner
+exit 1
+--- stdout (0 bytes)
+--- stderr (103 bytes)
+|✗ invalid profile name "Bad Name": use lowercase alphanumeric and dashes, no
+|  leading/trailing dash
+=== runtime/proxy-profile-current
+exit 1
+--- stdout (0 bytes)
+--- stderr (24 bytes)
+|✗ file does not exist
+=== runtime/proxy-profile-show-missing
+exit 1
+--- stdout (0 bytes)
+--- stderr (124 bytes)
+|✗ read profile "nope": open
+|  /nonexistent/ws-error-baseline/.config/xray/profiles/nope.json: no such file
+|  or directory
+=== runtime/proxy-init-no-scheme
+exit 1
+--- stdout (0 bytes)
+--- stderr (68 bytes)
+|✗ unsupported URI scheme (want vless://, hysteria2://, or hy2://)
+=== runtime/proxy-init-bad-scheme
+exit 1
+--- stdout (0 bytes)
+--- stderr (68 bytes)
+|✗ unsupported URI scheme (want vless://, hysteria2://, or hy2://)
+=== runtime/proxy-debug-bad-mode
+exit 1
+--- stdout (0 bytes)
+--- stderr (35 bytes)
+|✗ usage: ws proxy debug <on|off>
+=== runtime/spinner-double
+exit 1
+--- stdout (118 bytes)
+|Stopping workspace "wsx"✗ Stopping workspace "wsx": devpod stop: exec: "devpod": executable file not found in $PATH
+--- stderr (68 bytes)
+|✗ devpod stop: exec: "devpod": executable file not found in $PATH
+=== cli-exit/code-1
+exit 1
+--- stdout (0 bytes)
+--- stderr (45 bytes)
+|✗ cannot delete built-in profile "default"
+=== cli-exit/code-4
+exit 4
+--- stdout (0 bytes)
+--- stderr (228 bytes)
+|✗ backup-verify: no logs at
+|  /nonexistent/ws-error-baseline/projects/vault-ai/_tooling/logs/backup-verify-*
+|  .jsonl — Phase 21c HARD-07 not yet shipped (cron writer) or not yet run this
+|  ISO week; see ROADMAP §Phase 21c
+=== silent/workspace-status
+exit 1
+--- stdout (612 bytes)
+|╭───────────────┬────────┬─────────┬──────╮
+|│ REPO          │ BRANCH │ STATUS  │ SYNC │
+|├───────────────┼────────┼─────────┼──────┤
+|│ workspace-cli │ –      │ missing │      │
+|│ vault-ai      │ –      │ missing │      │
+|│ dotfiles      │ –      │ missing │      │
+|╰───────────────┴────────┴─────────┴──────╯
+--- stderr (21 bytes)
+|
+|  0/3 repos healthy
+=== silent/vault-health-score
+exit 1
+--- stdout (3 bytes)
+|55
+--- stderr (0 bytes)
+=== silent/vault-status
+exit 2
+--- stdout (37 bytes)
+|Vault Status
+|
+|
+|Overall: red (exit 2)
+--- stderr (0 bytes)
+=== helper/select-no-workspaces
+exit 1
+--- stdout (0 bytes)
+--- stderr (85 bytes)
+|⚠ devpod not found in PATH, workspace statuses unavailable
+|✗ no workspaces found
+=== helper/select-cancelled
+exit 0
+--- stdout (0 bytes)
+--- stderr (62 bytes)
+|⚠ devpod not found in PATH, workspace statuses unavailable
+|
+=== helper/connected-enumeration-fails
+exit 1
+--- stdout (0 bytes)
+--- stderr (79 bytes)
+|✗ cannot determine connected workspaces: stub: proxy network not inspectable
+=== helper/connected-declined
+exit 0
+--- stdout (0 bytes)
+--- stderr (8 bytes)
+|Aborted
+=== body-exit/proxy-up-unreachable
+exit 1
+--- stdout (14 bytes)
+|Starting proxy
+--- (no newline at end of stdout)
+--- stderr (1128 bytes)
+|✗ Starting proxy: proxy image "devpod-proxy" not found, run 'ws proxy rebuild' first
+|  ○ Waiting for health check
+|  ○ Fixing workspace routes
+|╭─────────────────────────────────────────────────────────────────────────────╮
+|│ Failed to start proxy                                                       │
+|│   Error: proxy image "devpod-proxy" not found, run 'ws proxy rebuild' first │
+|│                                                                             │
+|│   1. Check config: ws proxy check                                           │
+|│   2. Initialize config: ws proxy init <vless-uri>                           │
+|│   3. Rebuild image: ws proxy rebuild                                        │
+|╰─────────────────────────────────────────────────────────────────────────────╯
+=== body-exit/proxy-doctor-unreachable
+exit 1
+--- stdout (24 bytes)
+|  ✗ docker reachable
+|
+--- stderr (104 bytes)
+|⚠ Failed at check 1/1: docker reachable
+|  Fix: Start Docker (Docker Desktop or the daemon) and retry.
+=== body-exit/proxy-doctor-json-unreachable
+exit 1
+--- stdout (189 bytes)
+|{
+|  "ok": false,
+|  "failedAt": 0,
+|  "checks": [
+|    {
+|      "name": "docker reachable",
+|      "ok": false,
+|      "fix": "Start Docker (Docker Desktop or the daemon) and retry."
+|    }
+|  ]
+|}
+--- stderr (0 bytes)
+=== runtime/proxy-test-not-running
+exit 1
+--- stdout (0 bytes)
+--- stderr (57 bytes)
+|✗ proxy is not running — start it first: ws proxy up
+=== runtime/proxy-fix-routes-not-running
+exit 1
+--- stdout (0 bytes)
+--- stderr (54 bytes)
+|✗ Proxy is not running. Start it first: ws proxy up
+=== body-exit/start-not-found
+exit 1
+--- stdout (0 bytes)
+--- stderr (352 bytes)
+|╭───────────────────────────────╮
+|│ Workspace "nope" not found    │
+|│                               │
+|│   1. List workspaces: ws list │
+|│   2. Create it: ws new nope   │
+|╰───────────────────────────────╯
+=== body-exit/new-exists
+exit 1
+--- stdout (0 bytes)
+--- stderr (412 bytes)
+|╭─────────────────────────────────────╮
+|│ Workspace "wsx" already exists      │
+|│                                     │
+|│   1. Choose a different name        │
+|│   2. Delete existing: ws delete wsx │
+|╰─────────────────────────────────────╯

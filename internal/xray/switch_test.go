@@ -105,7 +105,8 @@ func TestManualRecoveryOnFailedSwitch(t *testing.T) {
 // mount" so the cmd layer can surface it to the operator. Previously the
 // error was correctly returned by SwitchTo, but profileUseCmd swallowed it via
 // os.Exit(1) with no output. This test pins the SwitchTo-layer contract; the
-// cmd-layer Cobra rendering is covered separately in cmd/proxy_profile_test.go.
+// cmd layer's rendering of it is pinned by cmd/error_protocol_test.go
+// (TestErrorOutputBaseline); cmd/proxy_profile_test.go pins that it propagates.
 func TestSwitchToReturnsPreSwapErrorOnLegacyBind(t *testing.T) {
 	origBindCheck := bindMountIsWholeDirFn
 	defer func() { bindMountIsWholeDirFn = origBindCheck }()

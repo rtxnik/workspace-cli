@@ -641,11 +641,12 @@ func contractMutants() []contractMutant {
 			probe: probeStreamIdentity,
 		},
 		{
-			name: "die_stops_wrapping",
+			name: "fail_stops_wrapping",
 			spec: "§6.1 / §4.8",
-			defect: "Die alone stops wrapping — the four helpers the sweep reaches through renderMessage are " +
-				"untouched, and so are Die's own mark, role and sanitising: the switch moves the wrap and " +
-				"nothing else, so a kill cannot be attributed to a second change",
+			defect: "Fail stops wrapping — and with it Die, which calls it, and the root's error print, which " +
+				"renders through it; the four helpers the sweep reaches through renderMessage are untouched, " +
+				"and so are the fail shape's mark, role and sanitising: the switch moves the wrap and nothing " +
+				"else, so a kill cannot be attributed to a second change",
 			apply: func(m *mutantSwitches) { m.DieUnwrapped = true },
 			probe: probeDie,
 		},

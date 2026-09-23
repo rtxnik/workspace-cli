@@ -204,6 +204,31 @@ var probeMessageRouting = contractProbe{
 	},
 }
 
+// TestFailReturnsAndRendersTheFailShape pins what Fail writes: exactly the
+// fail shape on stderr, and nothing on stdout. Planted and observed red: Fail
+// pointed at Out() fails the stdout and stderr clauses together.
+//
+// The other half of Fail's contract — that it RETURNS, because the exit
+// belongs to its caller — cannot be asserted from inside this process: an
+// exiting Fail takes the test binary with it, and the run reports
+// "exit status 1" naming no test. That is the red here, and phase 1's PR 3
+// gives the clause a name by driving Fail in a child process.
+func TestFailReturnsAndRendersTheFailShape(t *testing.T) {
+	const msg = "workspace \"a\" could not be created: Cannot connect to the Docker daemon at " +
+		"unix:///var/run/docker.sock. Is the docker daemon running?"
+	var want string
+	stdout, stderr := capture(t, func() {
+		want = renderMessage(Err(), shapeFail, msg) + "\n"
+		Fail(msg)
+	})
+	if stdout != "" {
+		t.Errorf("Fail wrote %d bytes to stdout: %q", len(stdout), stdout)
+	}
+	if stderr != want {
+		t.Errorf("Fail wrote %q to stderr; the fail shape renders %q", stderr, want)
+	}
+}
+
 // --------------------------------------------------------------- §4.8 Die
 
 // Die ends in os.Exit(1), so the only way to exercise the EXPORTED function —
@@ -239,10 +264,11 @@ const (
 // restore to: it runs in the re-exec'd child of runDieChild, and Die ends that
 // process.
 //
-// Measured with the two bodies still inert: die_stops_wrapping came back
-// `false — SURVIVED —`, on the digest "exit=1 lines=7 widest=40" — exactly
-// what probeDie observes clean — because the child was the only process being
-// measured and the parent's switch never reached it.
+// Measured with the two bodies still inert: the mutant now named
+// fail_stops_wrapping (then die_stops_wrapping) came back `false — SURVIVED —`,
+// on the digest "exit=1 lines=7 widest=40" — exactly what probeDie observes
+// clean — because the child was the only process being measured and the
+// parent's switch never reached it.
 func dieChildMutantEnabled() bool { return mutants.DieUnwrapped }
 
 func applyDieChildMutant() { mutants.DieUnwrapped = true }
@@ -274,7 +300,7 @@ func TestDieChildProcess(t *testing.T) {
 	}
 	// The child-side re-apply. mutants.DieUnwrapped is a package global of a
 	// FRESH process here, at its zero value however the parent was set, so
-	// die_stops_wrapping reaches the code being measured only through this
+	// fail_stops_wrapping reaches the code being measured only through this
 	// line. Without it the mutant is reported as survived.
 	if os.Getenv(dieMutantEnv) == "1" {
 		applyDieChildMutant()
@@ -386,7 +412,7 @@ var probeDie = contractProbe{
 		digest := fmt.Sprintf("exit=%d lines=%d widest=%d", code, len(lines), widestLine(lines))
 
 		if code != 1 {
-			r.fail("die_contract", "Die exited %d; §4.8 keeps its os.Exit(1) until the last of its 53 call sites has moved", code)
+			r.fail("die_contract", "Die exited %d; it is Fail followed by os.Exit(1) until phase 1 deletes it", code)
 		}
 		if strings.Contains(stderr, "DIE-RETURNED") {
 			r.fail("die_contract", "Die returned to its caller instead of exiting")
