@@ -2,7 +2,6 @@ package output
 
 import (
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -46,25 +45,22 @@ func Warn(msg string) { emit(Err(), shapeWarn, msg) }
 // Detail is continuation prose under another message. stderr.
 func Detail(msg string) { emit(Err(), shapeDetail, msg) }
 
-// Fail reports a fatal problem on stderr and returns. It does not exit.
-//
-// It is Die without the os.Exit. The root's error protocol in cmd/root.go
-// renders every error that reaches it through Fail and chooses the exit code
-// itself; Die is Fail followed by os.Exit(1). Both therefore print exactly
-// what Die printed before Fail was split out of it.
+// Fail reports a fatal problem on stderr and returns. It does not exit: the
+// root's error protocol in cmd/root.go prints through Fail every error that
+// reaches it with a message, and chooses the exit code itself.
 func Fail(msg string) {
-	if mutants.DieUnwrapped {
+	if mutants.FailUnwrapped {
 		// The defect §6.1 cannot otherwise see: the fail shape is swept only
 		// through renderMessage, so a change made here — printing the message
-		// as one unwrapped line — leaves the whole corpus green. probeDie in
-		// message_test.go reaches it through Die, which calls Fail, and it has
-		// to carry this switch across a process boundary to do so.
+		// as one unwrapped line — leaves the whole corpus green. probeFail in
+		// message_test.go is what reaches it, and it has to carry this switch
+		// across a process boundary to do so.
 		//
 		// THE BRANCH IS DELIBERATELY SINGLE-AXIS. It is renderMessage's own
 		// output with NoMessageWrap on, for the fail shape alone: the mark, the
 		// role and the sanitising all survive and only the wrap goes. An
 		// earlier form dropped s.paint too, which made one switch stand for two
-		// changes — invisible in probeDie, whose child writes to a pipe at
+		// changes — invisible in probeFail, whose child writes to a pipe at
 		// ColourNone where paint emits nothing, and exactly the ambiguity this
 		// harness exists to catch everywhere else.
 		s := Err()
@@ -72,24 +68,6 @@ func Fail(msg string) {
 		return
 	}
 	emit(Err(), shapeFail, msg)
-}
-
-// Die reports a fatal problem and exits 1: Fail, then os.Exit(1).
-//
-// Die is on its way out. Phase 1 moves its call sites onto an error returned
-// from RunE, which the root renders through Fail, and the PR after the one
-// that moves its last caller deletes it.
-//
-// It carries no machine-readable "Deprecated:" marker, and the difference was
-// measured rather than assumed: with the marker in place, `golangci-lint run`
-// reported 53 SA1019 issues — one per call site — and a clean linter run is a
-// repository gate. Phase 1's design weighed adding it when the migration
-// starts and declined: the marker would buy a work list the migration's own
-// inventory already provides, at the cost of a deliberately red gate across
-// two PRs.
-func Die(msg string) {
-	Fail(msg)
-	os.Exit(1)
 }
 
 // emit writes one message to a stream.

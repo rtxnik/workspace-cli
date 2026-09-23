@@ -723,7 +723,7 @@ func fxCorpusBuild() []fixture {
 	}
 
 	// The five message helpers. renderMessage is the body of Info, Success,
-	// Warn, Detail and Die with the write removed, which is what lets the
+	// Warn, Detail and Fail with the write removed, which is what lets the
 	// sweep cover them at every width (§6.1).
 	messages := []struct {
 		name, spec string
@@ -740,7 +740,7 @@ func fxCorpusBuild() []fixture {
 			"Route fix reported a problem\n" + fxMultilineErr, nil},
 		{"message/detail-unbreakable", "§6.1 message helper (Detail) + §6.2 unbreakable", shapeDetail,
 			"digest " + fxToken200, nil},
-		{"message/die-name64", "§6.1 message helper (Die) + §6.2 64-character name", shapeFail,
+		{"message/fail-name64", "§6.1 message helper (Fail) + §6.2 64-character name", shapeFail,
 			"workspace \"" + fxName64 + "\" could not be created: " + fxMultilineErr, nil},
 		{"message/warn-emoji-presentation", "§6.1 message helper (Warn) + §6.2 emoji presentation", shapeWarn,
 			fxEmojiCause + " " + fxEmojiRun, nil},

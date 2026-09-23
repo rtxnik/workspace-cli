@@ -146,7 +146,7 @@ type contractProbe struct {
 // contractProbes is the registry TestContractMutationHarness in
 // mutation_test.go plants its contract defects against.
 //
-// The two MESSAGE probes are not here: probeMessageRouting and probeDie live
+// The two MESSAGE probes are not here: probeMessageRouting and probeFail live
 // in message_test.go and are registered by messageProbes(), because the
 // helpers did not have their §4.7 behaviour when this registry landed and a
 // probe over them here would have been red at that point's own acceptance

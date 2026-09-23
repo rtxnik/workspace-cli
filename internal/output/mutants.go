@@ -37,14 +37,15 @@ package output
 //     TestTableMutantsRedenTheBlockChecks — disclosure_test.go
 //     TestStyleIsAppliedAfterAllocation — disclosure_test.go
 //
-//     (c) A CHILD-PROCESS SEAM: applyDieChildMutant in message_test.go, and
-//     nothing else. probeDie re-execs the test binary, so a switch planted in
+//     (c) A CHILD-PROCESS SEAM: applyFailChildMutant in message_test.go, and
+//     nothing else. probeFail re-execs the test binary, so a switch planted in
 //     the parent does not reach the process under measurement; the child
 //     re-applies it from an environment variable at the top of
-//     TestDieChildProcess. It carries no restore because there is nothing to
-//     restore to — Die exits the child, and the assignment cannot outlive the
-//     process it is made in. That is the whole of the exemption: an untagged
-//     file assigning `mutants` in a process it is about to end.
+//     TestFailChildProcess. It carries no restore because there is nothing to
+//     restore to — the child exits as soon as Fail returns, and the assignment
+//     cannot outlive the process it is made in. That is the whole of the
+//     exemption: an untagged file assigning `mutants` in a process it is
+//     about to end.
 //
 //     An assignment from anywhere else is the leak this rule exists to
 //     forbid: it turns a deliberate defect into the shipped behaviour for the
@@ -143,7 +144,7 @@ type mutantSwitches struct {
 
 	// ------------------------------------------- §4.7 / §4.2 / §4.5 contract
 	MessagesToStdout      bool // the message helpers write to stdout
-	DieUnwrapped          bool // Fail stops wrapping, and so Die and the root's error print; mark, role and sanitising unchanged
+	FailUnwrapped         bool // Fail stops wrapping, and so the root's error print; mark, role and sanitising unchanged
 	ColumnsRejectBelowMin bool // a COLUMNS below MinWidth is rejected instead of clamped
 	ProbeWrongFd          bool // newStream probes fd 0 instead of its own fd
 	NoStreamMemo          bool // Out()/Err() rebuild a Stream on every call

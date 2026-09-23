@@ -16,10 +16,10 @@ import (
 
 // The five message helpers.
 //
-// They are phase 0's entire deliverable and the dominant call volume — 137 of
-// the call sites — and they were at 0.0 % coverage on main, which is why
-// routing every one of them to stdout, or leaving them unwrapped, passed the
-// whole suite before these assertions existed.
+// They are phase 0's entire deliverable and the dominant call volume — 137
+// call sites when phase 0 landed — and they were at 0.0 % coverage on main,
+// which is why routing every one of them to stdout, or leaving them
+// unwrapped, passed the whole suite before these assertions existed.
 //
 // The two assertions TestContractMutationHarness in mutation_test.go plants
 // defects against are contractProbe values, not plain tests: the mutation
@@ -211,8 +211,11 @@ var probeMessageRouting = contractProbe{
 // The other half of Fail's contract — that it RETURNS, because the exit
 // belongs to its caller — cannot be asserted from inside this process: an
 // exiting Fail takes the test binary with it, and the run reports
-// "exit status 1" naming no test. That is the red here, and phase 1's PR 3
-// gives the clause a name by driving Fail in a child process.
+// "exit status 1" naming no test. That is the red here. probeFail drives
+// Fail in a child process and names this clause when run on its own (go test
+// -run TestMessageContract ./internal/output); in a whole-package run this
+// in-process test runs first, so an exiting Fail kills the binary here too,
+// naming no test.
 func TestFailReturnsAndRendersTheFailShape(t *testing.T) {
 	const msg = "workspace \"a\" could not be created: Cannot connect to the Docker daemon at " +
 		"unix:///var/run/docker.sock. Is the docker daemon running?"
@@ -229,57 +232,67 @@ func TestFailReturnsAndRendersTheFailShape(t *testing.T) {
 	}
 }
 
-// --------------------------------------------------------------- §4.8 Die
+// --------------------------------------------------------------- §4.8 Fail probe
 
-// Die ends in os.Exit(1), so the only way to exercise the EXPORTED function —
-// rather than the private body the other four share — is to run it in a
-// process whose death is the expected outcome.
+// TestFailReturnsAndRendersTheFailShape holds Fail's contract in-process, but
+// one half of it only by dying: a Fail that exits takes the test binary with
+// it, which fails the run and names nothing. probeFail runs Fail in a process
+// of its own, where ending the process is an observable exit code, and where a
+// mutation switch the parent sets can be carried across — but that naming
+// only happens when probeFail runs on its own; in a whole-package run this
+// test runs first, and an exiting Fail kills the binary before probeFail gets
+// a turn.
 //
-// This matters because sweeping the shared body satisfies §6.1's letter and
-// not its purpose: measured, with Die alone made to print one unwrapped line,
-// the entire render-side suite stays green.
+// It matters because sweeping the shared body satisfies §6.1's letter and not
+// its purpose: measured, with the fail shape alone made to print one unwrapped
+// line, the entire render-side suite stays green.
 const (
-	dieChildEnv = "WS_TEST_DIE"
-	// dieMutantEnv carries a mutation switch ACROSS THE PROCESS BOUNDARY.
-	// TestContractMutationHarness in mutation_test.go makes Die stop wrapping
-	// and then asks whether this probe noticed; it sets mutants.DieUnwrapped
+	failChildEnv = "WS_TEST_FAIL"
+	// failMutantEnv carries a mutation switch ACROSS THE PROCESS BOUNDARY.
+	// TestContractMutationHarness in mutation_test.go makes Fail stop wrapping
+	// and then asks whether this probe noticed; it sets mutants.FailUnwrapped
 	// in the parent, but the child is a fresh process whose switches are all
 	// at their zero value. With no environment variable to carry the decision,
 	// the mutant would change nothing in the process actually being measured
 	// and would be reported as survived. The two seams below are where the
 	// parent asks and the child re-applies.
-	dieMutantEnv = "WS_TEST_DIE_UNWRAPPED"
-	dieColumns   = 40
+	failMutantEnv = "WS_TEST_FAIL_UNWRAPPED"
+	failColumns   = 40
+	// failReturnedExit is the code the child exits with once Fail has returned
+	// to it. Fail never chooses an exit code — the root's error protocol does —
+	// so any other code means either Fail did not return to its caller (it
+	// ended the process itself) or the child never reached Fail at all: a
+	// -test.run that matches nothing or a skipped child exits 0, and a panic
+	// exits 2.
+	failReturnedExit = 7
 )
 
-// dieChildMutantEnabled reports whether the Die mutant is on in THIS process,
-// and applyDieChildMutant turns it on in the CHILD. They were seams for one
-// reason — this file shipped before mutants.DieUnwrapped was declared, and a
-// reference to a symbol that does not exist yet does not compile — and they
-// now read and write that switch.
+// failChildMutantEnabled reports whether the Fail mutant is on in THIS
+// process, and applyFailChildMutant turns it on in the CHILD.
 //
-// applyDieChildMutant is the one assignment to `mutants` outside a
+// applyFailChildMutant is the one assignment to `mutants` outside a
 // `//go:build mutation` file and a named control test; mutants.go carves it
 // out by name as rule 3(c). It carries no restore because there is nothing to
-// restore to: it runs in the re-exec'd child of runDieChild, and Die ends that
-// process.
+// restore to: it runs in the re-exec'd child of runFailChild, which exits as
+// soon as Fail returns.
 //
-// Measured with the two bodies still inert: the mutant now named
-// fail_stops_wrapping (then die_stops_wrapping) came back `false — SURVIVED —`,
-// on the digest "exit=1 lines=7 widest=40" — exactly what probeDie observes
-// clean — because the child was the only process being measured and the
-// parent's switch never reached it.
-func dieChildMutantEnabled() bool { return mutants.DieUnwrapped }
+// Measured when the two seams were still inert — this file shipped before
+// the switch existed — and the probe drove Die: the mutant came back
+// `false — SURVIVED —`, on the digest
+// "exit=1 lines=7 widest=40" — exactly what the probe observed clean — because
+// the child was the only process being measured and the parent's switch never
+// reached it.
+func failChildMutantEnabled() bool { return mutants.FailUnwrapped }
 
-func applyDieChildMutant() { mutants.DieUnwrapped = true }
+func applyFailChildMutant() { mutants.FailUnwrapped = true }
 
-// dieMessage is 195 display cells, and carries an embedded newline so the
+// failMessage is 195 display cells, and carries an embedded newline so the
 // paragraph handling is exercised too. Measured:
 //
-//	ansi.StringWidth(dieMessage) = 195
-//	its two paragraphs           = 166 and 29 cells
+//	ansi.StringWidth(failMessage) = 195
+//	its two paragraphs            = 166 and 29 cells
 //
-// Before this task, one Fprintln of errorStyle.Render("✗ "+dieMessage) emitted
+// Before phase 0, one Fprintln of errorStyle.Render("✗ "+failMessage) emitted
 // two lines of 168 cells — not 168 and 29, which is what predicting it from
 // the paragraph widths gives. lipgloss block-renders a multi-line string,
 // padding every line to the widest, so the second line carried its 29 cells of
@@ -287,49 +300,49 @@ func applyDieChildMutant() { mutants.DieUnwrapped = true }
 //
 // BOTH lines therefore tripped the width loop below, and together with the
 // len(lines) < 3 clause that is the three violations this probe reported
-// against the old bodies.
-var dieMessage = "workspace \"" + strings.Repeat("a", 64) + "\" could not be created: " +
+// against the pre-phase-0 body.
+var failMessage = "workspace \"" + strings.Repeat("a", 64) + "\" could not be created: " +
 	"Cannot connect to the Docker daemon at unix:///var/run/docker.sock.\n" +
 	"Is the docker daemon running?"
 
-// TestDieChildProcess is the far side of the subprocess: it runs only when the
-// parent re-execs the test binary with the environment below.
-func TestDieChildProcess(t *testing.T) {
-	if os.Getenv(dieChildEnv) != "1" {
-		t.Skip("child half of probeDie; runs only in the subprocess")
+// TestFailChildProcess is the far side of the subprocess: it runs only when
+// the parent re-execs the test binary with the environment below.
+func TestFailChildProcess(t *testing.T) {
+	if os.Getenv(failChildEnv) != "1" {
+		t.Skip("child half of probeFail; runs only in the subprocess")
 	}
-	// The child-side re-apply. mutants.DieUnwrapped is a package global of a
+	// The child-side re-apply. mutants.FailUnwrapped is a package global of a
 	// FRESH process here, at its zero value however the parent was set, so
 	// fail_stops_wrapping reaches the code being measured only through this
 	// line. Without it the mutant is reported as survived.
-	if os.Getenv(dieMutantEnv) == "1" {
-		applyDieChildMutant()
+	if os.Getenv(failMutantEnv) == "1" {
+		applyFailChildMutant()
 	}
-	Die(dieMessage)
-	// Unreachable: Die exits. Reaching it is itself the finding.
-	fmt.Fprintln(os.Stderr, "DIE-RETURNED")
-	os.Exit(0)
+	Fail(failMessage)
+	// Fail returned, as it must. Exit with a code Fail never produces, so the
+	// parent can tell a return from an exit.
+	os.Exit(failReturnedExit)
 }
 
-func runDieChild(t *testing.T) (exitCode int, stdout, stderr string) {
+func runFailChild(t *testing.T) (exitCode int, stdout, stderr string) {
 	t.Helper()
 	// No -test.v: the framework's own "=== RUN" line goes to stdout, and this
-	// probe asserts that Die puts NOTHING there.
-	cmd := exec.Command(os.Args[0], "-test.run=TestDieChildProcess")
+	// probe asserts that Fail puts NOTHING there.
+	cmd := exec.Command(os.Args[0], "-test.run=TestFailChildProcess")
 	cmd.Env = append(os.Environ(),
-		dieChildEnv+"=1",
-		"COLUMNS="+strconv.Itoa(dieColumns),
+		failChildEnv+"=1",
+		"COLUMNS="+strconv.Itoa(failColumns),
 		"LANG=en_US.UTF-8",
 		"LC_ALL=en_US.UTF-8",
 		"NO_COLOR=1",
 		"WS_ASCII=",
 		"RUNEWIDTH_EASTASIAN=",
 	)
-	// The parent-side propagation: the parent's mutants.DieUnwrapped decides
+	// The parent-side propagation: the parent's mutants.FailUnwrapped decides
 	// whether the child is told to set its own, and the environment is the
 	// only channel across the process boundary.
-	if dieChildMutantEnabled() {
-		cmd.Env = append(cmd.Env, dieMutantEnv+"=1")
+	if failChildMutantEnabled() {
+		cmd.Env = append(cmd.Env, failMutantEnv+"=1")
 	}
 	var out, errB strings.Builder
 	cmd.Stdout = &out
@@ -339,14 +352,14 @@ func runDieChild(t *testing.T) (exitCode int, stdout, stderr string) {
 	if ee, ok := err.(*exec.ExitError); ok {
 		code = ee.ExitCode()
 	} else if err != nil {
-		t.Fatalf("running the Die child: %v\n%s", err, errB.String())
+		t.Fatalf("running the Fail child: %v\n%s", err, errB.String())
 	}
 	return code, out.String(), errB.String()
 }
 
-// dieMessageLines is the part of the child's stderr that Die wrote: everything
-// before the test framework's own chatter.
-func dieMessageLines(stderr string) []string {
+// failMessageLines is the part of the child's stderr that Fail wrote:
+// everything before the test framework's own chatter.
+func failMessageLines(stderr string) []string {
 	var out []string
 	for _, line := range strings.Split(stderr, "\n") {
 		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "===") ||
@@ -372,77 +385,73 @@ func widestLine(lines []string) int {
 	return w
 }
 
-// probeDie is §6.1's corpus entry for Die, taken to the exported function.
+// probeFail is §6.1's corpus entry for Fail, taken to the exported function.
 //
-// The §6.1 sweep renders Die's SHAPE through renderMessage and never calls Die,
-// so a change made inside Die is invisible to it. That was a prediction when
-// this probe was written and the sweep did not yet exist. It is now a
-// measurement: each defect below was planted in Die's own body and both
-// TestAcceptanceSweep and the whole untagged package were run against it.
+// The §6.1 sweep renders the fail SHAPE through renderMessage and never calls
+// Fail, so a change made inside Fail is invisible to it. That was measured
+// when the probe drove Die, before phase 1: each defect below was planted in
+// Die's own body, and both TestAcceptanceSweep and the whole untagged package
+// were run against it.
 //
-//	Die's wrap dropped           sweep ok, TestMessageContract/die_contract red
-//	Die's emit pointed at Out()  sweep ok, TestMessageContract/die_contract red
+//	the wrap dropped             sweep ok, TestMessageContract/die_contract red
+//	emit pointed at Out()        sweep ok, TestMessageContract/die_contract red
 //	os.Exit(0) for os.Exit(1)    sweep ok, TestMessageContract/die_contract red
 //
 // In all three the only red anywhere in the package was that one subtest —
-// this probe. The limitation the sentence claims is real, and this is what
-// stands between the layer and it.
+// this probe, then named die_contract.
 //
-// All eight clauses below were planted in this tree and observed red, rather
-// than claimed. Six plants cover the eight: three of them trip two clauses at
-// once, and the exit clause is reached by two different plants.
+// All seven clauses below were planted and observed red, rather than claimed.
+// Five plants cover the seven — four in Fail itself, the last in renderMessage
+// — and two of them trip two clauses at once.
 //
-//	Die printing one unwrapped line   -> 2 violations, line 1 at 168 cells
-//	Die's shape stripped of its state -> 1 violation, first line lacks "✗ "
-//	Die pointed at Out()              -> 2 violations: 214 bytes on stdout, and
-//	                                     nothing left on stderr to measure
-//	os.Exit(0) for os.Exit(1)         -> 1 violation, "Die exited 0"
-//	Die returning instead of exiting  -> 2 violations, "Die exited 0" and the
-//	                                     DIE-RETURNED line; digest exit=0 lines=8
-//	the message cut to 150 cells      -> 1 violation, the lost-message clause
-//	inside renderMessage                 alone; digest exit=1 lines=5 widest=40,
-//	                                     so the mark and the budget both held
-var probeDie = contractProbe{
-	name: "die_contract",
+//	Fail printing one unwrapped line   -> 2 violations, line 1 at 168 cells;
+//	                                      digest exit=7 lines=2 widest=168
+//	Fail's shape stripped of its state -> 1 violation, first line lacks "✗ "
+//	Fail pointed at Out()              -> 2 violations: 214 bytes on stdout, and
+//	                                      nothing left on stderr to measure
+//	Fail calling os.Exit(1)            -> 1 violation, "the child exited 1, not 7"
+//	the message cut to 150 cells       -> 1 violation, the lost-message clause
+//	inside renderMessage                  alone; digest exit=7 lines=5 widest=40,
+//	                                      so the mark and the budget both held
+var probeFail = contractProbe{
+	name: "fail_contract",
 	spec: "§6.1 / §4.7 / §4.8",
-	what: "Die wraps to the stream budget, keeps its mark and its whole message, writes only to stderr, and exits 1",
+	what: "Fail wraps to the stream budget, keeps its mark and its whole message, writes only to stderr, and returns to its caller",
 	run: func(t *testing.T, r *results) string {
-		code, stdout, stderr := runDieChild(t)
-		lines := dieMessageLines(stderr)
+		code, stdout, stderr := runFailChild(t)
+		lines := failMessageLines(stderr)
 		digest := fmt.Sprintf("exit=%d lines=%d widest=%d", code, len(lines), widestLine(lines))
 
-		if code != 1 {
-			r.fail("die_contract", "Die exited %d; it is Fail followed by os.Exit(1) until phase 1 deletes it", code)
-		}
-		if strings.Contains(stderr, "DIE-RETURNED") {
-			r.fail("die_contract", "Die returned to its caller instead of exiting")
+		if code != failReturnedExit {
+			r.fail("fail_contract", "the child exited %d, not %d: Fail did not return to its caller, or the child never reached it",
+				code, failReturnedExit)
 		}
 		if stdout != "" {
-			r.fail("die_contract", "Die wrote %d bytes to stdout: %q", len(stdout), stdout)
+			r.fail("fail_contract", "Fail wrote %d bytes to stdout: %q", len(stdout), stdout)
 		}
 		if len(lines) == 0 {
-			r.fail("die_contract", "Die wrote nothing to stderr; the child's stderr was %q", stderr)
+			r.fail("fail_contract", "Fail wrote nothing to stderr; the child's stderr was %q", stderr)
 			return digest
 		}
 		for i, line := range lines {
-			if w := ansi.StringWidth(line); w > dieColumns {
-				r.fail("die_contract", "Die line %d is %d cells against a COLUMNS budget of %d: %q",
-					i+1, w, dieColumns, line)
+			if w := ansi.StringWidth(line); w > failColumns {
+				r.fail("fail_contract", "Fail line %d is %d cells against a COLUMNS budget of %d: %q",
+					i+1, w, failColumns, line)
 			}
 		}
 		if len(lines) < 3 {
 			// 195 cells of message over two paragraphs cannot be laid out in
 			// two lines at a budget of 40 unless something stopped wrapping.
-			r.fail("die_contract", "Die emitted %d line(s) for a %d-cell message at a budget of %d: it is not wrapping",
-				len(lines), ansi.StringWidth(dieMessage), dieColumns)
+			r.fail("fail_contract", "Fail emitted %d line(s) for a %d-cell message at a budget of %d: it is not wrapping",
+				len(lines), ansi.StringWidth(failMessage), failColumns)
 		}
 		if want := fxMark(StateFail, GlyphUTF8) + " "; !strings.HasPrefix(lines[0], want) {
-			r.fail("die_contract", "Die's first line %q does not start with the fail mark %q", lines[0], want)
+			r.fail("fail_contract", "Fail's first line %q does not start with the fail mark %q", lines[0], want)
 		}
 		// §4.4: wrapped, not truncated — every character survives once the
 		// breaks and the hanging indent are collapsed.
-		if joined := squash(strings.Join(lines, "")); !strings.Contains(joined, squash(dieMessage)) {
-			r.fail("die_contract", "Die lost part of its message; it rendered:\n%s", strings.Join(lines, "\n"))
+		if joined := squash(strings.Join(lines, "")); !strings.Contains(joined, squash(failMessage)) {
+			r.fail("fail_contract", "Fail lost part of its message; it rendered:\n%s", strings.Join(lines, "\n"))
 		}
 		return digest
 	},
@@ -453,7 +462,7 @@ var probeDie = contractProbe{
 // TestContractMutationHarness in mutation_test.go runs
 // append(contractProbes(), messageProbes()...).
 func messageProbes() []contractProbe {
-	return []contractProbe{probeMessageRouting, probeDie}
+	return []contractProbe{probeMessageRouting, probeFail}
 }
 
 // ------------------------------------------------------------- the tests
@@ -703,7 +712,7 @@ func TestMessageCarriesItsRoleColourOnEveryWrappedLine(t *testing.T) {
 		{"Success", shapeSuccess, RoleOK},
 		{"Warn", shapeWarn, RoleWarn},
 		{"Detail", shapeDetail, RoleMuted},
-		{"Die", shapeFail, RoleFail},
+		{"Fail", shapeFail, RoleFail},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := NewStreamAt(io.Discard, columns, true, ColourTrue, false)

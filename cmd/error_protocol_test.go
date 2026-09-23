@@ -23,7 +23,7 @@ import (
 // The error path's byte-level baseline.
 //
 // Every case runs the REAL Execute() in a re-exec of this test binary — the
-// model probeDie established in internal/output. Only a separate process sees
+// model probeFail established in internal/output. Only a separate process sees
 // output.Err() on its real stderr, the exit code and stdout together, and a
 // driver that calls rootCmd.Execute() in-process sees none of the three: it
 // reads cobra's own buffers, which the root's print point never writes to.
