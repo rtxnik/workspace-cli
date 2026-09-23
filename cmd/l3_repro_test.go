@@ -62,10 +62,10 @@ func TestL3_07_VaultRenderResultTreatsOKFalseAsSuccess(t *testing.T) {
 }
 
 // TestL3_06_VaultErrExitEmptyCodeYieldsExitZero: an envelope error with an
-// empty code must not yield cliErrorWithExit{code:0}, which Execute() would
-// pass to os.Exit(0) after printing the Error: line. Root cause shared with
-// the envelope mapper's unknown-code guard; kept as the leaf-level
-// regression guard.
+// empty code must not yield cliErrorWithExit{code:0}, for which run returns
+// (msg, 0) and Execute prints msg through output.Fail before exiting 0 —
+// cobra itself prints nothing. Root cause shared with the envelope mapper's
+// unknown-code guard; kept as the leaf-level regression guard.
 func TestL3_06_VaultErrExitEmptyCodeYieldsExitZero(t *testing.T) {
 	var err error
 	quietStderr(t, func() {
