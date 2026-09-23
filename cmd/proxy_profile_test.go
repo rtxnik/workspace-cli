@@ -79,10 +79,12 @@ func TestProxyProfileHelpExits0(t *testing.T) {
 
 // TestProfileUseRendersPreSwapError guards the 2026-05-13 hotfix: pre-swap
 // errors from xray.SwitchTo (invalid profile name, legacy bind mount, missing
-// target file) must reach the operator via Cobra's default error printer
-// ("Error: <msg>") instead of being swallowed by os.Exit(1). The original
-// profileUseCmd used `Run` and exited silently on error; this test pins the
-// RunE contract.
+// target file) must reach the operator instead of being swallowed by
+// os.Exit(1). The original profileUseCmd used `Run` and exited silently on
+// error; this test pins the RunE contract. Phase 1 moved the print itself: the
+// root silences cobra and renders the error through output.Fail, so what this
+// test pins is that the error propagates and which branch the root takes.
+// TestErrorOutputBaseline pins the bytes.
 //
 // We use a slash-containing profile name to trip ValidateProfileName's regex
 // (^[a-z0-9_-]{1,32}$) — same pre-swap error path as the bind-check failure,
@@ -90,9 +92,9 @@ func TestProxyProfileHelpExits0(t *testing.T) {
 // --no-migrate avoids EnsureMigrated I/O during the test.
 //
 // 260513-dbc: the new orchestration runs verifyProxyReadyFn BEFORE
-// switchToFn. To still reach the xray.SwitchTo pre-swap path (which is the
-// contract this test pins — Cobra renders the returned error), stub the
-// pre-flight to nil so the orchestrator falls through to switchToFn.
+// switchToFn. To still reach the xray.SwitchTo pre-swap path — the contract
+// this test pins — stub the pre-flight to nil so the orchestrator falls
+// through to switchToFn.
 func TestProfileUseRendersPreSwapError(t *testing.T) {
 	origVerify := verifyProxyReadyFn
 	verifyProxyReadyFn = func(_ config.Config) error { return nil }
@@ -114,18 +116,18 @@ func TestProfileUseRendersPreSwapError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected Execute() to return non-nil for invalid profile name (pre-swap error must propagate)")
 	}
-	combined := out.String() + errOut.String()
-	if !strings.Contains(combined, "invalid profile name") {
-		t.Fatalf("expected error output to mention `invalid profile name`; out=%q err=%q execErr=%v",
-			out.String(), errOut.String(), err)
+	// The root prints the error, not cobra: rootCmd sets SilenceErrors, so the
+	// text reaches the operator through run() and output.Fail, and
+	// TestErrorOutputBaseline pins the bytes that print on stderr.
+	msg, code := run(err)
+	if !strings.Contains(msg, "invalid profile name") || code != 1 {
+		t.Fatalf("root protocol returned msg=%q code=%d; want the pre-swap error at exit 1", msg, code)
 	}
-	// Cobra's default error printer renders returned errors as "Error: <msg>".
-	if !strings.Contains(combined, "Error:") {
-		t.Errorf("expected Cobra to render returned error with `Error:` prefix; got: %s", combined)
-	}
-	// SilenceUsage=true must suppress the usage block on a RunE error path.
-	if strings.Contains(combined, "Usage:") {
-		t.Errorf("expected SilenceUsage=true to suppress usage block; got: %s", combined)
+	// Cobra itself must print nothing here: no "Error:" line, because the
+	// root silences errors, and no Usage: block, because the body sets
+	// SilenceUsage before it returns a runtime error.
+	if combined := out.String() + errOut.String(); combined != "" {
+		t.Errorf("cobra printed %q; the root owns the error and a runtime error carries no usage block", combined)
 	}
 }
 

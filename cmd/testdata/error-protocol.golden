@@ -6,8 +6,7 @@ exit 0
 === arg-error/runE-command
 exit 1
 --- stdout (0 bytes)
---- stderr (372 bytes)
-|Error: accepts 1 arg(s), received 0
+--- stderr (336 bytes)
 |Usage:
 |  ws proxy profile use <name> [flags]
 |
@@ -21,8 +20,7 @@ exit 1
 === arg-error/converted-body
 exit 1
 --- stdout (0 bytes)
---- stderr (212 bytes)
-|Error: accepts 1 arg(s), received 0
+--- stderr (176 bytes)
 |Usage:
 |  ws start <name> [flags]
 |
@@ -35,15 +33,13 @@ exit 1
 === arg-error/unknown-command
 exit 1
 --- stdout (0 bytes)
---- stderr (106 bytes)
-|Error: unknown command "nosuch" for "ws"
-|Run 'ws --help' for usage.
+--- stderr (65 bytes)
 |✗ unknown command "nosuch" for "ws"
+|Run 'ws --help' for usage.
 === arg-error/unknown-flag
 exit 1
 --- stdout (0 bytes)
---- stderr (198 bytes)
-|Error: unknown flag: --bogus
+--- stderr (169 bytes)
 |Usage:
 |  ws start <name> [flags]
 |
@@ -69,8 +65,7 @@ exit 1
 === runtime/runE-plain
 exit 1
 --- stdout (0 bytes)
---- stderr (143 bytes)
-|Error: proxy not ready for reload: stub: proxy container not inspectable
+--- stderr (70 bytes)
 |✗ proxy not ready for reload: stub: proxy container not inspectable
 === runtime/die-non-spinner
 exit 1
@@ -114,13 +109,16 @@ exit 1
 === cli-exit/code-1
 exit 1
 --- stdout (0 bytes)
---- stderr (48 bytes)
-|Error: cannot delete built-in profile "default"
+--- stderr (45 bytes)
+|✗ cannot delete built-in profile "default"
 === cli-exit/code-4
 exit 4
 --- stdout (0 bytes)
---- stderr (224 bytes)
-|Error: backup-verify: no logs at /nonexistent/ws-error-baseline/projects/vault-ai/_tooling/logs/backup-verify-*.jsonl — Phase 21c HARD-07 not yet shipped (cron writer) or not yet run this ISO week; see ROADMAP §Phase 21c
+--- stderr (228 bytes)
+|✗ backup-verify: no logs at
+|  /nonexistent/ws-error-baseline/projects/vault-ai/_tooling/logs/backup-verify-*
+|  .jsonl — Phase 21c HARD-07 not yet shipped (cron writer) or not yet run this
+|  ISO week; see ROADMAP §Phase 21c
 === silent/workspace-status
 exit 1
 --- stdout (612 bytes)
