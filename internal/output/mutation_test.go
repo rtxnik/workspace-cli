@@ -594,7 +594,7 @@ func TestPairedAssertionCatchesWhatTheSweepCannot(t *testing.T) {
 //
 // The corpus harness above plants a defect and re-renders the corpus. That
 // cannot reach §4.7's stream routing, §4.2's width resolution, §4.5's
-// glyph-mode selection or §4.8's Die, because none of them appears in a
+// glyph-mode selection or §4.8's Fail, because none of them appears in a
 // render: the sweep builds its streams with NewStreamAt over io.Discard and
 // never resolves a file descriptor. A mutant in any of them is VACUOUS against
 // the corpus — the bytes do not change — and a harness that reported such a
@@ -643,12 +643,12 @@ func contractMutants() []contractMutant {
 		{
 			name: "fail_stops_wrapping",
 			spec: "§6.1 / §4.8",
-			defect: "Fail stops wrapping — and with it Die, which calls it, and the root's error print, which " +
-				"renders through it; the four helpers the sweep reaches through renderMessage are untouched, " +
-				"and so are the fail shape's mark, role and sanitising: the switch moves the wrap and nothing " +
-				"else, so a kill cannot be attributed to a second change",
-			apply: func(m *mutantSwitches) { m.DieUnwrapped = true },
-			probe: probeDie,
+			defect: "Fail stops wrapping — and with it the root's error print, which renders through it; the " +
+				"four helpers the sweep reaches through renderMessage are untouched, and so are the fail " +
+				"shape's mark, role and sanitising: the switch moves the wrap and nothing else, so a kill " +
+				"cannot be attributed to a second change",
+			apply: func(m *mutantSwitches) { m.FailUnwrapped = true },
+			probe: probeFail,
 		},
 		{
 			name: "columns_below_minwidth_rejected",
@@ -688,7 +688,7 @@ func TestContractMutationHarness(t *testing.T) {
 	// Both registries: contractProbes() in stream_contract_test.go carries
 	// stream_identity, resolve_width and glyph_mode_selection, and
 	// messageProbes() in message_test.go carries message_routing and
-	// die_contract. They are separate because the message helpers did not have
+	// fail_contract. They are separate because the message helpers did not have
 	// their §4.7 behaviour when the first registry landed, so a probe over
 	// them would have been red at that point's own acceptance gate.
 	clean := map[string]string{}
