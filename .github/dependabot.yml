@@ -23,6 +23,12 @@ updates:
       # v0.11.6 until the two agree; a later release is proposed as usual.
       - dependency-name: "github.com/charmbracelet/x/ansi"
         versions: ["0.11.7", "0.11.8"]
+      # huh/spinner is its own module and has no tagged release at all, so the
+      # requirement is a pseudo-version. Dependabot resolves it as the parent's
+      # tag, looks for the package inside github.com/charmbracelet/huh@v1.0.0,
+      # which does not contain it, and the whole go_modules run fails with
+      # dependency_file_not_resolvable. Nothing to update; skip it.
+      - dependency-name: "github.com/charmbracelet/huh/spinner"
     # Version updates wait for a package to settle; security updates bypass this.
     cooldown:
       default-days: 7
