@@ -221,6 +221,10 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestExecuteChildProcess$")
+	// WaitDelay bounds Run itself: the context only kills the child, and a
+	// grandchild holding the pipes open would otherwise keep Run waiting past
+	// the 30s deadline above.
+	cmd.WaitDelay = 5 * time.Second
 	// Setsid, so the child has no controlling terminal. Its stdin is the null
 	// device, and huh's terminal layer answers that by opening /dev/tty
 	// instead — which, when `go test` is run from a real terminal, is the
@@ -280,11 +284,18 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 // are the only thing normaliseSpinner is allowed to drop.
 const spinnerFrames = "⣾⣽⣻⢿⡿⣟⣯⣷⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-// normaliseSpinner removes what the animation's timing decides and keeps
-// everything else. The text after the spinner's last erase-line survives as
-// it is; the text before it survives too, minus the frames and the whitespace
-// between them — an erase-line clears one line, so a diagnostic printed
-// before it is still on the operator's screen and must stay in the golden.
+// normaliseSpinner collapses the spinner animation to the one line it leaves
+// on screen, independent of how many frames it rendered before the test's
+// action finished. Text after the spinner's last erase-line survives as it
+// is (ANSI stripped, \r removed). Text before it splits at the last
+// newline: complete lines that precede the spinner survive too, ANSI
+// stripped and \r-free, because an erase-line clears only one line and a
+// diagnostic printed earlier is still on the operator's screen; the
+// spinner's own line — redraws separated by \r — collapses to its last
+// non-empty redraw, with the frame rune and surrounding whitespace trimmed.
+// ansi.Strip runs over the whole stream, including the erase-line and the
+// cursor-restore sequences around it, so a regression that stopped
+// restoring the cursor would not show up in this comparison.
 func normaliseSpinner(s string) string {
 	const eraseLine = "\x1b[2K"
 	// The carriage returns the animation leaves behind are not escape
@@ -295,8 +306,61 @@ func normaliseSpinner(s string) string {
 	if i < 0 {
 		return clean(s)
 	}
-	before := strings.Trim(clean(s[:i]), spinnerFrames+" \t\n")
-	return before + clean(s[i+len(eraseLine):])
+	pre := ansi.Strip(s[:i])
+	prefix, spinnerLine := "", pre
+	if j := strings.LastIndex(pre, "\n"); j >= 0 {
+		prefix, spinnerLine = pre[:j+1], pre[j+1:]
+	}
+	prefix = strings.ReplaceAll(prefix, "\r", "")
+	last := ""
+	for _, redraw := range strings.Split(spinnerLine, "\r") {
+		if redraw != "" {
+			last = redraw
+		}
+	}
+	before := strings.Trim(last, spinnerFrames+" \t\n")
+	return prefix + before + clean(s[i+len(eraseLine):])
+}
+
+// TestNormaliseSpinner pins normaliseSpinner against synthetic input built
+// from the real shape huh/spinner writes (captured from `stop wsx`), with
+// one, two and three redraws before the erase-line — the review's finding
+// was that only the one-frame shape was ever exercised, so the two- and
+// three-frame cases here are the regression pin.
+func TestNormaliseSpinner(t *testing.T) {
+	const title = `Stopping workspace "wsx"`
+	const tail = `✗ Stopping workspace "wsx": boom` + "\n"
+	const wantSpinner = title + tail
+
+	frame := func(runes string) string {
+		var b strings.Builder
+		for _, r := range runes {
+			fmt.Fprintf(&b, "\r%c %s", r, title)
+		}
+		return "\x1b[?25l\x1b[?2004h" + b.String() +
+			"\r\x1b[2K\r\x1b[?2004l\x1b[?25h" + tail
+	}
+	one := frame("⣽")
+	two := frame("⣽⣻")
+	three := frame("⣽⣻⢿")
+
+	for _, c := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"one redraw", one, wantSpinner},
+		{"two redraws", two, wantSpinner},
+		{"three redraws", three, wantSpinner},
+		{"diagnostic line before the spinner starts", "⚠ something\n" + one, "⚠ something\n" + wantSpinner},
+		{"no erase-line at all", "\x1b[1msuccess\x1b[0m\n", "success\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := normaliseSpinner(c.in); got != c.want {
+				t.Errorf("normaliseSpinner(%q) = %q; want %q", c.in, got, c.want)
+			}
+		})
+	}
 }
 
 // renderErrorCase is one case's block of the golden file. Each stream is

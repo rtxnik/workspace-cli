@@ -277,7 +277,7 @@ func TestPredictEnvelopeErrorRoutesExitCodeEndToEnd(t *testing.T) {
 	// what is printed and with which code, and Execute hands the message to
 	// output.Fail. This drives run() alone; the bytes that reach stderr are
 	// TestErrorOutputBaseline's cli-exit cases. Cobra itself must print
-	// nothing — rootCmd sets SilenceErrors.
+	// nothing on either buffer — rootCmd sets SilenceErrors.
 	msg, code := run(err)
 	if !strings.Contains(msg, "BUDGET_EXCEEDED") {
 		t.Errorf("failure reason must reach the root's print; run() returned msg=%q", msg)
@@ -285,7 +285,7 @@ func TestPredictEnvelopeErrorRoutesExitCodeEndToEnd(t *testing.T) {
 	if code != 2 {
 		t.Errorf("run() must route BUDGET_EXCEEDED to exit 2; got %d", code)
 	}
-	if errOut.Len() != 0 {
-		t.Errorf("cobra printed %q; the root owns the error print", errOut.String())
+	if out.Len()+errOut.Len() != 0 {
+		t.Errorf("cobra printed out=%q errOut=%q; the root owns the error print", out.String(), errOut.String())
 	}
 }
