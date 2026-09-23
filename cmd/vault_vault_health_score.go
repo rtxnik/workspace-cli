@@ -65,9 +65,10 @@ func newVaultVaultHealthScoreCmd() *cobra.Command {
 			// Machine-parseable: just the integer on stdout, no prefix.
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), score)
 
-			// Map to band-driven exit code; empty msg suppresses Cobra's
-			// "Error:" line so cron consumers see only the score on stdout
-			// while shells can branch on $?.
+			// Map to band-driven exit code; the root silences cobra's
+			// "Error:" line for every command, and the empty msg here is
+			// what keeps the root itself from printing, so cron consumers
+			// see only the score on stdout while shells can branch on $?.
 			band := mcp.HealthBand(score)
 			code := mcp.HealthBandExitCode(band)
 			if code == 0 {

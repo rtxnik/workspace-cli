@@ -8,9 +8,8 @@ import (
 )
 
 // proxyInitCmd must accept an uppercase scheme and write a valid config.
-// Run() only calls os.Exit on the error branch, so the happy path returns
-// normally; a pre-fix binary would Die here. Output is redirected to keep the
-// test log pristine.
+// A pre-fix binary returned "unsupported URI scheme" here. Output is
+// redirected to keep the test log pristine.
 func TestL3_lowB_ProxyInitAcceptsUppercaseScheme(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
@@ -24,7 +23,9 @@ func TestL3_lowB_ProxyInitAcceptsUppercaseScheme(t *testing.T) {
 	os.Stdout, os.Stderr = devnull, devnull
 	defer func() { os.Stdout, os.Stderr = oldOut, oldErr; _ = devnull.Close() }()
 
-	proxyInitCmd.Run(proxyInitCmd, []string{"HY2://pw@h.example:443?sni=h.example"})
+	if err := proxyInitCmd.RunE(proxyInitCmd, []string{"HY2://pw@h.example:443?sni=h.example"}); err != nil {
+		t.Fatalf("init on an uppercase scheme: %v", err)
+	}
 
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {

@@ -1,6 +1,7 @@
 package output
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -14,10 +15,16 @@ type SelectOption struct {
 }
 
 // Select displays an interactive selector and returns the chosen value.
-// Exits the process if no options are provided or the user cancels.
-func Select(title string, options []SelectOption) string {
+//
+// ok is false when the selector did not produce a choice — the operator
+// cancelled it, or it could not run — with no terminal to draw on (stdin
+// is not a terminal and there is no controlling terminal to open), huh
+// fails. A blank line has already been written to stderr and the caller
+// returns without an error. An empty option list is the caller's mistake
+// and comes back as one.
+func Select(title string, options []SelectOption) (string, bool, error) {
 	if len(options) == 0 {
-		Die("no items to select")
+		return "", false, errors.New("no items to select")
 	}
 
 	huhOpts := make([]huh.Option[string], 0, len(options))
@@ -34,9 +41,9 @@ func Select(title string, options []SelectOption) string {
 
 	if err != nil {
 		fmt.Fprintln(os.Stderr)
-		os.Exit(0)
+		return "", false, nil
 	}
-	return selected
+	return selected, true, nil
 }
 
 // StatusLabel formats a workspace status for display in the selector.

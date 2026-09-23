@@ -20,15 +20,16 @@ var profilesCmd = &cobra.Command{
 	Use:         "profiles",
 	Short:       "List available profiles",
 	Annotations: profileAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		profiles, err := profile.List(cfg)
 		if err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		if len(profiles) == 0 {
 			output.Info("No profiles found")
-			return
+			return nil
 		}
 
 		jsonFlag, _ := cmd.Flags().GetBool("json")
@@ -47,7 +48,7 @@ var profilesCmd = &cobra.Command{
 				})
 			}
 			output.JSON(items)
-			return
+			return nil
 		}
 
 		// Truncate long tool lists based on terminal width.
@@ -71,6 +72,7 @@ var profilesCmd = &cobra.Command{
 			Rows(rows...)
 
 		fmt.Println(t)
+		return nil
 	},
 }
 
@@ -79,16 +81,17 @@ var profileCreateCmd = &cobra.Command{
 	Short:       "Create a custom profile",
 	Args:        cobra.ExactArgs(1),
 	Annotations: profileAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name := args[0]
 
 		if err := profile.ValidateName(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 
 		if profile.Exists(cfg, name) {
-			output.Die(fmt.Sprintf("profile %q already exists", name))
+			return fmt.Errorf("profile %q already exists", name)
 		}
 
 		// Non-interactive path: flags were explicitly provided.
@@ -101,18 +104,22 @@ var profileCreateCmd = &cobra.Command{
 				DockerDind: dind,
 			}
 			if err := profile.Create(cfg, opts); err != nil {
-				output.Die(err.Error())
+				return err
 			}
 			output.Success(fmt.Sprintf("Profile %q created", name))
-			return
+			return nil
 		}
 
 		// Interactive wizard.
-		opts := runProfileWizard(name)
+		opts, ok := runProfileWizard(name)
+		if !ok {
+			return nil
+		}
 		if err := profile.Create(cfg, opts); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		output.Success(fmt.Sprintf("Profile %q created", name))
+		return nil
 	},
 }
 
@@ -134,7 +141,11 @@ var commonTools = []huh.Option[string]{
 	huh.NewOption("Helm", "helm"),
 }
 
-func runProfileWizard(name string) profile.CreateOpts {
+// runProfileWizard walks the operator through a new profile's settings. ok is
+// false when the operator backed out or the form could not run — a blank
+// line after the first form, "Aborted" after the final confirmation — the
+// caller returns nil, and the process exits 0.
+func runProfileWizard(name string) (profile.CreateOpts, bool) {
 	var baseImage string
 	var packages string
 	var selectedTools []string
@@ -170,7 +181,7 @@ func runProfileWizard(name string) profile.CreateOpts {
 
 	if err := form.Run(); err != nil {
 		fmt.Fprintln(os.Stderr)
-		os.Exit(0)
+		return profile.CreateOpts{}, false
 	}
 
 	// Build summary.
@@ -193,7 +204,7 @@ func runProfileWizard(name string) profile.CreateOpts {
 		Value(&confirmed).
 		Run(); err != nil || !confirmed {
 		output.Info("Aborted")
-		os.Exit(0)
+		return profile.CreateOpts{}, false
 	}
 
 	// Build opts.
@@ -214,7 +225,7 @@ func runProfileWizard(name string) profile.CreateOpts {
 		}
 	}
 
-	return opts
+	return opts, true
 }
 
 var profileDeleteCmd = &cobra.Command{

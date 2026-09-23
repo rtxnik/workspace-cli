@@ -27,9 +27,6 @@ var (
 )
 
 // profileCmd is the depth-3 parent for `ws proxy profile *` per CONTEXT.md D-01.
-// Plans 02-05 fill in the leaf Run bodies; this file ships only the registration
-// scaffolding so all downstream plans land their commands in parallel without
-// merge conflicts on this file.
 //
 // PersistentPreRunE (Plan 22-04 + D-07): every `ws proxy profile *` leaf
 // invocation funnels through EnsureMigrated, which transparently migrates a
@@ -62,13 +59,15 @@ var profileAddCmd = &cobra.Command{
 	Short:       "Add a new profile from a VLESS URI",
 	Args:        cobra.ExactArgs(2),
 	Annotations: proxyAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if err := xray.AddProfile(cfg, args[0], args[1], force); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		output.Success(fmt.Sprintf("Profile %q added", args[0]))
+		return nil
 	},
 }
 
@@ -77,7 +76,8 @@ var profileListCmd = &cobra.Command{
 	Short:       "List profiles in a table or JSON",
 	Args:        cobra.NoArgs,
 	Annotations: proxyAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		reveal, _ := cmd.Flags().GetBool("reveal")
@@ -90,7 +90,7 @@ var profileListCmd = &cobra.Command{
 		if reveal {
 			details, err := xray.ListProfilesDetailed(cfg)
 			if err != nil {
-				output.Die(err.Error())
+				return err
 			}
 			if jsonFlag {
 				type fullRow struct {
@@ -102,7 +102,7 @@ var profileListCmd = &cobra.Command{
 					rows = append(rows, fullRow{ProfileSummary: dp.Summary(), UUIDFull: dp.UUID})
 				}
 				output.JSON(rows)
-				return
+				return nil
 			}
 			t := output.NewTable([]string{"ACTIVE", "NAME", "TRANSPORT", "ADDRESS:PORT", "SNI", "UUID"})
 			for _, dp := range details {
@@ -113,17 +113,17 @@ var profileListCmd = &cobra.Command{
 				t.Row(active, dp.Name, dp.Transport, fmt.Sprintf("%s:%d", dp.Address, dp.Port), dp.SNI, dp.UUID)
 			}
 			fmt.Println(t)
-			return
+			return nil
 		}
 
 		// Default (masked) path.
 		profiles, err := xray.ListProfiles(cfg)
 		if err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		if jsonFlag {
 			output.JSON(profiles)
-			return
+			return nil
 		}
 		t := output.NewTable([]string{"ACTIVE", "NAME", "TRANSPORT", "ADDRESS:PORT", "SNI", "UUID"})
 		for _, p := range profiles {
@@ -134,6 +134,7 @@ var profileListCmd = &cobra.Command{
 			t.Row(active, p.Name, p.Transport, fmt.Sprintf("%s:%d", p.Address, p.Port), p.SNI, p.UUIDMasked)
 		}
 		fmt.Println(t)
+		return nil
 	},
 }
 
@@ -201,19 +202,21 @@ var profileRmCmd = &cobra.Command{
 	Short:       "Remove a profile (refuses active)",
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name := args[0]
 		force, _ := cmd.Flags().GetBool("force")
 		desc := fmt.Sprintf("Profile file %s will be deleted.", filepath.Join(cfg.XrayProfilesDir, name+".json"))
 		if !confirmDestructiveFn(force, fmt.Sprintf("Remove profile %q?", name), desc) {
 			output.Info("Aborted")
-			return
+			return nil
 		}
 		if err := xray.RemoveProfile(cfg, name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		output.Success(fmt.Sprintf("Profile %q removed", name))
+		return nil
 	},
 }
 
@@ -222,11 +225,12 @@ var profileShowCmd = &cobra.Command{
 	Short:       "Show profile (masked unless --reveal)",
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		dp, err := xray.LoadProfile(cfg, args[0])
 		if err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		reveal, _ := cmd.Flags().GetBool("reveal")
 		jsonFlag, _ := cmd.Flags().GetBool("json")
@@ -243,7 +247,7 @@ var profileShowCmd = &cobra.Command{
 
 		if jsonFlag {
 			_ = output.WriteJSON(cmd.OutOrStdout(), dp)
-			return
+			return nil
 		}
 		w := cmd.OutOrStdout()
 		_, _ = fmt.Fprintf(w, "Name:       %s\n", dp.Name)
@@ -282,6 +286,7 @@ var profileShowCmd = &cobra.Command{
 				_, _ = fmt.Fprintf(w, "SpiderX:    %s\n", dp.SpiderX)
 			}
 		}
+		return nil
 	},
 }
 
@@ -290,13 +295,15 @@ var profileCurrentCmd = &cobra.Command{
 	Short:       "Print the currently active profile",
 	Args:        cobra.NoArgs,
 	Annotations: proxyAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name, err := xray.ReadActiveProfileName(cfg)
 		if err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		fmt.Println(name)
+		return nil
 	},
 }
 
@@ -305,11 +312,13 @@ var profileRegenCmd = &cobra.Command{
 	Short:       "Refresh routing rules in <name> from the currently-active profile",
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		if err := xray.RegenerateProfile(cfg, args[0]); err != nil {
-			output.Die(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 

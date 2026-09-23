@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,12 +30,13 @@ var newCmd = &cobra.Command{
 	Short:       "Create a new workspace",
 	Args:        cobra.RangeArgs(1, 2),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name := args[0]
 
 		if err := workspace.ValidateName(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 
 		if workspace.Exists(cfg, name) {
@@ -42,7 +44,7 @@ var newCmd = &cobra.Command{
 				Title:       fmt.Sprintf("Workspace %q already exists", name),
 				Suggestions: []string{"Choose a different name", fmt.Sprintf("Delete existing: ws delete %s", name)},
 			}))
-			os.Exit(1)
+			return &cliErrorWithExit{code: 1, msg: ""}
 		}
 
 		var profile string
@@ -61,9 +63,10 @@ var newCmd = &cobra.Command{
 		withProxy, _ := cmd.Flags().GetBool("proxy")
 
 		if err := workspace.Create(cfg, name, profile, withProxy); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		output.Success(fmt.Sprintf("Workspace %q created with profile %q", name, profile))
+		return nil
 	},
 }
 
@@ -72,15 +75,16 @@ var listCmd = &cobra.Command{
 	Aliases:     []string{"ls"},
 	Short:       "List workspaces",
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		workspaces, err := workspace.List(cfg)
 		if err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		if len(workspaces) == 0 {
 			output.Info("No workspaces found")
-			return
+			return nil
 		}
 
 		jsonFlag, _ := cmd.Flags().GetBool("json")
@@ -101,7 +105,7 @@ var listCmd = &cobra.Command{
 				})
 			}
 			output.JSON(items)
-			return
+			return nil
 		}
 
 		termWidth := 100
@@ -138,6 +142,7 @@ var listCmd = &cobra.Command{
 		fmt.Println(t)
 		fmt.Fprintf(os.Stderr, "\n%s\n",
 			output.StyleDim.Render(fmt.Sprintf("  %d workspace(s), %d running", len(workspaces), running)))
+		return nil
 	},
 }
 
@@ -146,7 +151,8 @@ var detectCmd = &cobra.Command{
 	Short:       "Detect project profile",
 	Args:        cobra.MaximumNArgs(1),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		dir := "."
 		if len(args) > 0 {
 			dir = args[0]
@@ -154,9 +160,10 @@ var detectCmd = &cobra.Command{
 		profile := detect.Profile(dir)
 		if profile == "" {
 			output.Info("No profile detected")
-			return
+			return nil
 		}
 		output.Success(fmt.Sprintf("Detected profile: %s", profile))
+		return nil
 	},
 }
 
@@ -165,18 +172,19 @@ var startCmd = &cobra.Command{
 	Short:       "Start a workspace",
 	Args:        cobra.ExactArgs(1),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name := args[0]
 		if err := workspace.ValidateName(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		if !workspace.Exists(cfg, name) {
 			fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
 				Title:       fmt.Sprintf("Workspace %q not found", name),
 				Suggestions: []string{"List workspaces: ws list", fmt.Sprintf("Create it: ws new %s", name)},
 			}))
-			os.Exit(1)
+			return &cliErrorWithExit{code: 1, msg: ""}
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 		runner := output.NewStepRunner(
@@ -191,8 +199,9 @@ var startCmd = &cobra.Command{
 			}},
 		)
 		if err := runner.Run(); err != nil {
-			output.Die(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 
@@ -201,16 +210,18 @@ var stopCmd = &cobra.Command{
 	Short:       "Stop a workspace",
 	Args:        cobra.ExactArgs(1),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		name := args[0]
 		if err := workspace.ValidateName(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		if err := output.RunWithSpinner(fmt.Sprintf("Stopping workspace %q", name), func() error {
 			return workspace.DevpodStop(name)
 		}); err != nil {
-			output.Die(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 
@@ -255,15 +266,23 @@ var sshCmd = &cobra.Command{
 	Short:       "SSH into a workspace",
 	Args:        cobra.MaximumNArgs(1),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		var name string
 		if len(args) > 0 {
 			name = args[0]
 		} else {
-			name = selectWorkspace()
+			picked, ok, err := selectWorkspace()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			name = picked
 		}
 		if err := workspace.ValidateName(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		// Rename tmux window if inside tmux. Bounded: a wedged tmux server
 		// must not stall the ssh command (best-effort, error ignored).
@@ -271,8 +290,9 @@ var sshCmd = &cobra.Command{
 			_, _ = procx.Run(context.Background(), 5*time.Second, "tmux", "rename-window", name)
 		}
 		if err := workspace.DevpodSSH(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 
@@ -281,20 +301,29 @@ var codeCmd = &cobra.Command{
 	Short:       "Open workspace in VS Code",
 	Args:        cobra.MaximumNArgs(1),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		var name string
 		if len(args) > 0 {
 			name = args[0]
 		} else {
-			name = selectWorkspace()
+			picked, ok, err := selectWorkspace()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			name = picked
 		}
 		if err := workspace.ValidateName(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		output.Info(fmt.Sprintf("Opening workspace %q in VS Code...", name))
 		if err := workspace.DevpodCode(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 
@@ -303,11 +332,12 @@ var restartCmd = &cobra.Command{
 	Short:       "Restart a workspace",
 	Args:        cobra.ExactArgs(1),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name := args[0]
 		if err := workspace.ValidateName(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 
@@ -331,8 +361,9 @@ var restartCmd = &cobra.Command{
 		}
 
 		if err := output.NewStepRunner(steps...).Run(); err != nil {
-			output.Die(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 
@@ -341,10 +372,11 @@ var logsCmd = &cobra.Command{
 	Short:       "Show workspace logs",
 	Args:        cobra.ExactArgs(1),
 	Annotations: wsAnnotation,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		name := args[0]
 		if err := workspace.ValidateName(name); err != nil {
-			output.Die(err.Error())
+			return err
 		}
 		follow, _ := cmd.Flags().GetBool("follow")
 
@@ -368,22 +400,25 @@ var logsCmd = &cobra.Command{
 		if err := c.Run(); err != nil {
 			// Fall back to devpod logs.
 			if err := workspace.DevpodLogs(name); err != nil {
-				output.Die(err.Error())
+				return err
 			}
 		}
+		return nil
 	},
 }
 
-// selectWorkspace shows an interactive selector of workspaces and returns
-// the selected name. Exits if no workspaces exist or user cancels.
-func selectWorkspace() string {
+// selectWorkspace shows an interactive selector of workspaces and returns the
+// selected name. ok is false when the selector produced no choice — the
+// operator cancelled it, or it could not run (see output.Select); the
+// caller returns nil and the process exits 0.
+func selectWorkspace() (string, bool, error) {
 	cfg := config.Load()
 	workspaces, err := workspace.List(cfg)
 	if err != nil {
-		output.Die(err.Error())
+		return "", false, err
 	}
 	if len(workspaces) == 0 {
-		output.Die("no workspaces found")
+		return "", false, errors.New("no workspaces found")
 	}
 
 	opts := make([]output.SelectOption, 0, len(workspaces))

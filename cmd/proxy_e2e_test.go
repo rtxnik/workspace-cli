@@ -8,10 +8,11 @@ package cmd
 //     (the test skips, not fails, when either prerequisite is absent)
 //
 // Approach: build+exec the `ws` binary (most faithful to operator reality).
-// In-process cobra calls are fragile here because `ws proxy doctor` and
-// `ws proxy test` call os.Exit on failure — exiting the test process would
-// mark the entire suite failed. exec.Command isolates each CLI invocation in
-// its own process and lets the harness inspect exit codes cleanly.
+// `ws proxy doctor` and `ws proxy test` return their failures to the root —
+// a silent cliErrorWithExit after a verdict they have printed, or a plain
+// error the root prints — rather than calling os.Exit; exec.Command isolates
+// each CLI invocation in its own process because the e2e cases need a real
+// process and a real daemon, not just exit-code isolation.
 //
 // Run: make test-e2e
 // or:  go test -tags docker_e2e ./cmd/ -run TestProxyE2E -v -timeout 5m

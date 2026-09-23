@@ -24,7 +24,8 @@ eval "$(ws completion bash)"
 ws completion fish | source`,
 	Args:      cobra.ExactArgs(1),
 	ValidArgs: []string{"bash", "zsh", "fish"},
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		switch args[0] {
 		case "bash":
 			_ = rootCmd.GenBashCompletion(os.Stdout)
@@ -33,6 +34,7 @@ ws completion fish | source`,
 		case "fish":
 			_ = rootCmd.GenFishCompletion(os.Stdout, true)
 		}
+		return nil
 	},
 }
 
