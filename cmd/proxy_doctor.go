@@ -87,7 +87,8 @@ var proxyDoctorCmd = &cobra.Command{
 		"config validity → container health → network → routing → live egress → " +
 		"protocol sanity). Stops at the first hard failure with a remediation hint " +
 		"and a non-zero exit code. Use --json for a machine-readable report.",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 
@@ -95,11 +96,14 @@ var proxyDoctorCmd = &cobra.Command{
 
 		if jsonFlag {
 			output.JSON(res)
-			os.Exit(doctorExitCode(res))
+		} else {
+			renderDoctor(res)
 		}
-
-		renderDoctor(res)
-		os.Exit(doctorExitCode(res))
+		// The report is the output; the exit code carries the verdict.
+		if code := doctorExitCode(res); code != 0 {
+			return &cliErrorWithExit{code: code, msg: ""}
+		}
+		return nil
 	},
 }
 
