@@ -99,6 +99,101 @@ func TestManualRecoveryOnFailedSwitch(t *testing.T) {
 	}
 }
 
+// newSwitchFixture seeds a profiles dir holding primary.json and secondary.json,
+// points config.json at primary, and stubs every SwitchTo seam to succeed. A
+// test overrides the seam it drives; t.Cleanup restores all four.
+func newSwitchFixture(t *testing.T) (config.Config, string) {
+	t.Helper()
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "config.json")
+	profilesDir := filepath.Join(root, "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, name := range []string{"primary", "secondary"} {
+		if err := os.WriteFile(filepath.Join(profilesDir, name+".json"), []byte("{}"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("profiles", "primary.json"), cfgPath); err != nil {
+		t.Fatalf("seed symlink: %v", err)
+	}
+
+	origValidate, origRestart, origWait, origBindCheck := validateProfileFn, restartProxyFn, waitForHealthFn, bindMountIsWholeDirFn
+	t.Cleanup(func() {
+		validateProfileFn, restartProxyFn, waitForHealthFn, bindMountIsWholeDirFn = origValidate, origRestart, origWait, origBindCheck
+	})
+	validateProfileFn = func(_ config.Config, _ string) error { return nil }
+	restartProxyFn = func(_ config.Config) error { return nil }
+	waitForHealthFn = func(_ config.Config, _ time.Duration) error { return nil }
+	bindMountIsWholeDirFn = func(_ config.Config) (bool, error) { return true, nil }
+
+	return config.Config{
+		XrayConfig:      cfgPath,
+		XrayProfilesDir: profilesDir,
+		ProxyContainer:  "dev-proxy-test-xx22",
+	}, cfgPath
+}
+
+// TestSwitchToWaitsOneFullProbeCycle pins the liveness budget to the proxy
+// image's HEALTHCHECK schedule. The restart is a stop and a start, and every
+// start resets Docker's health status to "starting". On Engine 27.0 or later
+// the first probe runs about 5s after the start and, if it fails (a curl
+// timeout included), the next one runs 30s after it ends; older Engines run the
+// first probe only after the 30s interval. A budget shorter than that reports a
+// switch whose container passes that second probe as timed out.
+func TestSwitchToWaitsOneFullProbeCycle(t *testing.T) {
+	// The proxy image declares HEALTHCHECK --interval=30s --timeout=10s
+	// --start-period=5s --retries=3 and sets no --start-interval.
+	const (
+		startInterval = 5 * time.Second  // Docker's default --start-interval (Engine 27.0 or later)
+		interval      = 30 * time.Second // --interval, counted from the end of the previous probe
+		probe         = 11 * time.Second // upper bound: --timeout plus up to ~1s to start the exec (curl --max-time 5 usually ends it within ~6s)
+		poll          = 1 * time.Second  // how often WaitForHealth inspects the container
+	)
+	// 58s. On older Engines the first probe alone needs interval+probe+poll = 42s.
+	floor := startInterval + probe + interval + probe + poll
+
+	cfg, _ := newSwitchFixture(t)
+	var budget time.Duration
+	waitForHealthFn = func(_ config.Config, d time.Duration) error {
+		budget = d
+		return nil
+	}
+
+	if err := SwitchTo(cfg, "secondary"); err != nil {
+		t.Fatalf("SwitchTo: %v", err)
+	}
+	if budget < floor {
+		t.Fatalf("SwitchTo waits %s for liveness; a healthy container can need %s (a failed first probe, then a passing second one)", budget, floor)
+	}
+}
+
+// TestNoRollbackWhenLivenessTimesOut extends the no-auto-rollback tripwire
+// above to the liveness step: a wait that gives up must leave the symlink at
+// the new profile and name the previous one in the error.
+func TestNoRollbackWhenLivenessTimesOut(t *testing.T) {
+	cfg, cfgPath := newSwitchFixture(t)
+	waitForHealthFn = func(_ config.Config, d time.Duration) error {
+		return fmt.Errorf("proxy health check timed out after %s", d)
+	}
+
+	err := SwitchTo(cfg, "secondary")
+	if err == nil {
+		t.Fatal("expected SwitchTo to return the liveness failure")
+	}
+	if !strings.Contains(err.Error(), "timed out") || !strings.Contains(err.Error(), "primary") {
+		t.Errorf("expected the timeout and the previous profile 'primary' in the error; got: %v", err)
+	}
+	got, readErr := os.Readlink(cfgPath)
+	if readErr != nil {
+		t.Fatalf("readlink after failure: %v", readErr)
+	}
+	if want := filepath.Join("profiles", "secondary.json"); got != want {
+		t.Fatalf("AUTO-ROLLBACK DETECTED: symlink points at %q after a liveness failure, want %q", got, want)
+	}
+}
+
 // TestSwitchToReturnsPreSwapErrorOnLegacyBind guards the 2026-05-13 hotfix:
 // when BindMountIsWholeDir reports false (legacy single-file bind), SwitchTo
 // must return a non-nil error whose message mentions "legacy single-file bind

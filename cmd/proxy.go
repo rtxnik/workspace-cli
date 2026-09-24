@@ -43,7 +43,7 @@ var proxyUpCmd = &cobra.Command{
 			steps = append(steps, output.Step{
 				Name: "Waiting for health check",
 				Fn: func() error {
-					return docker.WaitForHealth(cfg, 60*time.Second)
+					return docker.WaitForHealth(cfg, docker.ProxyHealthBudget)
 				},
 			})
 		}
@@ -258,7 +258,7 @@ var proxyRebuildCmd = &cobra.Command{
 				// Redundant after the transactional ProxyRecreate (which verifies
 				// health internally) but benign; kept for the non-recreate cold
 				// path. Removing it is an optional follow-up (spec §10).
-				return docker.WaitForHealth(cfg, 60*time.Second)
+				return docker.WaitForHealth(cfg, docker.ProxyHealthBudget)
 			}},
 			output.Step{Name: "Cleaning old images", Fn: func() error {
 				return docker.PruneImages()

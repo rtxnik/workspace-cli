@@ -122,18 +122,26 @@ func TestVerifyHealthy_NilHealthIsWeak(t *testing.T) {
 
 func TestVerifyHealthy_FastExitWhenNotRunning(t *testing.T) {
 	shrinkHealthTimers(t) // healthStartGrace = 0 -> fail on first observation
+	inspects := 0
 	mock := &mockClient{inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+		inspects++
 		return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
 			State: &container.State{Running: false}},
 			Config: &container.Config{}}, nil
 	}}
-	start := time.Now()
 	ok, _, err := verifyHealthy(context.Background(), mock, testCfg(), proxyHealthTimeout, healthStartGrace)
 	if ok || err == nil {
 		t.Fatalf("want fast-exit failure, got ok=%v err=%v", ok, err)
 	}
-	if time.Since(start) >= proxyHealthTimeout {
-		t.Fatalf("expected fast exit well under the timeout")
+	// Fast exit means the first observation decides, so count the inspects
+	// instead of timing them: a wall-clock bound against the shrunk timer fails
+	// whenever -race and parallel packages keep this goroutine off the CPU for
+	// longer than it.
+	if inspects != 1 {
+		t.Fatalf("want the first observation to decide (1 inspect), got %d", inspects)
+	}
+	if !strings.Contains(err.Error(), "did not start within") {
+		t.Fatalf("want the start-grace failure, not a timeout; got: %v", err)
 	}
 }
 
@@ -800,13 +808,18 @@ func TestProxyRecreate_ContextBudget_NoFalseRollbackVerifyOutlivesMutateCtx(t *t
 	// Regression for the HIGH timeout bug (spec §5): a verify that consumes
 	// wall-clock beyond the mutating-phase deadline must NOT expire the COMMIT
 	// ctx. Shrink the mutating budget; make verify sleep past it; assert COMMIT
-	// removes the backup under a NON-expired ctx, and recreate returns nil.
+	// removes the backup under its own ctx -- bounded by the mutating budget and
+	// created after verify returns -- and recreate returns nil.
 	origMutate := recreateMutateTimeout
 	recreateMutateTimeout = 5 * time.Millisecond
 	t.Cleanup(func() { recreateMutateTimeout = origMutate })
 
-	var committedUnderExpiredCtx bool
-	var removedBackup bool
+	// The COMMIT ctx is judged by its deadline, not by ctx.Err(): a fresh 5ms
+	// ctx can itself expire before the mock reads it when this goroutine is kept
+	// off the CPU, while the shared ctx's deadline always falls before verify
+	// returns and a fresh one's always after.
+	var verifyReturned, commitDeadline time.Time
+	var commitBounded, removedBackup bool
 	mock := &mockClient{
 		inspectFn: func(_ context.Context, id string) (container.InspectResponse, error) {
 			if id == "ws-proxy-backup" {
@@ -824,9 +837,7 @@ func TestProxyRecreate_ContextBudget_NoFalseRollbackVerifyOutlivesMutateCtx(t *t
 		removeFn: func(ctx context.Context, id string, _ container.RemoveOptions) error {
 			if id == "ws-proxy-backup" {
 				removedBackup = true
-				if ctx.Err() != nil {
-					committedUnderExpiredCtx = true
-				}
+				commitDeadline, commitBounded = ctx.Deadline()
 			}
 			return nil
 		},
@@ -836,16 +847,24 @@ func TestProxyRecreate_ContextBudget_NoFalseRollbackVerifyOutlivesMutateCtx(t *t
 	cfg.XrayConfig = writeTempXrayConfig(t)
 	defer swapVerify(func(context.Context, DockerClient, config.Config, time.Duration, time.Duration) (bool, bool, error) {
 		time.Sleep(40 * time.Millisecond) // outlives the 5ms mutating budget
+		verifyReturned = time.Now()
 		return true, false, nil
 	})()
 
 	if err := ProxyRecreate(cfg); err != nil {
 		t.Fatalf("verify outliving the mutate ctx must NOT cause a false rollback; got: %v", err)
 	}
+	returned := time.Now()
 	if !removedBackup {
 		t.Fatal("COMMIT must remove the backup on success")
 	}
-	if committedUnderExpiredCtx {
-		t.Fatal("COMMIT ran under an expired (shared) ctx -- phases are not isolated")
+	if !commitBounded {
+		t.Fatal("COMMIT ran under a ctx with no deadline -- it must get its own bounded ctx")
+	}
+	if !commitDeadline.After(verifyReturned) {
+		t.Fatalf("COMMIT ran under a ctx whose deadline is %s before verify returned -- the shared ctx, not a fresh one; phases are not isolated", verifyReturned.Sub(commitDeadline))
+	}
+	if commitDeadline.After(returned.Add(recreateMutateTimeout)) {
+		t.Fatalf("COMMIT ran under a ctx whose deadline is %s past the mutating budget -- a longer-lived ctx (the verify one?), not its own", commitDeadline.Sub(returned.Add(recreateMutateTimeout)))
 	}
 }
