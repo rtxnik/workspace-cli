@@ -70,7 +70,7 @@ This is one atomic operation:
 2. `xray run -test` validates `secondary.json` inside the container. If it fails — abort, symlink untouched.
 3. Atomic symlink swap (`os.Symlink` + `os.Rename`, no `ln -sfn`).
 4. Container restart so xray re-reads the new config.
-5. Health check waits up to 15s for the container to come back healthy.
+5. Health check waits up to 60s for the container to come back healthy. Docker resets the health status on every start. On Docker Engine 27.0 or later the first probe runs about 5s after the start; if it fails, the next one runs 30s after it ends, still inside the wait (about 58s at worst). On older Engines the first probe runs only after 30s, so a healthy switch is confirmed in about 30–42s; if that first probe fails, the next one usually comes after the wait has ended and the switch reports a timeout even if the container turns healthy moments later.
 
 Total downtime: ~1–2 seconds. SSH/TCP keepalives ride it out. If anything between steps 3–5 fails, the symlink is left at the new profile and you get a structured error explaining what to do next. **There is no automatic rollback** — the operator decides recovery.
 
@@ -223,6 +223,8 @@ ws proxy profile use <previous>     # back out
 ws proxy restart                    # retry the reload
 docker logs dev-proxy --tail 50     # see what xray actually complained about
 ```
+
+If the error is a health-check timeout, run `ws proxy status` before backing out: the container can still turn healthy after the 60s wait (on Docker Engine older than 27.0, whenever its first probe failed). While it shows `Starting`, check again in about 30s; back out if it shows `Unhealthy`.
 
 There is **no auto-rollback** — both because rolling back the symlink without checking *why* the new config failed risks masking real config errors, and because the operator may want to keep the new config visible on disk while investigating.
 

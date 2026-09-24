@@ -21,11 +21,23 @@ func backupName(cfg config.Config) string {
 	return cfg.ProxyContainer + "-backup"
 }
 
-// proxyHealthTimeout is the post-create health-verify budget. A package var (not
-// const) so tests shrink it to ms. 60s matches cmd/proxy.go's WaitForHealth
-// precedent; a freshly created container resets HEALTHCHECK to "starting" so the
-// 15s SwitchTo liveness budget would spuriously time it out (spec §3).
-var proxyHealthTimeout = 60 * time.Second
+// ProxyHealthBudget is how long a caller waits for a just-started proxy
+// container to report healthy. Every start -- a create, a restart, or the stop
+// and start a profile switch performs -- resets Docker's health status to
+// "starting". The proxy image's HEALTHCHECK (--interval=30s --timeout=10s
+// --start-period=5s, no --start-interval) then first probes about 5s after the
+// start on Engine 27.0 or later, 30s after it on older Engines, and 30s after
+// each probe ends. A probe takes at most about 11s: the 10s timeout plus up to
+// ~1s to start the exec (its own curl --max-time 5 usually ends it within ~6s).
+// So 60s holds, on Engine 27.0 or later, a failed first probe and a passing
+// second one (about 58s: 5 + 11 + 30 + 11 + one 1s poll), and on older Engines
+// a passing first probe (about 42s). A failed first probe on an older Engine,
+// or two failed probes on any, normally still ends in a timeout.
+const ProxyHealthBudget = 60 * time.Second
+
+// proxyHealthTimeout is ProxyHealthBudget as the create, recreate, restart and
+// rollback verifies use it; a package var so tests shrink it to ms.
+var proxyHealthTimeout = ProxyHealthBudget
 
 // Poll cadence and the fast-fail grace window. healthStartGrace is how long a
 // not-yet-running, non-terminal container (e.g. "created"/"restarting") is

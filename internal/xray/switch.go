@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
@@ -12,10 +11,11 @@ import (
 	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
-// xrayRestartLivenessTimeout is the deadline for post-restart liveness check
-// per RESEARCH §6 and D-10. 15s = practical middle ground given Dockerfile
-// HEALTHCHECK 30s interval + 10s timeout + 5s start-period + 3 retries.
-const xrayRestartLivenessTimeout = 15 * time.Second
+// xrayRestartLivenessTimeout is the deadline for the post-restart liveness
+// check. The restart stops and starts the container, which resets Docker's
+// health status to "starting" just as a fresh create does, so the switch waits
+// the same docker.ProxyHealthBudget as `ws proxy up` and the recreate path.
+const xrayRestartLivenessTimeout = docker.ProxyHealthBudget
 
 // Test seams: production wires these to real implementations; tests override.
 // Kept as function-typed vars (not interfaces) because the surface is tiny and
