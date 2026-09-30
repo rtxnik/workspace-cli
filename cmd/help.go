@@ -49,6 +49,43 @@ func strayWordOf(cmd *cobra.Command) (word string, ok bool) {
 	return "", false
 }
 
+// installHelpCommand gives cobra's help command on root a body that answers
+// `<root> help <words>` the way `<root> <words>` answers. cobra's body met an
+// unknown topic with "Unknown help topic" and the root's usage, and returned
+// nothing, so the process exited 0. The command stays cobra's — reached
+// through InitDefaultHelpCmd and Find — so its completion of
+// `ws help <TAB>` is kept.
+//
+// It runs where the tree is complete, from execute, not from an init
+// function: InitDefaultHelpCmd adds nothing to a root that has no
+// subcommands yet. It is idempotent.
+func installHelpCommand(root *cobra.Command) {
+	root.InitDefaultHelpCmd()
+	help, _, err := root.Find([]string{"help"})
+	if err != nil || help == root {
+		return
+	}
+	help.Run = nil
+	help.RunE = func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
+		target, rest, err := cmd.Root().Find(args)
+		if err != nil {
+			// The first word names no command: the root's own rejection.
+			if ue, ok := unknownRootCommand(cmd.Root(), err); ok {
+				return ue
+			}
+			return err
+		}
+		// A word left over under a command with subcommands names none of
+		// them. Under a leaf it is an argument, and the leaf's help is shown,
+		// as `<leaf> <argument> --help` shows it.
+		if len(rest) > 0 && target.HasSubCommands() {
+			return unknownSubcommand(target, rest[0])
+		}
+		return target.Help()
+	}
+}
+
 // unknownSubcommand is the usage error for a word that names no child of
 // cmd, worded as cobra words its own rejection at the root.
 func unknownSubcommand(cmd *cobra.Command, word string) *usageError {

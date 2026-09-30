@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -119,6 +120,8 @@ var errorCases = []errorCase{
 	{name: "arg-error/proxy-unknown-subcommand", args: []string{"proxy", "zzz"}},
 	{name: "arg-error/vault-unknown-subcommand", args: []string{"vault", "zzz"}},
 	{name: "arg-error/profile-unknown-subcommand", args: []string{"proxy", "profile", "zzz"}},
+	// ws help with a topic that names no command answers as ws <topic> does.
+	{name: "arg-error/help-unknown-topic", args: []string{"help", "nosuch"}},
 
 	// A runtime error prints no usage lines. A plain error returned from a
 	// RunE body, on a path with no spinner.
@@ -919,6 +922,57 @@ func TestProfileHookRunsOnlyForALeaf(t *testing.T) {
 	}
 	if _, _, isUsage := usageTarget(cmd, err); isUsage {
 		t.Errorf("the hook's refusal is classified as a usage error")
+	}
+}
+
+// TestHelpCommandAnswersLikeTheCommand: `ws help <words>` gives exactly
+// what `ws <words>` gives when the words name no command — the same stream,
+// bytes and exit code — and the help `ws <words> --help` gives when they
+// do, a leaf's argument included.
+func TestHelpCommandAnswersLikeTheCommand(t *testing.T) {
+	for _, c := range []struct{ help, same []string }{
+		{[]string{"help", "nosuch"}, []string{"nosuch"}},
+		{[]string{"help", "lst"}, []string{"lst"}},
+		{[]string{"help", "proxy", "zzz"}, []string{"proxy", "zzz"}},
+		{[]string{"help", "proxy", "profile", "zzz"}, []string{"proxy", "profile", "zzz"}},
+		{[]string{"help"}, []string{"--help"}},
+		{[]string{"help", "proxy"}, []string{"proxy", "--help"}},
+		{[]string{"help", "start", "wsx"}, []string{"start", "wsx", "--help"}},
+		{[]string{"help", "help"}, []string{"help", "--help"}},
+	} {
+		code, stdout, stderr := runExecuteChild(t, errorCase{name: strings.Join(c.help, " "), args: c.help})
+		wantCode, wantOut, wantErr := runExecuteChild(t, errorCase{name: strings.Join(c.same, " "), args: c.same})
+		if code != wantCode || stdout != wantOut || stderr != wantErr {
+			t.Errorf("ws %s: exit %d, stdout %q, stderr %q\nws %s: exit %d, stdout %q, stderr %q",
+				strings.Join(c.help, " "), code, stdout, stderr, strings.Join(c.same, " "), wantCode, wantOut, wantErr)
+		}
+	}
+}
+
+// TestCompletionStillListsCommands: `ws __complete ""` and
+// `ws __complete help ""` list the same commands. The second is cobra's
+// completion of the help command's argument, which the new body keeps.
+func TestCompletionStillListsCommands(t *testing.T) {
+	names := func(args ...string) []string {
+		t.Helper()
+		code, stdout, _ := runExecuteChild(t, errorCase{name: strings.Join(args, " "), args: args})
+		if code != 0 {
+			t.Fatalf("ws %q: exit %d", args, code)
+		}
+		var out []string
+		for _, line := range strings.Split(stdout, "\n") {
+			if name, _, ok := strings.Cut(line, "\t"); ok {
+				out = append(out, name)
+			}
+		}
+		return out
+	}
+	root, help := names("__complete", ""), names("__complete", "help", "")
+	if !slices.Contains(root, "list") || !slices.Contains(root, "proxy") {
+		t.Fatalf(`ws __complete "" lists %v; want the root's commands`, root)
+	}
+	if !slices.Equal(root, help) {
+		t.Errorf(`ws __complete help "" lists %v; ws __complete "" lists %v`, help, root)
 	}
 }
 

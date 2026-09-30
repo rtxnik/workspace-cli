@@ -170,6 +170,7 @@ func Execute() {
 // turns to a command that is not runnable, and without calling the help
 // function, so a word left over beside --version is left alone.
 func execute(root *cobra.Command) (*cobra.Command, error) {
+	installHelpCommand(root)
 	var stray error
 	help := root.HelpFunc()
 	root.SetHelpFunc(func(c *cobra.Command, args []string) {
