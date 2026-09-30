@@ -1,10 +1,14 @@
 package output
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -32,6 +36,15 @@ import (
 //     the gate in that same locked step, so a message that arrives later is
 //     written directly and after the drained ones.
 //   - Closed. The next task starts, or Run returns.
+//
+// SIGINT and a panic take the same path out, from whichever state the task
+// is in. On a terminal, if SIGINT is not ignored when Run starts, the owner
+// catches it: it drains as above with the result line "✗ <title>
+// interrupted after <time>", then restores SIGINT's default disposition and
+// sends it to itself, so the process still dies of the signal — 130 to the
+// shell. The child received SIGINT from the terminal too, and keeps writing
+// to its log, which is a file and not a pipe. Off a terminal nothing is
+// caught.
 
 // Task is one step the runner shows progress for. Run receives the step's
 // log: what a child or the task writes there feeds the live line and the
@@ -78,20 +91,58 @@ func Run(tasks ...Task) error {
 	return newRunner(Err()).run(tasks)
 }
 
-// runner is one call of Run. Its clock and its ticker are seams: the tests
-// drive the frame with a clock and ticks of their own.
+// runner is one call of Run. Its clock, its ticker and its SIGINT are seams:
+// the tests drive the frame with a clock and ticks of their own, and an
+// interrupt with a channel of their own and a die that returns.
 type runner struct {
-	s     *Stream
-	now   func() time.Time
-	tick  func() (ticks <-chan time.Time, stop func())
-	hooks runnerHooks
+	s    *Stream
+	now  func() time.Time
+	tick func() (ticks <-chan time.Time, stop func())
+	// signals starts catching SIGINT and returns its channel, and the
+	// function that stops catching it; a nil channel catches nothing. die
+	// restores SIGINT's default disposition and sends it to the process.
+	signals func() (sigint <-chan os.Signal, stop func())
+	die     func()
+	hooks   runnerHooks
+
+	// The task state the owner and an interrupt share. Nothing is written
+	// while mu is held.
+	mu    sync.Mutex
+	cond  *sync.Cond
+	state taskState
+	cur   current
+	dead  chan struct{} // closed when die returns, which it does only in a test
 }
+
+// taskState is where the running task is in the ownership protocol.
+type taskState int
+
+const (
+	taskClosed taskState = iota
+	taskRunning
+	taskDraining
+	taskInterrupted
+)
+
+// current is what an interrupt needs to drain the running task.
+type current struct {
+	f     *frame
+	title string
+	start time.Time
+}
+
+// errInterrupted is what Run returns once an interrupt has taken the task
+// over and die has returned — only in a test: in production the process is
+// dying of SIGINT.
+var errInterrupted = errors.New("interrupted")
 
 // runnerHooks are the points at which a test interleaves with the owner.
 // Each is nil in production.
 type runnerHooks struct {
-	redrawn   func() // the ticker goroutine has written a redraw
-	drainTook func() // the owner has taken a batch of the queue, and not yet written it
+	redrawn      func() // the ticker goroutine has written a redraw
+	drainTook    func() // the owner has taken a batch of the queue, and not yet written it
+	draining     func() // the owner has taken the drain from the running task
+	watcherWaits func() // an interrupt waits for the owner's drain; called with mu held
 }
 
 // frameInterval is how often the frame is redrawn.
@@ -104,6 +155,24 @@ func newRunner(s *Stream) *runner {
 		tick: func() (<-chan time.Time, func()) {
 			t := time.NewTicker(frameInterval)
 			return t.C, t.Stop
+		},
+		signals: func() (<-chan os.Signal, func()) {
+			// Catching a signal the process was started with ignored would
+			// start delivering it: `ws … &` from a script must stay deaf.
+			if signal.Ignored(os.Interrupt) {
+				return nil, func() {}
+			}
+			c := make(chan os.Signal, 1)
+			signal.Notify(c, os.Interrupt)
+			return c, func() { signal.Stop(c) }
+		},
+		die: func() {
+			signal.Reset(os.Interrupt)
+			_ = syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+			// The signal ends the process. Should it not within a second,
+			// exit with the status a shell gives a death by SIGINT.
+			time.Sleep(time.Second)
+			os.Exit(130)
 		},
 	}
 }
@@ -147,10 +216,28 @@ func (r *runner) run(tasks []Task) error {
 		owner.r, owner.open, owner.queue, owner.log = nil, false, nil, nil
 		owner.mu.Unlock()
 	}()
+	r.cond, r.dead = sync.NewCond(&r.mu), make(chan struct{})
+	if r.s.IsTTY() && r.signals != nil {
+		if sigint, stop := r.signals(); sigint != nil {
+			quit, done := make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(done)
+				select {
+				case <-quit:
+				case <-sigint:
+					r.interrupt()
+				}
+			}()
+			defer func() { stop(); close(quit); <-done }()
+		}
+	}
 	for i, t := range tasks {
 		err := r.runTask(t)
 		if err == nil {
 			continue
+		}
+		if errors.Is(err, errInterrupted) {
+			return err
 		}
 		// A task whose log could not be made did not start: it is listed with
 		// the tasks that did not run.
@@ -186,6 +273,13 @@ func (r *runner) runTask(t Task) error {
 	if r.s.IsTTY() {
 		f = r.startFrame(t.Title, start, log)
 	}
+	if !r.enter(current{f: f, title: t.Title, start: start}) {
+		if f != nil {
+			close(f.stop)
+			<-f.done
+		}
+		return r.halt()
+	}
 
 	// A panic takes the same path out as a failure: the result line and the
 	// queue are written, then the panic goes on.
@@ -195,7 +289,12 @@ func (r *runner) runTask(t Task) error {
 			return
 		}
 		p := recover()
-		r.drain(f, stepLine(r.s, StateFail, t.Title, elapsedText(r.now().Sub(start))))
+		if r.leave() {
+			r.drain(f, stepLine(r.s, StateFail, t.Title, elapsedText(r.now().Sub(start))))
+			r.settle()
+		} else {
+			<-r.dead
+		}
 		if p != nil {
 			panic(p)
 		}
@@ -203,15 +302,83 @@ func (r *runner) runTask(t Task) error {
 	runErr := t.Run(log)
 	finished = true
 
+	if !r.leave() {
+		return r.halt()
+	}
 	st := StateOK
 	if runErr != nil {
 		st = StateFail
 	}
 	r.drain(f, stepLine(r.s, st, t.Title, elapsedText(r.now().Sub(start))))
+	r.settle()
 	if runErr != nil {
 		return &TaskError{Title: t.Title, Err: runErr, Tail: log.Tail()}
 	}
 	return nil
+}
+
+// enter publishes the running task, unless an interrupt came first.
+func (r *runner) enter(cur current) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == taskInterrupted {
+		return false
+	}
+	r.state, r.cur = taskRunning, cur
+	return true
+}
+
+// leave takes the drain from the running task, unless an interrupt took it
+// first.
+func (r *runner) leave() bool {
+	r.mu.Lock()
+	if r.state == taskInterrupted {
+		r.mu.Unlock()
+		return false
+	}
+	r.state = taskDraining
+	r.mu.Unlock()
+	if r.hooks.draining != nil {
+		r.hooks.draining()
+	}
+	return true
+}
+
+// settle closes the task once its drain is written.
+func (r *runner) settle() {
+	r.mu.Lock()
+	r.state = taskClosed
+	r.cond.Broadcast()
+	r.mu.Unlock()
+}
+
+// halt parks the owner once an interrupt has taken the task over: in
+// production the process is dying of SIGINT, and in a test die has
+// returned.
+func (r *runner) halt() error {
+	<-r.dead
+	return errInterrupted
+}
+
+// interrupt is SIGINT's path: it waits out a drain the owner has begun,
+// drains a task still running with the interrupted line, and dies.
+func (r *runner) interrupt() {
+	r.mu.Lock()
+	for r.state == taskDraining {
+		if r.hooks.watcherWaits != nil {
+			r.hooks.watcherWaits()
+		}
+		r.cond.Wait()
+	}
+	was, cur := r.state, r.cur
+	r.state = taskInterrupted
+	r.mu.Unlock()
+	if was == taskRunning {
+		r.drain(cur.f, stepLine(r.s, StateFail, cur.title,
+			"interrupted after "+elapsedText(r.now().Sub(cur.start))))
+	}
+	r.die()
+	close(r.dead)
 }
 
 // drain ends a task: the frame goes, the result line is written, then the
