@@ -199,6 +199,17 @@ var streamsRows = []streamsRow{
 				t.Errorf("the workspace directory is still there: %v", err)
 			}
 		}},
+	{name: "ws proxy up: no docker", args: []string{"proxy", "up"}, code: 1,
+		stderr: "~ Starting proxy\n" +
+			"✗ Starting proxy  <t>\n" +
+			"- Waiting for health check\n" +
+			"- Fixing workspace routes\n" +
+			"✗ Failed to start proxy\n" +
+			"  proxy image \"devpod-proxy\" not found, run 'ws proxy rebuild' first\n" +
+			"\n" +
+			"  1. Check config       ws proxy check\n" +
+			"  2. Initialize config  ws proxy init <proxy-uri>\n" +
+			"  3. Rebuild image      ws proxy rebuild\n"},
 }
 
 // deleteNotFound is what ws delete prints for a workspace that is not there.

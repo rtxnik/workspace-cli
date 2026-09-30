@@ -210,21 +210,18 @@ exit 0
 |Aborted
 === body-exit/proxy-up-unreachable
 exit 1
---- stdout (14 bytes)
-|Starting proxy
---- (no newline at end of stdout)
---- stderr (1128 bytes)
-|✗ Starting proxy: proxy image "devpod-proxy" not found, run 'ws proxy rebuild' first
-|  ○ Waiting for health check
-|  ○ Fixing workspace routes
-|╭─────────────────────────────────────────────────────────────────────────────╮
-|│ Failed to start proxy                                                       │
-|│   Error: proxy image "devpod-proxy" not found, run 'ws proxy rebuild' first │
-|│                                                                             │
-|│   1. Check config: ws proxy check                                           │
-|│   2. Initialize config: ws proxy init <vless-uri>                           │
-|│   3. Rebuild image: ws proxy rebuild                                        │
-|╰─────────────────────────────────────────────────────────────────────────────╯
+--- stdout (0 bytes)
+--- stderr (320 bytes)
+|~ Starting proxy
+|✗ Starting proxy  <t>
+|- Waiting for health check
+|- Fixing workspace routes
+|✗ Failed to start proxy
+|  proxy image "devpod-proxy" not found, run 'ws proxy rebuild' first
+|
+|  1. Check config       ws proxy check
+|  2. Initialize config  ws proxy init <proxy-uri>
+|  3. Rebuild image      ws proxy rebuild
 === body-exit/proxy-doctor-unreachable
 exit 1
 --- stdout (24 bytes)

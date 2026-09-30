@@ -6,11 +6,12 @@ import (
 	"errors"
 	"io"
 	"os"
-	"strings"
+	"reflect"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/mcp"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -116,35 +117,63 @@ func TestL3_07_IngestTreatsOKFalseAsSuccess(t *testing.T) {
 	}
 }
 
-// TestUpFailureDetail_RouteDegradedNamesWorkspaces: a *docker.RouteFixError
-// from the up sequence renders as a degraded-but-running outcome (the proxy
-// DID start) naming every failed workspace, with fix-routes as the
-// remediation -- not as the generic "Failed to start proxy" screen.
-func TestUpFailureDetail_RouteDegradedNamesWorkspaces(t *testing.T) {
-	rep := docker.FixRoutesReport{Fixed: 1, Attempted: 2, Failures: []string{"my-workspace: exit status 1"}}
-	d := upFailureDetail(rep.Err())
-	if !strings.Contains(d.Title, "DEGRADED") {
-		t.Errorf("degraded route-fix must not render as a start failure; got title %q", d.Title)
+// TestUpProblem_RouteDegradedNamesWorkspaces: a *docker.RouteFixError from
+// the up sequence renders as a degraded-but-running outcome (the proxy DID
+// start) with a fact for every failed workspace and fix-routes as the
+// remediation -- not as the "Failed to start proxy" screen.
+func TestUpProblem_RouteDegradedNamesWorkspaces(t *testing.T) {
+	rep := docker.FixRoutesReport{Fixed: 1, Attempted: 3,
+		Failures: []string{"my-workspace: exit status 1", "other: exec: no such container"}}
+	err := upProblem(rep.Err())
+	p, ok := output.ProblemOf(err)
+	want := output.Problem{
+		Title: "Proxy is up, but workspace routes are degraded (2 of 3 failed)",
+		Facts: []output.Fact{{K: "my-workspace", V: "exit status 1"}, {K: "other", V: "exec: no such container"}},
+		Steps: []output.Remedy{{Label: "Retry", Cmd: "ws proxy fix-routes"}, {Label: "Diagnose", Cmd: "ws proxy doctor"}},
 	}
-	if !strings.Contains(d.Context["Failures"], "my-workspace") {
-		t.Errorf("failing workspace must be named; got %v", d.Context)
+	if !ok || !reflect.DeepEqual(p, want) {
+		t.Errorf("the root would print %+v; want %+v", p, want)
 	}
-	if joined := strings.Join(d.Suggestions, " "); !strings.Contains(joined, "fix-routes") {
-		t.Errorf("suggestions must include fix-routes; got %v", d.Suggestions)
+	var rf *docker.RouteFixError
+	if !errors.As(err, &rf) {
+		t.Error("the route-fix error is hidden behind the Problem")
 	}
 }
 
-// TestUpFailureDetail_GenericFailureUnchanged: non-route errors keep the
-// existing operator-facing rendering byte-for-byte.
-func TestUpFailureDetail_GenericFailureUnchanged(t *testing.T) {
-	d := upFailureDetail(errors.New("boom"))
-	if d.Title != "Failed to start proxy" {
-		t.Errorf("non-route errors must keep the existing title; got %q", d.Title)
+// TestUpProblem_StartFailureCarriesTheCause: any other failure is a start
+// failure whose cause is the error, then the failed step's last lines.
+func TestUpProblem_StartFailureCarriesTheCause(t *testing.T) {
+	steps := []output.Remedy{
+		{Label: "Check config", Cmd: "ws proxy check"},
+		{Label: "Initialize config", Cmd: "ws proxy init <proxy-uri>"},
+		{Label: "Rebuild image", Cmd: "ws proxy rebuild"},
 	}
-	if d.Context["Error"] != "boom" {
-		t.Errorf("generic context must carry the error; got %v", d.Context)
+	for _, c := range []struct {
+		name  string
+		err   error
+		cause string
+	}{
+		{"a plain error", errors.New("boom"), "boom"},
+		{"a failed step with a tail", &output.TaskError{Title: "Starting proxy", Err: errors.New("boom"),
+			Tail: []string{"pulling image", "denied"}}, "boom\npulling image\ndenied"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, ok := output.ProblemOf(upProblem(c.err))
+			want := output.Problem{Title: "Failed to start proxy", Cause: c.cause, Steps: steps}
+			if !ok || !reflect.DeepEqual(p, want) {
+				t.Errorf("the root would print %+v; want %+v", p, want)
+			}
+		})
 	}
-	if len(d.Suggestions) != 3 {
-		t.Errorf("generic suggestions must be unchanged; got %v", d.Suggestions)
+}
+
+// TestProxyUpReturnsItsProblem: a failed ws proxy up returns the error that
+// carries its Problem and leaves the printing to the root. In a pipe the
+// bytes are the same whoever prints them; the returned error is not.
+func TestProxyUpReturnsItsProblem(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///nonexistent/ws-test/docker.sock")
+	err := proxyUpCmd.RunE(proxyUpCmd, nil)
+	if p, ok := output.ProblemOf(err); !ok || p.Title != "Failed to start proxy" {
+		t.Errorf("ws proxy up returned %v; want the error that carries its Problem, for the root to print", err)
 	}
 }
