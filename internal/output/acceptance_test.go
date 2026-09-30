@@ -640,9 +640,10 @@ func TestProblemGeometry(t *testing.T) {
 			}
 		}
 
-		// Title: column 0, with a 2-space hanging indent on continuation lines.
-		if indentOf(lines[0]) != 0 {
-			t.Fatalf("@%d the title is indented %d cells; §4.4 puts it at column 0: %q", w, indentOf(lines[0]), lines[0])
+		// Title: the fail mark at column 0, as Fail draws a message, with a
+		// 2-space hanging indent on continuation lines.
+		if mark := fxMark(StateFail, GlyphUTF8) + " "; !strings.HasPrefix(lines[0], mark) {
+			t.Fatalf("@%d the title does not start with the fail mark %q, as Fail draws a message: %q", w, mark, lines[0])
 		}
 		// Locate the declared sections by their first line. Facts and Steps are
 		// found by content, not by position, so the ORDER assertion below is a
@@ -840,6 +841,37 @@ func TestProblemGeometry(t *testing.T) {
 				if indentOf(cmdLine) != 2+numberWidth {
 					t.Fatalf("@%d step %d's command line is indented %d cells, want %d: %q",
 						w, k+1, indentOf(cmdLine), 2+numberWidth, cmdLine)
+				}
+			}
+		}
+	}
+}
+
+// TestProblemTitleIsTheFailLine: a Problem holding only a title renders byte
+// for byte as the line Fail prints for the same text — renderMessage with the
+// fail shape, which is emit's body — at every colour level, in both glyph
+// modes, wrapped or not. The root renders every error it prints as a
+// Problem, and this is what keeps a plain error's ✗ line unchanged.
+func TestProblemTitleIsTheFailLine(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	titles := []string{
+		"devpod stop: exit status 1",
+		"workspace \"" + fxName64 + "\" could not be created: " + fxMultilineErr,
+		fxCJKNote,
+		fxEscCause,
+		"Image pull failed for " + fxToken200,
+	}
+	for _, level := range []ColourLevel{ColourNone, Colour16, Colour256, ColourTrue} {
+		for _, ascii := range []bool{false, true} {
+			for _, w := range []int{MinWidth, 40, 80, 200, WidthUnbounded} {
+				s := NewStreamAt(io.Discard, w, true, level, ascii)
+				for _, title := range titles {
+					got := Problem{Title: title}.Render(s)
+					if want := renderMessage(s, shapeFail, title); got != want {
+						t.Fatalf("level %d ascii %t @%d: the Problem\n%q\nis not the fail line\n%q", level, ascii, w, got, want)
+					}
 				}
 			}
 		}

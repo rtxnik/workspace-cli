@@ -618,8 +618,11 @@ func fxCorpusBuild() []fixture {
 		if fid == nil {
 			fid = fxProblemSources(p)
 		}
+		// A Problem's title is drawn as Fail draws a message, so its first
+		// line starts with the fail mark at every width.
 		out = append(out, fixture{
 			name: pf.name, kind: "problem", spec: pf.spec, fidelity: fid,
+			prefixState: StateFail, hasPrefixState: true,
 			render: func(s *Stream) string { return p.Render(s) },
 		})
 	}
@@ -765,9 +768,10 @@ func fxCorpusBuild() []fixture {
 	}
 	out = append(out, fixture{
 		name: "problem/esc-surfaces", kind: "problem",
-		spec:     "§6.7 / D-13: escapes in Title, a Fact key and value, and a Remedy label and command",
-		fidelity: []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go"},
-		render:   func(s *Stream) string { return escProblem.Render(s) },
+		spec:        "§6.7 / D-13: escapes in Title, a Fact key and value, and a Remedy label and command",
+		fidelity:    []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go"},
+		prefixState: StateFail, hasPrefixState: true,
+		render: func(s *Stream) string { return escProblem.Render(s) },
 	})
 
 	escEmpty := Empty{
