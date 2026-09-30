@@ -230,8 +230,22 @@ var deleteCmd = &cobra.Command{
 		cfg := config.Load()
 		name := args[0]
 
+		// Errors are returned as they are: wrapped in a *cliErrorWithExit,
+		// which has no Unwrap, a failed step would hide from the root.
 		if err := workspace.ValidateName(name); err != nil {
-			return &cliErrorWithExit{code: 1, msg: err.Error()}
+			return err
+		}
+
+		// A workspace that is not there is refused before the confirmation,
+		// with or without --force.
+		if !workspace.Exists(cfg, name) {
+			return &output.ProblemError{P: output.Problem{
+				Title: fmt.Sprintf("Workspace %q not found", name),
+				Steps: []output.Remedy{
+					{Label: "List workspaces", Cmd: "ws list"},
+					{Label: "Remove it from devpod", Cmd: "devpod delete " + name},
+				},
+			}}
 		}
 
 		force, _ := cmd.Flags().GetBool("force")
@@ -242,16 +256,21 @@ var deleteCmd = &cobra.Command{
 			return nil
 		}
 
-		if err := output.RunWithSpinner(fmt.Sprintf("Deleting workspace %q", name), func() error {
-			if err := workspace.DevpodDelete(name, nil); err != nil {
-				output.Warn(fmt.Sprintf("devpod delete: %s", err))
-			}
-			wsDir := filepath.Join(cfg.WorkspacesDir, name)
-			return os.RemoveAll(wsDir)
-		}); err != nil {
-			return &cliErrorWithExit{code: 1, msg: err.Error()}
-		}
-		return nil
+		// devpod failing to delete its workspace is a warning, and the
+		// directory goes all the same; the warning carries devpod's last
+		// lines, which no longer reach the terminal.
+		return output.Run(output.Task{
+			Title: fmt.Sprintf("Deleting workspace %q", name),
+			Run: func(log *output.Log) error {
+				if err := workspace.DevpodDelete(name, log); err != nil {
+					output.Warn(err.Error())
+					for _, line := range log.Tail() {
+						output.Detail(line)
+					}
+				}
+				return os.RemoveAll(filepath.Join(cfg.WorkspacesDir, name))
+			},
+		})
 	},
 }
 

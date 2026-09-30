@@ -175,6 +175,11 @@ var errorCases = []errorCase{
 	// A body that renders its own error box, then leaves with exit 1.
 	{name: "body-exit/start-not-found", args: []string{"start", "nope"}},
 	{name: "body-exit/new-exists", args: []string{"new", "wsx"}, workspace: "wsx"},
+
+	// ws delete of a workspace that is not there: a Problem the command
+	// returns, refused before the confirmation, with --force or without.
+	{name: "runtime/delete-not-found", args: []string{"delete", "nosuch"}},
+	{name: "runtime/delete-not-found-force", args: []string{"delete", "--force", "nosuch"}},
 }
 
 // installExecuteStub assigns the seams a stub set names. It runs only in the

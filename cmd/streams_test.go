@@ -104,7 +104,8 @@ type streamsRow struct {
 	stub   string   // a stub set of installExecuteStub
 	code   int
 	stdout string
-	stderr string // with every step time normalised to <t>
+	stderr string                                // with every step time normalised to <t>
+	after  func(t *testing.T, fx streamsFixture) // what the row must have left behind, when it matters
 }
 
 // runStreamsChild runs row in a child over fx.
@@ -183,12 +184,37 @@ var streamsRows = []streamsRow{
 			"  [12:01:30] info stop api: step one\n" +
 			"  [12:01:31] info stop api: step two\n" +
 			"  [12:01:32] fatal stop api: denied: requested access to the resource is denied\n"},
+	{name: "ws delete --force: missing", args: []string{"delete", "--force", "nosuch"}, code: 1, stderr: deleteNotFound},
+	{name: "ws delete: missing, no confirmation", args: []string{"delete", "nosuch"}, code: 1, stderr: deleteNotFound},
+	{name: "ws delete: devpod delete fails", args: []string{"delete", "--force", "ops"}, env: []string{"FAKE_DEVPOD=fail"},
+		stderr: "~ Deleting workspace \"ops\"\n" +
+			"✓ Deleting workspace \"ops\"  <t>\n" +
+			"⚠ devpod delete: exit status 1\n" +
+			"  [12:01:30] info delete ops: step one\n" +
+			"  [12:01:31] info delete ops: step two\n" +
+			"  [12:01:32] fatal delete ops: denied: requested access to the resource is\n" +
+			"  denied\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, "workspaces", "ops")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the workspace directory is still there: %v", err)
+			}
+		}},
 }
+
+// deleteNotFound is what ws delete prints for a workspace that is not there.
+const deleteNotFound = "✗ Workspace \"nosuch\" not found\n" +
+	"\n" +
+	"  1. List workspaces        ws list\n" +
+	"  2. Remove it from devpod  devpod delete nosuch\n"
 
 func TestStreams(t *testing.T) {
 	for _, row := range streamsRows {
 		t.Run(row.name, func(t *testing.T) {
-			code, stdout, stderr := runStreamsChild(t, newStreamsFixture(t), row)
+			fx := newStreamsFixture(t)
+			code, stdout, stderr := runStreamsChild(t, fx, row)
+			if row.after != nil {
+				row.after(t, fx)
+			}
 			if code != row.code || stdout != row.stdout || stderr != row.stderr {
 				t.Errorf("exit %d\n--- stdout:\n%s--- stderr:\n%s\nwant exit %d\n--- stdout:\n%s--- stderr:\n%s",
 					code, stdout, stderr, row.code, row.stdout, row.stderr)

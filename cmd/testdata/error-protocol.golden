@@ -278,3 +278,19 @@ exit 1
 |│   1. Choose a different name        │
 |│   2. Delete existing: ws delete wsx │
 |╰─────────────────────────────────────╯
+=== runtime/delete-not-found
+exit 1
+--- stdout (0 bytes)
+--- stderr (119 bytes)
+|✗ Workspace "nosuch" not found
+|
+|  1. List workspaces        ws list
+|  2. Remove it from devpod  devpod delete nosuch
+=== runtime/delete-not-found-force
+exit 1
+--- stdout (0 bytes)
+--- stderr (119 bytes)
+|✗ Workspace "nosuch" not found
+|
+|  1. List workspaces        ws list
+|  2. Remove it from devpod  devpod delete nosuch
