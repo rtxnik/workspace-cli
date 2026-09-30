@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -185,6 +186,8 @@ func installExecuteStub(name string) {
 		verifyProxyReadyFn = func(config.Config) error {
 			return errors.New("stub: proxy container not inspectable")
 		}
+	case "proxy-not-ready-problem":
+		verifyProxyReadyFn = func(config.Config) error { return carriedProblemError }
 	case "connected-enumeration-fails":
 		proxyConnectedContainersFn = func(config.Config) ([]string, error) {
 			return nil, errors.New("stub: proxy network not inspectable")
@@ -627,6 +630,63 @@ func TestRootProtocolBranches(t *testing.T) {
 				t.Errorf("run(%v) = (%q, %d); want (%q, %d)", c.err, msg, code, c.wantMsg, c.wantCode)
 			}
 		})
+	}
+}
+
+// carriedProblemError is an error that carries a Problem, for the tests of
+// the root's print point below.
+var carriedProblemError = &output.ProblemError{
+	P: output.Problem{
+		Title: "Proxy is not ready",
+		Cause: "stub: the container is restarting",
+		Facts: []output.Fact{{K: "container", V: "dev-proxy"}},
+		Steps: []output.Remedy{{Label: "Check it", Cmd: "ws proxy status"}},
+	},
+	Err: errors.New("stub: proxy container not inspectable"),
+}
+
+// TestRootProblemSelects drives rootProblem directly: what the root prints
+// for each kind of error. The bytes are TestErrorOutputBaseline's and
+// TestExecutePrintsTheCarriedProblem's.
+func TestRootProblemSelects(t *testing.T) {
+	carried := carriedProblemError.P
+	for _, c := range []struct {
+		name  string
+		err   error
+		want  output.Problem
+		print bool
+	}{
+		{"nil", nil, output.Problem{}, false},
+		{"silent", &cliErrorWithExit{code: 2, msg: ""}, output.Problem{}, false},
+		{"cli-exit", &cliErrorWithExit{code: 4, msg: "backup-verify: no logs"}, output.Problem{Title: "backup-verify: no logs"}, true},
+		{"plain", errors.New("plain failure"), output.Problem{Title: "plain failure"}, true},
+		{"a carrier", carriedProblemError, carried, true},
+		{"a carrier wrapped with %w", fmt.Errorf("proxy not ready for reload: %w", carriedProblemError), carried, true},
+		{"a usage error", &usageError{cmd: rootCmd, err: errors.New(`unknown command "x" for "ws"`)},
+			output.Problem{Title: `unknown command "x" for "ws"`}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			msg, _ := run(c.err)
+			got, ok := rootProblem(msg, c.err)
+			if ok != c.print || !reflect.DeepEqual(got, c.want) {
+				t.Errorf("rootProblem = (%+v, %t); want (%+v, %t)", got, ok, c.want, c.print)
+			}
+		})
+	}
+}
+
+// TestExecutePrintsTheCarriedProblem runs the real Execute in a child whose
+// command returns, wrapped, an error that carries a Problem: stderr is that
+// Problem, rendered once, with nothing else, and the exit code is 1. The
+// stream the expectation is rendered on is the child's: 80 columns, no
+// colour, the UTF-8 glyph mode.
+func TestExecutePrintsTheCarriedProblem(t *testing.T) {
+	c := errorCase{name: "carried-problem", args: []string{"proxy", "profile", "use", "x", "--no-migrate"}, stub: "proxy-not-ready-problem"}
+	code, stdout, stderr := runExecuteChild(t, c)
+	s := output.NewStreamAt(io.Discard, 80, false, output.ColourNone, false)
+	want := carriedProblemError.P.Render(s) + "\n"
+	if code != 1 || stdout != "" || stderr != want {
+		t.Errorf("exit %d, stdout %q, stderr\n%s\nwant exit 1, no stdout, stderr\n%s", code, stdout, stderr, want)
 	}
 }
 
