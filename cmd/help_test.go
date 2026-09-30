@@ -368,6 +368,57 @@ func helpTitles() map[string]bool {
 	return titles
 }
 
+// TestHelpAnswersASubcommandCobraDidNotReach runs, in a child process, a
+// subcommand named after -h, --help or --. cobra resolves the command line
+// before it registers -h/--help on the command it finds, so it takes the
+// word after --help for that flag's value, and it stops at --; the name then
+// reaches the help function as a word left over. It names a subcommand, so
+// it is no usage error: the help cobra answered with is printed, exit 0, as
+// before the help renderer. A word that names none is still the usage error.
+//
+// A child, because renderHelp registers the help flag on every command it
+// renders: after the sweeps, an in-process run resolves the name itself and
+// never hands it to the help function.
+func TestHelpAnswersASubcommandCobraDidNotReach(t *testing.T) {
+	s := output.NewStreamAt(io.Discard, 80, false, output.ColourNone, false)
+	rootCmd.InitDefaultHelpCmd() // as ExecuteC does in the child, so the root's help lists it
+	for _, c := range []struct {
+		args []string
+		help []string // the path, below ws, of the command whose help answers
+	}{
+		{[]string{"--help", "list"}, nil},
+		{[]string{"-h", "proxy"}, nil},
+		{[]string{"--help", "ls"}, nil},
+		{[]string{"--", "list"}, nil},
+		{[]string{"proxy", "--help", "status"}, []string{"proxy"}},
+		{[]string{"proxy", "--", "status"}, []string{"proxy"}},
+		{[]string{"proxy", "profile", "-h", "list"}, []string{"proxy", "profile"}},
+	} {
+		line := "ws " + strings.Join(c.args, " ")
+		code, stdout, stderr := runExecuteChild(t, errorCase{name: line, args: c.args})
+		answering := findIn(t, rootCmd, c.help...)
+		if want := renderHelp(s, answering, true) + "\n"; code != 0 || stderr != "" || stdout != want {
+			t.Errorf("%s: exit %d, stderr %q, stdout\n%s\nwant exit 0, nothing on stderr, and the help of %s:\n%s",
+				line, code, stderr, stdout, answering.CommandPath(), want)
+		}
+	}
+	for _, c := range []struct {
+		args []string
+		path string
+	}{
+		{[]string{"--help", "zzz"}, "ws"},
+		{[]string{"--", "zzz"}, "ws"},
+		{[]string{"proxy", "-h", "zzz"}, "ws proxy"},
+		{[]string{"proxy", "--", "zzz"}, "ws proxy"},
+	} {
+		line := "ws " + strings.Join(c.args, " ")
+		code, stdout, stderr := runExecuteChild(t, errorCase{name: line, args: c.args})
+		if want := fmt.Sprintf("unknown command %q for %q", "zzz", c.path); code != 1 || stdout != "" || !strings.Contains(stderr, want) {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want exit 1 and %s", line, code, stdout, stderr, want)
+		}
+	}
+}
+
 // TestHelpColourIsTitlesOnly renders every command's help on terminal
 // streams. Under NO_COLOR there is no ESC byte at all. With colour, every
 // section title is exactly the title painted RoleAccent, and no other line

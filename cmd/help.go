@@ -40,10 +40,19 @@ func helpFunc(cmd *cobra.Command, _ []string) {
 }
 
 // strayWordOf is the first word left over under cmd once its flags were
-// parsed, when cmd has subcommands; ok is false when there is none. An empty
-// word is a word: it names no subcommand either.
+// parsed, when cmd has subcommands and the word names none of them; ok is
+// false otherwise. An empty word is a word: it names no subcommand either.
+//
+// A word left over can still name a subcommand. cobra resolves the command
+// line before it registers -h/--help on the command it finds, so it takes
+// the word after --help for that flag's value, and it stops at --: in
+// `ws --help list` and `ws -- list` the name reaches the root's flag set as
+// a word. It is resolved here the way cobra resolves one, aliases included.
 func strayWordOf(cmd *cobra.Command) (word string, ok bool) {
 	if words := cmd.Flags().Args(); cmd.HasSubCommands() && len(words) > 0 {
+		if sub, _, err := cmd.Find(words[:1]); err == nil && sub != cmd {
+			return "", false
+		}
 		return words[0], true
 	}
 	return "", false

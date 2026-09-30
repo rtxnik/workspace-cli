@@ -161,10 +161,10 @@ func Execute() {
 // A command with subcommands is not runnable, so cobra answers it with
 // flag.ErrHelp before it validates arguments or runs a pre-run hook, and a
 // word left over under it reaches the help function, with --help or
-// without. That word names no subcommand, so for this run the root's help
-// function is wrapped: where cobra answers with help it passes the command
-// line, and the wrapper records the word, read from the flag set cobra has
-// just parsed, instead of printing the help. cmd.Help() passes no command
+// without. For this run the root's help function is wrapped: where cobra
+// answers with help it passes the command line, and the wrapper records a
+// word that names no subcommand, read from the flag set cobra has just
+// parsed, instead of printing the help. cmd.Help() passes no command
 // line, and then the flag set may still hold the words of an earlier run,
 // so they are not read. Without --help, cobra answers --version before it
 // turns to a command that is not runnable, and without calling the help
