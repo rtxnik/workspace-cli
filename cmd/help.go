@@ -39,6 +39,17 @@ func helpFunc(cmd *cobra.Command, _ []string) {
 	}
 }
 
+// usageFunc is the root's usage function: the help document without its
+// description, rendered for output.Err() and written to cmd.OutOrStderr(),
+// where cobra writes usage. cobra calls it through Usage(). The root
+// silences cobra's own call after an argument error, so only a caller of
+// Usage() elsewhere is left — and without this function, that caller would
+// print cobra's stock template.
+func usageFunc(cmd *cobra.Command) error {
+	_, err := fmt.Fprintln(cmd.OutOrStderr(), renderHelp(output.Err(), cmd, false))
+	return err
+}
+
 // renderHelp lays out cmd's help document for s. The sections, in order: the
 // description (Long, else Short; only when withDescription is set), the
 // synopsis, the aliases, the examples, the command lists, the flags, the

@@ -18,6 +18,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -93,21 +94,27 @@ var errorCases = []errorCase{
 	// A successful command: no error text, exit 0.
 	{name: "success/detect", args: []string{"detect", emptyDirArg}},
 
-	// Argument errors keep their Usage: block. One on a command that already
-	// returns its error, one on a body phase 1 converts, one cobra raises
-	// before any command is found, one raised while parsing flags.
+	// Argument errors print their usage lines — the synopsis and where to
+	// read the help of the command they name — under the ✗ line. One on a
+	// command that already returns its error, one on a body phase 1 converts,
+	// one cobra raises before any command is found, one raised while parsing
+	// flags.
 	{name: "arg-error/runE-command", args: []string{"proxy", "profile", "use"}},
 	{name: "arg-error/converted-body", args: []string{"start"}},
 	{name: "arg-error/unknown-command", args: []string{"nosuch"}},
 	{name: "arg-error/unknown-flag", args: []string{"start", "--bogus", "wsx"}},
 	// An extra argument to a NoArgs command carries cobra's "unknown command"
-	// text too, but the usage hint follows only the one the root itself
-	// raises (cobra printed it only there; Execute reproduces that). This
-	// case is the other side of arg-error/unknown-command: the hint must NOT
-	// appear here.
+	// text too. It is the leaf's usage error, not the root's: its lines name
+	// ws status. This case is the other side of arg-error/unknown-command.
 	{name: "arg-error/noargs-extra", args: []string{"status", "x"}},
+	// The root's own usage errors: an unknown command with suggestions, one
+	// with --help after it, which cobra rejects before it looks at --help,
+	// and a flag the root cannot parse.
+	{name: "arg-error/unknown-command-suggested", args: []string{"lst"}},
+	{name: "arg-error/unknown-command-with-help", args: []string{"nosuch", "--help"}},
+	{name: "arg-error/root-unknown-flag", args: []string{"--bogus"}},
 
-	// A runtime error prints no Usage: block. A plain error returned from a
+	// A runtime error prints no usage lines. A plain error returned from a
 	// RunE body, on a path with no spinner.
 	{name: "runtime/runE-plain", args: []string{"proxy", "profile", "use", "x", "--no-migrate"}, stub: "proxy-not-ready"},
 
@@ -662,26 +669,71 @@ func TestUsageTargetClassifies(t *testing.T) {
 	}
 }
 
-// TestUnknownCommandIsRecognised pins isUnknownCommand against the error
-// cobra actually builds, not against a copy of its text: if cobra rewords it,
-// this goes red instead of the hint silently disappearing.
+// TestUnknownCommandIsRecognised pins isUnknownCommand and
+// unknownRootCommand against the error cobra actually builds, not against a
+// copy of its text: if cobra rewords it, this goes red instead of `ws nosuch`
+// silently losing its usage lines.
 func TestUnknownCommandIsRecognised(t *testing.T) {
 	_, _, err := rootCmd.Find([]string{"nosuch"})
 	if err == nil {
 		t.Fatal("cobra found a command named nosuch")
 	}
 	if !isUnknownCommand(err) {
-		t.Errorf("isUnknownCommand(%q) = false; Execute would drop the usage hint", err)
+		t.Errorf("isUnknownCommand(%q) = false; execute would not type it", err)
 	}
 	if isUnknownCommand(errors.New("proxy not ready for reload")) || isUnknownCommand(nil) {
 		t.Error("isUnknownCommand matched an error cobra did not raise")
 	}
 	// cobra.NoArgs raises the same sentence for an extra argument to a command
-	// that takes none (args.go NoArgs), and cobra prints no hint for that one.
-	// The text cannot tell the two apart, which is why Execute gates the hint
-	// on the command having no parent. If this stops matching, the guard in
-	// Execute needs re-reading, not just this test.
+	// that takes none (args.go NoArgs). The text cannot tell the two apart,
+	// which is why execute types it only for the root. If this stops matching,
+	// execute's guard needs re-reading, not just this test.
 	if noArgs := cobra.NoArgs(newWorkspaceStatusCmd(), []string{"x"}); noArgs == nil || !isUnknownCommand(noArgs) {
-		t.Errorf("cobra.NoArgs no longer carries the unknown-command text (%v); re-read Execute's hint guard", noArgs)
+		t.Errorf("cobra.NoArgs no longer carries the unknown-command text (%v); re-read execute's guard", noArgs)
+	}
+
+	// The word comes back out of cobra's %q exactly: with the quote and the
+	// backslash %q escapes, with a space inside the quotes, and outside ASCII.
+	for _, word := range []string{"lst", `a"b`, `c\d`, "two words", "ünïcode"} {
+		_, _, cobraErr := rootCmd.Find([]string{word})
+		if got, ok := unknownRootWord(cobraErr); !ok || got != word {
+			t.Errorf("from %q read back (%q, %v); want %q", cobraErr, got, ok, word)
+		}
+	}
+	// And the typed error keeps cobra's message and carries the suggestions.
+	_, _, cobraErr := rootCmd.Find([]string{"lst"})
+	ue, ok := unknownRootCommand(rootCmd, cobraErr)
+	if !ok || ue.Error() != cobraErr.Error() || ue.cmd != rootCmd || strings.Join(ue.suggestions, ",") != "list,ssh" {
+		t.Errorf("lst: typed as (%v, %v); want cobra's %q, for ws, suggesting list,ssh", ue, ok, cobraErr)
+	}
+}
+
+// TestUsageIsTheHelpDocument: a caller of Usage() gets the help document
+// without its description, rendered for stderr, where cobra writes usage —
+// not cobra's stock template.
+func TestUsageIsTheHelpDocument(t *testing.T) {
+	var out bytes.Buffer
+	rootCmd.SetOut(&out) // OutOrStderr, where cobra writes usage, prefers it
+	t.Cleanup(func() { rootCmd.SetOut(nil) })
+	if err := proxyCmd.Usage(); err != nil {
+		t.Fatalf("Usage: %v", err)
+	}
+	if want := renderHelp(output.Err(), proxyCmd, false) + "\n"; out.String() != want {
+		t.Errorf("ws proxy's usage is\n%s\nwant the help document without its description:\n%s", out.String(), want)
+	}
+	if strings.Contains(out.String(), proxyCmd.Short) {
+		t.Errorf("ws proxy's usage carries its description: %q", out.String())
+	}
+}
+
+// TestUnknownRootCommandBeatsHelpAndVersion: cobra rejects an unknown root
+// command before it looks at --help or --version, so neither turns the
+// mistake into help or a version at exit 0.
+func TestUnknownRootCommandBeatsHelpAndVersion(t *testing.T) {
+	for _, flagArg := range []string{"--help", "--version"} {
+		code, stdout, stderr := runExecuteChild(t, errorCase{name: "nosuch " + flagArg, args: []string{"nosuch", flagArg}})
+		if code != 1 || stdout != "" || !strings.HasPrefix(stderr, `✗ unknown command "nosuch" for "ws"`+"\n") {
+			t.Errorf("ws nosuch %s: exit %d, stdout %q, stderr %q; want exit 1 and the unknown-command error", flagArg, code, stdout, stderr)
+		}
 	}
 }
