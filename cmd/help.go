@@ -39,6 +39,26 @@ func helpFunc(cmd *cobra.Command, _ []string) {
 	}
 }
 
+// strayWordOf is the first word left over under cmd once its flags were
+// parsed, when cmd has subcommands; ok is false when there is none. An empty
+// word is a word: it names no subcommand either.
+func strayWordOf(cmd *cobra.Command) (word string, ok bool) {
+	if words := cmd.Flags().Args(); cmd.HasSubCommands() && len(words) > 0 {
+		return words[0], true
+	}
+	return "", false
+}
+
+// unknownSubcommand is the usage error for a word that names no child of
+// cmd, worded as cobra words its own rejection at the root.
+func unknownSubcommand(cmd *cobra.Command, word string) *usageError {
+	return &usageError{
+		cmd:         cmd,
+		err:         fmt.Errorf("unknown command %q for %q", word, cmd.CommandPath()),
+		suggestions: suggestionsFor(cmd, word),
+	}
+}
+
 // usageFunc is the root's usage function: the help document without its
 // description, rendered for output.Err() and written to cmd.OutOrStderr(),
 // where cobra writes usage. cobra calls it through Usage(). The root

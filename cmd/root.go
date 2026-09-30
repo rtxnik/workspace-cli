@@ -153,10 +153,37 @@ func Execute() {
 }
 
 // execute runs root and returns the command that failed and the error the
-// protocol reads: ExecuteC's own, with cobra's rejection of an unknown root
-// command typed as a usage error of the root.
+// protocol reads: ExecuteC's own, or, when that is nil, a word left over
+// under a command with subcommands whose help cobra answered in this run;
+// and cobra's rejection of an unknown root command, typed as a usage error
+// of the root.
+//
+// A command with subcommands is not runnable, so cobra answers it with
+// flag.ErrHelp before it validates arguments or runs a pre-run hook, and a
+// word left over under it reaches the help function, with --help or
+// without. That word names no subcommand, so for this run the root's help
+// function is wrapped: where cobra answers with help it passes the command
+// line, and the wrapper records the word, read from the flag set cobra has
+// just parsed, instead of printing the help. cmd.Help() passes no command
+// line, and then the flag set may still hold the words of an earlier run,
+// so they are not read. Without --help, cobra answers --version before it
+// turns to a command that is not runnable, and without calling the help
+// function, so a word left over beside --version is left alone.
 func execute(root *cobra.Command) (*cobra.Command, error) {
+	var stray error
+	help := root.HelpFunc()
+	root.SetHelpFunc(func(c *cobra.Command, args []string) {
+		if word, ok := strayWordOf(c); ok && len(args) > 0 {
+			stray = unknownSubcommand(c, word)
+			return
+		}
+		help(c, args)
+	})
+	defer root.SetHelpFunc(help)
 	cmd, err := root.ExecuteC()
+	if err == nil {
+		err = stray
+	}
 	if err != nil && !cmd.HasParent() {
 		if ue, ok := unknownRootCommand(root, err); ok {
 			err = ue

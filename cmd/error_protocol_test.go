@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"syscall"
@@ -113,6 +114,11 @@ var errorCases = []errorCase{
 	{name: "arg-error/unknown-command-suggested", args: []string{"lst"}},
 	{name: "arg-error/unknown-command-with-help", args: []string{"nosuch", "--help"}},
 	{name: "arg-error/root-unknown-flag", args: []string{"--bogus"}},
+	// A word under a command group that names none of its subcommands: the
+	// help function turns it into a usage error of the group.
+	{name: "arg-error/proxy-unknown-subcommand", args: []string{"proxy", "zzz"}},
+	{name: "arg-error/vault-unknown-subcommand", args: []string{"vault", "zzz"}},
+	{name: "arg-error/profile-unknown-subcommand", args: []string{"proxy", "profile", "zzz"}},
 
 	// A runtime error prints no usage lines. A plain error returned from a
 	// RunE body, on a path with no spinner.
@@ -723,6 +729,196 @@ func TestUsageIsTheHelpDocument(t *testing.T) {
 	}
 	if strings.Contains(out.String(), proxyCmd.Short) {
 		t.Errorf("ws proxy's usage carries its description: %q", out.String())
+	}
+}
+
+// executeIn runs root with args through execute, in this process, and
+// returns the command that failed, what root wrote to stdout, and the
+// error. When the test ends, the failed command's leftover words are parsed
+// away: a command object lives for the whole test process, and execute
+// reads a group's leftover words.
+func executeIn(t *testing.T, root *cobra.Command, args ...string) (*cobra.Command, string, error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+	root.SetArgs(args)
+	t.Cleanup(func() {
+		root.SetOut(nil)
+		root.SetErr(nil)
+		root.SetArgs(nil)
+	})
+	cmd, err := execute(root)
+	t.Cleanup(func() { _ = cmd.Flags().Parse(nil) })
+	return cmd, out.String(), err
+}
+
+// configureLikeRoot gives a fixture root the real root's help, usage and
+// error handling, read from rootCmd so that the two cannot drift apart.
+func configureLikeRoot(root *cobra.Command) {
+	root.SilenceErrors = rootCmd.SilenceErrors
+	root.SilenceUsage = rootCmd.SilenceUsage
+	root.DisableSuggestions = rootCmd.DisableSuggestions
+	root.SetHelpFunc(rootCmd.HelpFunc())
+	root.SetUsageFunc(rootCmd.UsageFunc())
+	root.SetFlagErrorFunc(rootCmd.FlagErrorFunc())
+}
+
+// TestGroupsRejectStrayWords: every command with subcommands answers a word
+// that names none of them — with --help after it or not, with a flag before
+// it or not — with exit 1 and the typed usage error. Before, the groups
+// printed their help and exited 0.
+func TestGroupsRejectStrayWords(t *testing.T) {
+	groups := 0
+	for _, c := range helpCommands(rootCmd) {
+		if !c.HasSubCommands() {
+			continue
+		}
+		groups++
+		path := strings.Fields(c.CommandPath())[1:]
+		wantFirst := fmt.Sprintf("✗ unknown command %q for %q\n", "zzz", c.CommandPath())
+		wantUsage := "\n  Usage: " + c.CommandPath() + " [command]\n"
+		for _, tail := range [][]string{{"zzz"}, {"zzz", "--help"}, {"--json", "zzz"}} {
+			args := append(append([]string{}, path...), tail...)
+			code, stdout, stderr := runExecuteChild(t, errorCase{name: strings.Join(args, " "), args: args})
+			if code != 1 || stdout != "" || !strings.HasPrefix(stderr, wantFirst) || !strings.Contains(stderr, wantUsage) {
+				t.Errorf("ws %s: exit %d, stdout %q, stderr %q; want exit 1, %q and %q",
+					strings.Join(args, " "), code, stdout, stderr, wantFirst, wantUsage)
+			}
+		}
+	}
+	if groups < 4 {
+		t.Fatalf("found %d commands with subcommands; ws, proxy, proxy profile and vault all have some", groups)
+	}
+	// A near miss under a group gets suggestions, as one at the root does.
+	if ue := unknownSubcommand(proxyCmd, "stauts"); strings.Join(ue.suggestions, ",") != "status" {
+		t.Errorf("ws proxy stauts suggests %v; want status", ue.suggestions)
+	}
+}
+
+// TestHelpReadsNoWordOfAnotherRun: a word left over in one run stays in the
+// group's flag set until the group's flags are parsed again. `fx help grp`
+// reaches the group's help through cmd.Help(), which parses none, and must
+// print the group's help all the same.
+func TestHelpReadsNoWordOfAnotherRun(t *testing.T) {
+	fx := newHelpFixture(&fixtureHook{})
+	configureLikeRoot(fx)
+	if _, _, err := executeIn(t, fx, "grp", "zzz"); err == nil {
+		t.Fatal("fx grp zzz: want a usage error")
+	}
+	if _, stdout, err := executeIn(t, fx, "help", "grp"); err != nil || !strings.Contains(stdout, "Usage:") {
+		t.Errorf("fx help grp after a run that left a word: error %v, printed %q; want the group's help", err, stdout)
+	}
+}
+
+// TestExecuteRestoresTheHelpFunction: execute wraps the root's help function
+// for its own run only, and leaves the one it found.
+func TestExecuteRestoresTheHelpFunction(t *testing.T) {
+	fx := newHelpFixture(&fixtureHook{})
+	configureLikeRoot(fx)
+	want := reflect.ValueOf(fx.HelpFunc()).Pointer()
+	if _, _, err := executeIn(t, fx, "grp", "zzz"); err == nil {
+		t.Fatal("fx grp zzz: want a usage error")
+	}
+	if got := reflect.ValueOf(fx.HelpFunc()).Pointer(); got != want {
+		t.Errorf("after a run the root's help function is %#x, want %#x", got, want)
+	}
+}
+
+// TestVersionLeavesAStrayWordAlone: cobra answers --version before it
+// answers a command with subcommands with its help, so a word left over at
+// the root never reaches the help function, and the version is the whole
+// answer, exit 0, as it was before the groups rejected stray words.
+func TestVersionLeavesAStrayWordAlone(t *testing.T) {
+	fx := newHelpFixture(&fixtureHook{})
+	configureLikeRoot(fx)
+	fx.Version = "1.2.3"
+	if _, stdout, err := executeIn(t, fx, "--version=true", "--", "zzz"); err != nil || !strings.Contains(stdout, "1.2.3") {
+		t.Errorf("fx --version=true -- zzz: error %v, stdout %q; want the version and no error", err, stdout)
+	}
+}
+
+// TestFixtureHookRunsOnlyForALeaf holds the order a pre-run hook meets, on
+// the fixture group: it runs neither for the group nor for a stray word
+// under it, nor for a leaf's --help even where it would refuse; a leaf's
+// missing required flag, which cobra checks after the hook has passed, is a
+// usage error; and a hook's refusal is a runtime error, even where a
+// required flag is missing too.
+func TestFixtureHookRunsOnlyForALeaf(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		fail      bool
+		args      []string
+		wantRan   int
+		wantHelp  string // with no error wanted: the synopsis the help prints
+		wantErr   string // "" for none
+		wantUsage bool
+	}{
+		{"the group prints its help", false, []string{"grp"}, 0, "fx grp [command]", "", false},
+		{"a leaf's --help under a hook that would refuse", true, []string{"grp", "needs", "--help"}, 0, "fx grp needs [flags]", "", false},
+		{"a stray word under the group", false, []string{"grp", "zzz"}, 0, "", `unknown command "zzz" for "fx grp"`, true},
+		{"a stray word before --help", false, []string{"grp", "zzz", "--help"}, 0, "", `unknown command "zzz" for "fx grp"`, true},
+		{"an empty word under the group", false, []string{"grp", ""}, 0, "", `unknown command "" for "fx grp"`, true},
+		{"an empty word before another", false, []string{"grp", "", "zzz"}, 0, "", `unknown command "" for "fx grp"`, true},
+		{"a missing required flag after the hook passed", false, []string{"grp", "needs"}, 1, "", `required flag(s) "req" not set`, true},
+		{"the hook refuses", true, []string{"grp", "needs", "--req", "x"}, 1, "", "fixture hook refused", false},
+		{"the hook refuses before the required flag is checked", true, []string{"grp", "needs"}, 1, "", "fixture hook refused", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := &fixtureHook{fail: c.fail}
+			fx := newHelpFixture(h)
+			configureLikeRoot(fx)
+			cmd, stdout, err := executeIn(t, fx, c.args...)
+			if h.ran != c.wantRan {
+				t.Errorf("the hook ran %d times, want %d", h.ran, c.wantRan)
+			}
+			if c.wantErr == "" {
+				if err != nil || !strings.Contains(ansi.Strip(stdout), "Usage:\n  "+c.wantHelp+"\n") {
+					t.Errorf("want help carrying %q and no error; got %v and %q", c.wantHelp, err, stdout)
+				}
+				return
+			}
+			if err == nil || err.Error() != c.wantErr {
+				t.Fatalf("error %v, want %q", err, c.wantErr)
+			}
+			if _, _, isUsage := usageTarget(cmd, err); isUsage != c.wantUsage {
+				t.Errorf("classified as a usage error: %v, want %v", isUsage, c.wantUsage)
+			}
+		})
+	}
+}
+
+// TestProfileHookRunsOnlyForALeaf: profileCmd's hook, with EnsureMigrated
+// stubbed to refuse. `ws proxy profile` prints its help and
+// `ws proxy profile zzz` is a usage error of the group, neither calling the
+// stub; `ws proxy profile list` calls it, and its refusal is a runtime error.
+func TestProfileHookRunsOnlyForALeaf(t *testing.T) {
+	orig := ensureMigratedFn
+	t.Cleanup(func() { ensureMigratedFn = orig })
+	calls := 0
+	ensureMigratedFn = func(config.Config, bool) error {
+		calls++
+		return errors.New("stub: migration required")
+	}
+
+	_, stdout, err := executeIn(t, rootCmd, "proxy", "profile")
+	if err != nil || calls != 0 || !strings.Contains(ansi.Strip(stdout), "Usage:\n  ws proxy profile [command]") {
+		t.Errorf("ws proxy profile: error %v, stub calls %d, stdout %q; want its help and no call", err, calls, stdout)
+	}
+
+	cmd, _, err := executeIn(t, rootCmd, "proxy", "profile", "zzz")
+	if target, _, ok := usageTarget(cmd, err); !ok || target != profileCmd || calls != 0 {
+		t.Errorf("ws proxy profile zzz: error %v as a usage error of %v (%v), stub calls %d; want a usage error of the group and no call",
+			err, target, ok, calls)
+	}
+
+	resetSilenceUsage(t, "proxy", "profile", "list")
+	cmd, _, err = executeIn(t, rootCmd, "proxy", "profile", "list")
+	if calls != 1 || err == nil || err.Error() != "stub: migration required" {
+		t.Fatalf("ws proxy profile list: error %v, stub calls %d; want the stub's refusal from one call", err, calls)
+	}
+	if _, _, isUsage := usageTarget(cmd, err); isUsage {
+		t.Errorf("the hook's refusal is classified as a usage error")
 	}
 }
 

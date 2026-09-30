@@ -60,6 +60,27 @@ exit 1
 |✗ unknown flag: --bogus
 |  Usage: ws [command]
 |  Run 'ws --help' for usage.
+=== arg-error/proxy-unknown-subcommand
+exit 1
+--- stdout (0 bytes)
+--- stderr (104 bytes)
+|✗ unknown command "zzz" for "ws proxy"
+|  Usage: ws proxy [command]
+|  Run 'ws proxy --help' for usage.
+=== arg-error/vault-unknown-subcommand
+exit 1
+--- stdout (0 bytes)
+--- stderr (104 bytes)
+|✗ unknown command "zzz" for "ws vault"
+|  Usage: ws vault [command]
+|  Run 'ws vault --help' for usage.
+=== arg-error/profile-unknown-subcommand
+exit 1
+--- stdout (0 bytes)
+--- stderr (128 bytes)
+|✗ unknown command "zzz" for "ws proxy profile"
+|  Usage: ws proxy profile [command]
+|  Run 'ws proxy profile --help' for usage.
 === runtime/runE-plain
 exit 1
 --- stdout (0 bytes)
