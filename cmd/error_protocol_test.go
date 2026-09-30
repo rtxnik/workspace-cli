@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -35,12 +36,16 @@ import (
 // testdata/error-protocol.golden holds each case's exit code and both
 // streams, first recorded from the tree before phase 1 changed anything; a
 // commit that changes it names each case it changes (`git log -p` on the
-// file shows them). Re-record with:
+// file shows them). Re-record by naming the cases the change rewrites or
+// adds, comma-separated:
 //
-//	go test ./cmd -run '^TestErrorOutputBaseline$' -update-error-baseline
+//	go test ./cmd -run '^TestErrorOutputBaseline$' -update-error-baseline=<case>,<case>
+//
+// Any other case whose rendering differs from its record fails the run and
+// nothing is written, so a re-record cannot carry a change nobody named.
 
-var updateErrorBaseline = flag.Bool("update-error-baseline", false,
-	"rewrite testdata/error-protocol.golden from the current tree")
+var updateErrorBaseline = flag.String("update-error-baseline", "",
+	"comma-separated names of the cases testdata/error-protocol.golden may rewrite or add")
 
 const (
 	executeChildEnv   = "WS_TEST_EXECUTE_CHILD"
@@ -252,6 +257,11 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 		"LANG=en_US.UTF-8",
 		"LC_ALL=en_US.UTF-8",
 		"TMPDIR=" + os.TempDir(),
+		// Under -race a child sleeps before a successful exit — the race
+		// runtime's atexit_sleep_ms, 1000 by default, left for other
+		// goroutines to finish reporting. Measured: 1.05 s per successful
+		// child with it, 0.04 s without; a failing child does not wait.
+		"GORACE=atexit_sleep_ms=0",
 	}
 	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+v)
@@ -395,21 +405,122 @@ func splitErrorCases(s string) map[string]string {
 	return blocks
 }
 
+// refusedRewrites is why a re-record may not be written, one line per
+// reason: a case whose rendering differs from its record, or that has no
+// record yet, without being named in allowed; a recorded case the table no
+// longer holds, unnamed; a name in allowed that is no case at all, which is
+// how a typo shows up instead of silently allowing nothing; and a name two
+// cases share, whatever is named, because the map of renderings keeps one of
+// their blocks and the other would be written without ever being compared.
+func refusedRewrites(recorded, rendered map[string]string, order []string, allowed map[string]bool) []string {
+	var refused []string
+	inTable := map[string]bool{}
+	for _, name := range order {
+		if inTable[name] {
+			refused = append(refused, name+": two cases share this name")
+			continue
+		}
+		inTable[name] = true
+		old, wasRecorded := recorded[name]
+		switch {
+		case allowed[name]:
+		case !wasRecorded:
+			refused = append(refused, name+": new, and not named")
+		case rendered[name] != old:
+			refused = append(refused, name+": differs from its record, and not named")
+		}
+	}
+	for _, name := range sortedKeys(recorded) {
+		if !inTable[name] && !allowed[name] {
+			refused = append(refused, name+": recorded, no longer in the table, and not named")
+		}
+	}
+	for _, name := range sortedKeys(allowed) {
+		if _, ok := recorded[name]; !ok && !inTable[name] {
+			refused = append(refused, name+": named, and no such case")
+		}
+	}
+	return refused
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestErrorBaselineRewriteIsNamed is refusedRewrites' own control: each
+// kind of unnamed change is refused, and naming it is what lets it through.
+func TestErrorBaselineRewriteIsNamed(t *testing.T) {
+	recorded := map[string]string{"a": "A", "b": "B", "gone": "G"}
+	rendered := map[string]string{"a": "A2", "b": "B", "new": "N"}
+	order := []string{"a", "b", "new"}
+	for _, c := range []struct {
+		name    string
+		allowed []string
+		want    []string
+	}{
+		{"nothing named", nil, []string{
+			"a: differs from its record, and not named",
+			"new: new, and not named",
+			"gone: recorded, no longer in the table, and not named",
+		}},
+		{"every change named", []string{"a", "new", "gone"}, nil},
+		{"an unchanged case may be named", []string{"a", "b", "new", "gone"}, nil},
+		{"a typo is refused", []string{"a", "new", "gone", "nwe"}, []string{"nwe: named, and no such case"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			allowed := map[string]bool{}
+			for _, n := range c.allowed {
+				allowed[n] = true
+			}
+			got := refusedRewrites(recorded, rendered, order, allowed)
+			if strings.Join(got, "\n") != strings.Join(c.want, "\n") {
+				t.Errorf("refused\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
+			}
+		})
+	}
+	t.Run("a name two cases share is refused, whatever is named", func(t *testing.T) {
+		all := map[string]bool{"a": true, "b": true, "new": true, "gone": true}
+		got := refusedRewrites(recorded, rendered, []string{"a", "b", "b", "new"}, all)
+		if want := "b: two cases share this name"; strings.Join(got, "\n") != want {
+			t.Errorf("refused\n%s\nwant\n%s", strings.Join(got, "\n"), want)
+		}
+	})
+}
+
 func TestErrorOutputBaseline(t *testing.T) {
 	var got strings.Builder
+	order := make([]string, 0, len(errorCases))
 	for _, c := range errorCases {
 		code, stdout, stderr := runExecuteChild(t, c)
 		got.WriteString(renderErrorCase(c.name, code, stdout, stderr))
+		order = append(order, c.name)
 	}
 
-	if *updateErrorBaseline {
+	if *updateErrorBaseline != "" {
+		allowed := map[string]bool{}
+		for _, name := range strings.Split(*updateErrorBaseline, ",") {
+			allowed[strings.TrimSpace(name)] = true
+		}
+		// A missing file is an empty record: every case is then new.
+		recorded, err := os.ReadFile(errorBaselineFile)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("reading %s: %v", errorBaselineFile, err)
+		}
+		if refused := refusedRewrites(splitErrorCases(string(recorded)), splitErrorCases(got.String()), order, allowed); len(refused) > 0 {
+			t.Fatalf("refusing to rewrite %s; nothing was written:\n%s", errorBaselineFile, strings.Join(refused, "\n"))
+		}
 		if err := os.MkdirAll(filepath.Dir(errorBaselineFile), 0o755); err != nil {
 			t.Fatalf("creating testdata: %v", err)
 		}
 		if err := os.WriteFile(errorBaselineFile, []byte(got.String()), 0o644); err != nil {
 			t.Fatalf("writing %s: %v", errorBaselineFile, err)
 		}
-		t.Logf("rewrote %s (%d cases)", errorBaselineFile, len(errorCases))
+		t.Logf("rewrote %s (%d cases; named: %s)", errorBaselineFile, len(errorCases), *updateErrorBaseline)
 		return
 	}
 
