@@ -112,7 +112,8 @@ func TestProfileUseRendersPreSwapError(t *testing.T) {
 	cmd.SetErr(&errOut)
 	cmd.SetArgs([]string{"proxy", "profile", "use", "bad/name", "--no-migrate"})
 
-	err := cmd.Execute()
+	resetSilenceUsage(t, "proxy", "profile", "use")
+	failed, err := cmd.ExecuteC()
 	if err == nil {
 		t.Fatal("expected Execute() to return non-nil for invalid profile name (pre-swap error must propagate)")
 	}
@@ -123,12 +124,28 @@ func TestProfileUseRendersPreSwapError(t *testing.T) {
 	if !strings.Contains(msg, "invalid profile name") || code != 1 {
 		t.Fatalf("root protocol returned msg=%q code=%d; want the pre-swap error at exit 1", msg, code)
 	}
-	// Cobra itself must print nothing here: no "Error:" line, because the
-	// root silences errors, and no Usage: block, because the body sets
-	// SilenceUsage before it returns a runtime error.
-	if combined := out.String() + errOut.String(); combined != "" {
-		t.Errorf("cobra printed %q; the root owns the error and a runtime error carries no usage block", combined)
+	// A runtime error, not a usage error: the body set SilenceUsage before it
+	// returned, so the root prints no usage lines under it.
+	if _, _, isUsage := usageTarget(failed, err); isUsage {
+		t.Errorf("the pre-swap error is classified as a usage error: %v", err)
 	}
+}
+
+// resetSilenceUsage sets the SilenceUsage of the command at path back to
+// false for the rest of the test, and restores it after. Every body sets it
+// as its first statement, and a command object lives for the whole test
+// process, so an earlier test that ran the same command leaves it true; a
+// test that asserts an error is a runtime error would then pass whatever the
+// code under test did.
+func resetSilenceUsage(t *testing.T, path ...string) {
+	t.Helper()
+	leaf, _, err := rootCmd.Find(path)
+	if err != nil {
+		t.Fatalf("finding %v: %v", path, err)
+	}
+	was := leaf.SilenceUsage
+	leaf.SilenceUsage = false
+	t.Cleanup(func() { leaf.SilenceUsage = was })
 }
 
 // withTempCfg installs a config.Load stub returning a Config rooted at

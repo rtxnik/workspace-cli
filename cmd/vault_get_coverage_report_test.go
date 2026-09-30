@@ -100,7 +100,8 @@ func TestVaultGetCoverageReportEnvelopeError(t *testing.T) {
 		rootCmd.SetErr(nil)
 	})
 
-	err := rootCmd.Execute()
+	resetSilenceUsage(t, "vault", "get-coverage-report")
+	failed, err := rootCmd.ExecuteC()
 	if err == nil {
 		t.Fatal("expected error on envelope.Error")
 	}
@@ -114,9 +115,9 @@ func TestVaultGetCoverageReportEnvelopeError(t *testing.T) {
 	if !strings.Contains(cerr.msg, "VALIDATION_FAILED") {
 		t.Errorf("expected msg to cite error code; got %q", cerr.msg)
 	}
-	combined := out.String() + errOut.String() + err.Error()
-	if strings.Contains(combined, "Usage:") {
-		t.Errorf("SilenceUsage must suppress usage block; got %q", combined)
+	// A runtime error, not a usage error: the root prints no usage lines.
+	if _, _, isUsage := usageTarget(failed, err); isUsage {
+		t.Errorf("an envelope error is classified as a usage error: %v", err)
 	}
 }
 
