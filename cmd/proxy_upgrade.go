@@ -28,15 +28,14 @@ migrated to the profiles/primary.json + symlink layout. Pass --no-migrate to ref
 auto-migration (the command then errors instead of touching a legacy file).`,
 	Annotations: proxyAnnotation,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		noMigrate, _ := cmd.Flags().GetBool("no-migrate")
 		if err := xray.EnsureMigrated(cfg, !noMigrate); err != nil {
-			cmd.SilenceUsage = true
 			return fmt.Errorf("upgrade-config: %w", err)
 		}
 		changed, err := xray.UpgradeProfileInbounds(cfg)
 		if err != nil {
-			cmd.SilenceUsage = true
 			return fmt.Errorf("upgrade-config: %w", err)
 		}
 		switch changed {

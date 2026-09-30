@@ -27,6 +27,7 @@ their own network namespace and resume connectivity when the new proxy
 comes up.`,
 	Annotations: proxyAnnotation,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
@@ -35,12 +36,10 @@ comes up.`,
 					output.Info("Aborted")
 					return nil
 				}
-				cmd.SilenceUsage = true
 				return err
 			}
 		}
 		if err := proxyRecreateCmdFn(cfg); err != nil {
-			cmd.SilenceUsage = true
 			return fmt.Errorf("proxy recreate failed: %w", err)
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Proxy recreated")
