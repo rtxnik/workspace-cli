@@ -689,6 +689,35 @@ func contractMutants() []contractMutant {
 			probe:  probeResolveWidth,
 		},
 		{
+			name:   "frame_on_stdout",
+			spec:   "§4.7 the step runner",
+			defect: "the frame is drawn on stdout, so `ws stop api > out` puts a spinner in the file",
+			apply:  func(m *mutantSwitches) { m.FrameToStdout = true },
+			probe:  probeRunnerStreams,
+		},
+		{
+			name: "frame_without_a_terminal",
+			spec: "§4.7 the step runner",
+			defect: "the frame is drawn whatever the stream, so a pipe or a CI log receives cursor moves and erases, " +
+				"as huh/spinner's output did",
+			apply: func(m *mutantSwitches) { m.FrameOffTerminal = true },
+			probe: probeRunnerTTYGate,
+		},
+		{
+			name:   "message_queue_off",
+			spec:   "§4.7 the step runner",
+			defect: "a message a task writes is written at once, under the live frame, which it tears",
+			apply:  func(m *mutantSwitches) { m.NoMessageQueue = true },
+			probe:  probeRunnerQueue,
+		},
+		{
+			name:   "result_line_carries_the_error",
+			spec:   "§4.7 / §4.8",
+			defect: "a failed task's result line carries the error, which the root then prints a second time",
+			apply:  func(m *mutantSwitches) { m.ResultCarriesError = true },
+			probe:  probeRunnerResultLine,
+		},
+		{
 			name: "cjk_locale_ignored",
 			spec: "§4.5",
 			defect: "the CJK language tag is ignored, so a ja_JP.UTF-8 or zh_CN.UTF-8 terminal keeps the UTF-8 " +
@@ -715,7 +744,7 @@ func TestContractMutationHarness(t *testing.T) {
 	// their §4.7 behaviour when the first registry landed, so a probe over
 	// them would have been red at that point's own acceptance gate.
 	clean := map[string]string{}
-	for _, p := range append(contractProbes(), messageProbes()...) {
+	for _, p := range append(append(contractProbes(), messageProbes()...), runnerProbes()...) {
 		r := newResults()
 		clean[p.name] = p.run(t, r)
 		if r.any() {

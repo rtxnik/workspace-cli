@@ -626,3 +626,114 @@ func TestRunUnderLoad(t *testing.T) {
 		t.Error("a warning was written while the task ran")
 	}
 }
+
+// --------------------------------------------- the runner's contract probes
+
+// runnerProbes is the step runner's contract, planted against by
+// TestContractMutationHarness in mutation_test.go and run clean by
+// TestRunnerContract.
+func runnerProbes() []contractProbe {
+	return []contractProbe{probeRunnerStreams, probeRunnerTTYGate, probeRunnerQueue, probeRunnerResultLine}
+}
+
+// TestRunnerContract runs the runner's probes on the shipped code.
+func TestRunnerContract(t *testing.T) {
+	for _, p := range runnerProbes() {
+		t.Run(p.name, func(t *testing.T) {
+			r := newResults()
+			p.run(t, r)
+			r.report(t)
+		})
+	}
+}
+
+// probeRunnerStreams: on a terminal the frame and the lines go to the
+// runner's stream — stderr — and nothing to stdout.
+var probeRunnerStreams = contractProbe{
+	name: "runner_streams",
+	spec: "§4.7",
+	what: "the runner draws its frame and writes its lines on stderr, and writes nothing to stdout",
+	run: func(t *testing.T, r *results) string {
+		stdout, stderr := capture(t, func() {
+			ticks, redrawn := make(chan time.Time), make(chan struct{})
+			rn := testRunner(NewStreamAt(stdWriter{err: true}, 80, true, ColourNone, false), &fakeClock{}, ticks)
+			rn.hooks.redrawn = func() { redrawn <- struct{}{} }
+			_ = rn.run([]Task{{Title: "Stopping workspace", Run: func(*Log) error {
+				ticks <- time.Time{}
+				<-redrawn
+				return nil
+			}}})
+		})
+		if stdout != "" {
+			r.fail("runner_streams", "the runner wrote %q to stdout; stdout is the answer's", stdout)
+		}
+		if !strings.Contains(stderr, "\r\x1b[J⠙ Stopping workspace") || !strings.HasSuffix(stderr, "✓ Stopping workspace  0.0s\n") {
+			r.fail("runner_streams", "stderr does not hold the redrawn frame and the result line: %q", stderr)
+		}
+		return fmt.Sprintf("stdout=%q stderr=%q", stdout, stderr)
+	},
+}
+
+// probeRunnerTTYGate: off a terminal the runner writes plain lines and not
+// one ESC byte.
+var probeRunnerTTYGate = contractProbe{
+	name: "runner_tty_gate",
+	spec: "§4.7",
+	what: "off a terminal the runner writes a start line and a result line and no escape byte",
+	run: func(t *testing.T, r *results) string {
+		var buf syncBuffer
+		rn := testRunner(NewStreamAt(&buf, 80, false, ColourNone, false), &fakeClock{}, nil)
+		_ = rn.run([]Task{{Title: "Stopping workspace", Run: ok}})
+		out := buf.String()
+		if n := strings.Count(out, "\x1b"); n > 0 {
+			r.fail("runner_tty_gate", "off a terminal the runner wrote %d ESC bytes: %q", n, out)
+		}
+		if want := "~ Stopping workspace\n✓ Stopping workspace  0.0s\n"; out != want {
+			r.fail("runner_tty_gate", "off a terminal the runner wrote %q; want %q", out, want)
+		}
+		return out
+	},
+}
+
+// probeRunnerQueue: a message written during a task comes out after the
+// task's result line, on the process's stderr.
+var probeRunnerQueue = contractProbe{
+	name: "runner_queue",
+	spec: "§4.7",
+	what: "a message a task writes is written after the task's result line",
+	run: func(t *testing.T, r *results) string {
+		_, stderr := capture(t, func() {
+			rn := testRunner(NewStreamAt(stdWriter{err: true}, 80, false, ColourNone, false), &fakeClock{}, nil)
+			_ = rn.run([]Task{{Title: "Deleting workspace", Run: func(*Log) error {
+				Warn("devpod delete: exit status 1")
+				return nil
+			}}})
+		})
+		result := strings.Index(stderr, "✓ Deleting workspace")
+		warning := strings.Index(stderr, "devpod delete: exit status 1")
+		if result < 0 || warning < result {
+			r.fail("runner_queue", "the warning is not after the task's result line: %q", stderr)
+		}
+		return stderr
+	},
+}
+
+// probeRunnerResultLine: a failed task's result line carries no error text;
+// the root prints the error, once.
+var probeRunnerResultLine = contractProbe{
+	name: "runner_result_line",
+	spec: "§4.7 / §4.8",
+	what: "a failed task's result line carries no error text",
+	run: func(t *testing.T, r *results) string {
+		var buf syncBuffer
+		rn := testRunner(NewStreamAt(&buf, 80, false, ColourNone, false), &fakeClock{}, nil)
+		_ = rn.run([]Task{{Title: "Stopping workspace", Run: func(*Log) error {
+			return errors.New("devpod stop: exit status 1")
+		}}})
+		out := buf.String()
+		if strings.Contains(out, "exit status 1") {
+			r.fail("runner_result_line", "the result line carries the error text, which the root prints: %q", out)
+		}
+		return out
+	},
+}

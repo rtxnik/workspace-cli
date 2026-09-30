@@ -190,6 +190,9 @@ var owner struct {
 // enqueue holds line for the owner's drain while a task runs, and reports
 // whether it did. The message helpers call it before they write.
 func enqueue(line func(s *Stream) string) bool {
+	if mutants.NoMessageQueue {
+		return false
+	}
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	if !owner.open {
@@ -262,7 +265,8 @@ func (r *runner) runTask(t Task) error {
 	defer log.close()
 
 	start := r.now()
-	if !r.s.IsTTY() {
+	tty := r.s.IsTTY() || mutants.FrameOffTerminal
+	if !tty {
 		r.writeLine(stepLine(r.s, StateBusy, t.Title, ""))
 	}
 	owner.mu.Lock()
@@ -270,7 +274,7 @@ func (r *runner) runTask(t Task) error {
 	owner.mu.Unlock()
 
 	var f *frame
-	if r.s.IsTTY() {
+	if tty {
 		f = r.startFrame(t.Title, start, log)
 	}
 	if !r.enter(current{f: f, title: t.Title, start: start}) {
@@ -305,11 +309,14 @@ func (r *runner) runTask(t Task) error {
 	if !r.leave() {
 		return r.halt()
 	}
-	st := StateOK
+	st, title := StateOK, t.Title
 	if runErr != nil {
 		st = StateFail
+		if mutants.ResultCarriesError {
+			title += ": " + runErr.Error()
+		}
 	}
-	r.drain(f, stepLine(r.s, st, t.Title, elapsedText(r.now().Sub(start))))
+	r.drain(f, stepLine(r.s, st, title, elapsedText(r.now().Sub(start))))
 	r.settle()
 	if runErr != nil {
 		return &TaskError{Title: t.Title, Err: runErr, Tail: log.Tail()}
@@ -444,7 +451,13 @@ func (r *runner) queueLine(line func(s *Stream) string) {
 
 func (r *runner) writeLine(line string) { _, _ = fmt.Fprintln(r.s, line) }
 
-func (r *runner) writeRaw(text string) { _, _ = io.WriteString(r.s, text) }
+func (r *runner) writeRaw(text string) {
+	var w io.Writer = r.s
+	if mutants.FrameToStdout {
+		w = Out()
+	}
+	_, _ = io.WriteString(w, text)
+}
 
 // ------------------------------------------------------------------ frame
 

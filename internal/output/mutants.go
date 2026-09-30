@@ -52,9 +52,9 @@ package output
 //     rest of the run, with `go test -race ./...` green and nothing to say so.
 //
 // This file is NEVER build-tagged (decision D-11). Production code branches
-// on these switches directly — measured with the last of them wired: 30
-// references over seven files, blocks.go 7, alloc.go 6, stream.go 5, glyph.go
-// 4, text.go 3, message.go 3, run.go 2 — so tagging the DECLARATION out
+// on these switches directly — measured with the last of them wired: 34
+// references over seven files, blocks.go 7, alloc.go 6, run.go 6, stream.go
+// 5, glyph.go 4, text.go 3, message.go 3 — so tagging the DECLARATION out
 // breaks the ordinary build rather than the harness. The tag goes on the
 // mutation harness and only there. The cost in the shipped binary is one
 // zero-valued struct.
@@ -151,8 +151,12 @@ type mutantSwitches struct {
 	ProblemTitleUnmarked bool
 
 	// ---------------------------------------------------- §4.7 step runner
-	FrameUncut  bool // the frame's lines are laid out against the whole budget, not budget − 1
-	LiveLineRaw bool // the frame's second line is the log's line as the child wrote it, escapes and all
+	FrameUncut         bool // the frame's lines are laid out against the whole budget, not budget − 1
+	LiveLineRaw        bool // the frame's second line is the log's line as the child wrote it, escapes and all
+	FrameToStdout      bool // the frame is drawn on stdout, the answer's stream
+	FrameOffTerminal   bool // the frame is drawn whatever the stream, as huh/spinner drew into a pipe
+	NoMessageQueue     bool // a message is written while a task runs, under the frame
+	ResultCarriesError bool // a failed task's result line carries the error, which the root prints again
 
 	// ------------------------------------------- §4.7 / §4.2 / §4.5 contract
 	MessagesToStdout      bool // the message helpers write to stdout
