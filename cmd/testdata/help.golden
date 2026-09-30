@@ -1,0 +1,194 @@
+=== ws --help, piped
+|ws — workspace manager CLI for DevPod environments with proxy support.
+|
+|Usage:
+|  ws [command]
+|
+|Workspace Commands:
+|  code     Open workspace in VS Code
+|  delete   Delete a workspace
+|  detect   Detect project profile
+|  list     List workspaces
+|  logs     Show workspace logs
+|  new      Create a new workspace
+|  restart  Restart a workspace
+|  ssh      SSH into a workspace
+|  start    Start a workspace
+|  status   Show workspace health across all repositories
+|  stop     Stop a workspace
+|
+|Profile Commands:
+|  profile-create  Create a custom profile
+|  profile-delete  Delete a custom profile
+|  profiles        List available profiles
+|
+|Proxy Commands:
+|  proxy  Proxy management commands
+|
+|Vault Commands:
+|  vault  Vault-AI MCP operations
+|
+|Additional Commands:
+|  completion  Generate shell completion script
+|  help        Help about any command
+|
+|Flags:
+|  -h, --help     help for ws
+|      --json     Output in JSON format, where the command supports it
+|  -v, --version  version for ws
+|
+|Use "ws [command] --help" for more information about a command.
+=== ws proxy --help, piped
+|Proxy management commands
+|
+|Usage:
+|  ws proxy [command]
+|
+|Commands:
+|  check           Verify proxy prerequisites
+|  debug           Toggle debug logging
+|  doctor          Run an ordered, fail-fast proxy diagnostic with remediation hints
+|  down            Stop the proxy container
+|  fix-routes      Fix default routes in workspace containers after reboot
+|  init            Generate xray config from a VLESS or Hysteria2 URI
+|  logs            Show proxy container logs
+|  profile         Manage xray VLESS profiles
+|  rebuild         Rebuild proxy image from scratch
+|  recreate        Recreate the proxy container (destroys + creates new container)
+|  restart         Restart the proxy container (preserves container, re-reads config)
+|  status          Show proxy container status
+|  test            Prove tunnel is active by comparing direct vs proxied exit IP
+|  up              Start the proxy container
+|  update          Update xray-core version
+|  upgrade-config  Upgrade on-disk xray profiles to the current canonical inbound (adds sockopt.tproxy)
+|
+|Flags:
+|  -h, --help  help for proxy
+|
+|Global Flags:
+|      --json  Output in JSON format, where the command supports it
+|
+|Use "ws proxy [command] --help" for more information about a command.
+=== ws proxy profile use --help, piped
+|Validate, atomically swap, and reload the proxy so the new profile takes effect immediately.
+|
+|Use --no-reload to perform only the symlink swap (advanced — operator must run 'ws proxy restart' manually to apply).
+|
+|Usage:
+|  ws proxy profile use <name> [flags]
+|
+|Flags:
+|  -h, --help       help for use
+|      --no-reload  Skip proxy restart after switching profile (advanced — operator must run 'ws proxy restart' manually to apply)
+|
+|Global Flags:
+|      --json        Output in JSON format, where the command supports it
+|      --no-migrate  Refuse auto-migration of legacy regular-file config.json; error out instead
+=== ws list --help, piped
+|List workspaces
+|
+|Usage:
+|  ws list [flags]
+|
+|Aliases:
+|  list, ls
+|
+|Flags:
+|  -h, --help  help for list
+|
+|Global Flags:
+|      --json  Output in JSON format, where the command supports it
+=== ws vault doctor --help, piped
+|Runs 5 read-only diagnostic checks per CONTEXT D-12: orphan MCP subprocesses, stale lock files, VAULT_AI_TOKEN presence, MCP fd-pass handshake, xrepo contract parity. Exit 0 (all green) / 1 (≥1 yellow) / 2 (≥1 red). Mutation is opt-in only via --kill-orphans + --clear-stale-locks (each gated by --yes or output.Confirm) per memory feedback_no_auto_state_mutation + Phase 22 D-09/D-10 lineage.
+|
+|Usage:
+|  ws vault doctor [flags]
+|
+|Flags:
+|      --clear-stale-locks  Remove stale lock files (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)
+|  -h, --help               help for doctor
+|      --kill-orphans       Kill detected orphan MCP subprocesses (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)
+|      --yes                Skip confirmation prompts for --kill-orphans / --clear-stale-locks (Phase 22 D-09/D-10 discipline)
+|
+|Global Flags:
+|      --json  Output in JSON format, where the command supports it
+=== ws completion --help, piped
+|Generate shell completion script for ws.
+|
+|# Zsh: add to ~/.zshrc
+|eval "$(ws completion zsh)"
+|
+|# Bash: add to ~/.bashrc
+|eval "$(ws completion bash)"
+|
+|# Fish: add to ~/.config/fish/config.fish
+|ws completion fish | source
+|
+|Usage:
+|  ws completion [bash|zsh|fish] [flags]
+|
+|Flags:
+|  -h, --help  help for completion
+|
+|Global Flags:
+|      --json  Output in JSON format, where the command supports it
+=== ws proxy --help, 40-column terminal, no colour
+|Proxy management commands
+|
+|Usage:
+|  ws proxy [command]
+|
+|Commands:
+|  check           Verify proxy
+|                  prerequisites
+|  debug           Toggle debug logging
+|  doctor          Run an ordered,
+|                  fail-fast proxy
+|                  diagnostic with
+|                  remediation hints
+|  down            Stop the proxy
+|                  container
+|  fix-routes      Fix default routes in
+|                  workspace containers
+|                  after reboot
+|  init            Generate xray config
+|                  from a VLESS or
+|                  Hysteria2 URI
+|  logs            Show proxy container
+|                  logs
+|  profile         Manage xray VLESS
+|                  profiles
+|  rebuild         Rebuild proxy image
+|                  from scratch
+|  recreate        Recreate the proxy
+|                  container (destroys +
+|                  creates new container)
+|  restart         Restart the proxy
+|                  container (preserves
+|                  container, re-reads
+|                  config)
+|  status          Show proxy container
+|                  status
+|  test            Prove tunnel is active
+|                  by comparing direct vs
+|                  proxied exit IP
+|  up              Start the proxy
+|                  container
+|  update          Update xray-core
+|                  version
+|  upgrade-config  Upgrade on-disk xray
+|                  profiles to the
+|                  current canonical
+|                  inbound (adds
+|                  sockopt.tproxy)
+|
+|Flags:
+|  -h, --help  help for proxy
+|
+|Global Flags:
+|      --json  Output in JSON format,
+|              where the command supports
+|              it
+|
+|Use "ws proxy [command] --help" for more
+|information about a command.

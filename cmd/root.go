@@ -119,7 +119,10 @@ func init() {
 	rootCmd.Version = version
 	rootCmd.SetVersionTemplate(logo() + "ws {{.Version}}\n")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
-	rootCmd.PersistentFlags().Bool("json", false, "Output in JSON format")
+	// Every command inherits --json, and only some of them read it; the
+	// usage says so, rather than promise an effect a command does not have.
+	rootCmd.PersistentFlags().Bool("json", false, "Output in JSON format, where the command supports it")
+	rootCmd.SetHelpFunc(helpFunc)
 
 	cobra.AddTemplateFunc("groupTag", func(cmd *cobra.Command) []string {
 		if tag, ok := cmd.Annotations["group"]; ok {
