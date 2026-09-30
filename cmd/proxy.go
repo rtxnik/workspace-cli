@@ -79,12 +79,9 @@ var proxyDownCmd = &cobra.Command{
 			}
 		}
 
-		if err := output.RunWithSpinner("Stopping proxy", func() error {
+		return output.Run(output.Task{Title: "Stopping proxy", Run: func(*output.Log) error {
 			return docker.ProxyDown(cfg)
-		}); err != nil {
-			return err
-		}
-		return nil
+		}})
 	},
 }
 
@@ -241,31 +238,27 @@ var proxyRebuildCmd = &cobra.Command{
 		}
 		allowDrift, _ := cmd.Flags().GetBool("allow-drift")
 
-		runner := output.NewStepRunner(
-			output.Step{Name: "Building proxy image", Fn: func() error {
-				return docker.BuildProxyImage(cfg, "", allowDrift, nil)
+		return output.Run(
+			output.Task{Title: "Building proxy image", Run: func(log *output.Log) error {
+				return docker.BuildProxyImage(cfg, "", allowDrift, log)
 			}},
-			output.Step{Name: "Recreating container", Fn: func() error {
+			output.Task{Title: "Recreating container", Run: func(*output.Log) error {
 				st, _ := docker.ProxyStatus(cfg)
 				if st.Running {
 					return docker.ProxyRecreate(cfg)
 				}
 				return nil
 			}},
-			output.Step{Name: "Waiting for health check", Fn: func() error {
+			output.Task{Title: "Waiting for health check", Run: func(*output.Log) error {
 				// Redundant after the transactional ProxyRecreate (which verifies
 				// health internally) but benign; kept for the non-recreate cold
 				// path. Removing it is an optional follow-up (spec §10).
 				return docker.WaitForHealth(cfg, docker.ProxyHealthBudget)
 			}},
-			output.Step{Name: "Cleaning old images", Fn: func() error {
+			output.Task{Title: "Cleaning old images", Run: func(*output.Log) error {
 				return docker.PruneImages()
 			}},
 		)
-		if err := runner.Run(); err != nil {
-			return err
-		}
-		return nil
 	},
 }
 
@@ -414,8 +407,9 @@ var proxyUpdateCmd = &cobra.Command{
 			output.Detail(fmt.Sprintf("Latest: %s", version))
 		}
 
-		if err := output.RunWithSpinner(fmt.Sprintf("Building proxy image with xray-core %s", version), func() error {
-			return docker.BuildProxyImage(cfg, version, false, nil)
+		if err := output.Run(output.Task{
+			Title: fmt.Sprintf("Building proxy image with xray-core %s", version),
+			Run:   func(log *output.Log) error { return docker.BuildProxyImage(cfg, version, false, log) },
 		}); err != nil {
 			return err
 		}

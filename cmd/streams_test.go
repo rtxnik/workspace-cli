@@ -106,6 +106,7 @@ type streamsRow struct {
 	stdout string
 	stderr string                                // with every step time normalised to <t>
 	after  func(t *testing.T, fx streamsFixture) // what the row must have left behind, when it matters
+	setup  func(t *testing.T, fx streamsFixture) // what the row needs beyond the fixture
 }
 
 // runStreamsChild runs row in a child over fx.
@@ -210,6 +211,59 @@ var streamsRows = []streamsRow{
 			"  1. Check config       ws proxy check\n" +
 			"  2. Initialize config  ws proxy init <proxy-uri>\n" +
 			"  3. Rebuild image      ws proxy rebuild\n"},
+	{name: "ws proxy down: no docker", args: []string{"proxy", "down", "--force"}, code: 1,
+		stderr: "~ Stopping proxy\n" +
+			"✗ Stopping proxy  <t>\n" +
+			"✗ stop proxy: Cannot connect to the Docker daemon at\n" +
+			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
+			"  running?\n"},
+	{name: "ws proxy rebuild: no recipe", args: []string{"proxy", "rebuild", "--force"}, code: 1,
+		stderr: "~ Building proxy image\n" +
+			"✗ Building proxy image  <t>\n" +
+			"- Recreating container\n" +
+			"- Waiting for health check\n" +
+			"- Cleaning old images\n" +
+			"✗ proxy recipe drift: Dockerfile (missing), entrypoint.sh (missing). Run\n" +
+			"  'chezmoi apply' to restore the canonical recipe, or rebuild intentionally with\n" +
+			"  'ws proxy rebuild --allow-drift'\n"},
+	{name: "ws proxy update: no recipe", args: []string{"proxy", "update", "v26.2.6", "--force"}, code: 1,
+		stderr: "~ Building proxy image with xray-core v26.2.6\n" +
+			"✗ Building proxy image with xray-core v26.2.6  <t>\n" +
+			"✗ proxy recipe drift: Dockerfile (missing), entrypoint.sh (missing). Run\n" +
+			"  'chezmoi apply' to restore the canonical recipe, or rebuild intentionally with\n" +
+			"  'ws proxy rebuild --allow-drift'\n"},
+	{name: "ws proxy rebuild: docker writes to the log", args: []string{"proxy", "rebuild", "--force", "--allow-drift"},
+		setup: withFakeDockerBuild, code: 1,
+		stderr: "~ Building proxy image\n" +
+			"✓ Building proxy image  <t>\n" +
+			"~ Recreating container\n" +
+			"✓ Recreating container  <t>\n" +
+			"~ Waiting for health check\n" +
+			"✗ Waiting for health check  <t>\n" +
+			"- Cleaning old images\n" +
+			"✗ inspect proxy: Cannot connect to the Docker daemon at\n" +
+			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
+			"  running?\n"},
+}
+
+// withFakeDockerBuild gives a row a proxy recipe that has drifted, for
+// --allow-drift to build, and a docker on PATH whose build prints a line to
+// each stream and succeeds.
+func withFakeDockerBuild(t *testing.T, fx streamsFixture) {
+	t.Helper()
+	recipe := filepath.Join(fx.home, ".config", "workspaces", "profiles", "proxy")
+	if err := os.MkdirAll(recipe, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"Dockerfile", "entrypoint.sh"} {
+		if err := os.WriteFile(filepath.Join(recipe, f), []byte("drifted\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := "#!/bin/sh\necho '#1 [internal] load build definition'\necho '#2 WARN: FromAsCasing' >&2\n"
+	if err := os.WriteFile(filepath.Join(fx.bin, "docker"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // deleteNotFound is what ws delete prints for a workspace that is not there.
@@ -222,6 +276,9 @@ func TestStreams(t *testing.T) {
 	for _, row := range streamsRows {
 		t.Run(row.name, func(t *testing.T) {
 			fx := newStreamsFixture(t)
+			if row.setup != nil {
+				row.setup(t, fx)
+			}
 			code, stdout, stderr := runStreamsChild(t, fx, row)
 			if row.after != nil {
 				row.after(t, fx)
