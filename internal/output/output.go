@@ -11,7 +11,7 @@ import (
 // Three style aliases went with the helpers, because they had no other
 // caller. The three that stay each still have a caller, measured rather than
 // assumed: spinner.go:23 and :29 render through errorStyle and successStyle,
-// and SectionStyle is read from cmd (root.go x4, profile.go, vault_status.go).
+// and SectionStyle is read from cmd (profile.go, vault_status.go).
 // §4.6 replaces all three, in the phase that reaches those call sites.
 var (
 	SectionStyle = StyleHeader
