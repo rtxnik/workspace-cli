@@ -162,17 +162,16 @@ exit 4
 |  ISO week; see ROADMAP §Phase 21c
 === silent/workspace-status
 exit 1
---- stdout (612 bytes)
-|╭───────────────┬────────┬─────────┬──────╮
-|│ REPO          │ BRANCH │ STATUS  │ SYNC │
-|├───────────────┼────────┼─────────┼──────┤
-|│ workspace-cli │ –      │ missing │      │
-|│ vault-ai      │ –      │ missing │      │
-|│ dotfiles      │ –      │ missing │      │
-|╰───────────────┴────────┴─────────┴──────╯
---- stderr (21 bytes)
-|
-|  0/3 repos healthy
+--- stdout (656 bytes)
+|╭───────────────┬────────┬───────────┬──────╮
+|│ REPO          │ BRANCH │ STATUS    │ SYNC │
+|├───────────────┼────────┼───────────┼──────┤
+|│ workspace-cli │        │ ✗ missing │      │
+|│ vault-ai      │        │ ✗ missing │      │
+|│ dotfiles      │        │ ✗ missing │      │
+|╰───────────────┴────────┴───────────┴──────╯
+|0/3 repos healthy
+--- stderr (0 bytes)
 === silent/vault-health-score
 exit 1
 --- stdout (3 bytes)
