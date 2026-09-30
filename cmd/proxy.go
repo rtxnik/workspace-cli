@@ -245,7 +245,7 @@ var proxyRebuildCmd = &cobra.Command{
 
 		runner := output.NewStepRunner(
 			output.Step{Name: "Building proxy image", Fn: func() error {
-				return docker.BuildProxyImage(cfg, "", allowDrift)
+				return docker.BuildProxyImage(cfg, "", allowDrift, nil)
 			}},
 			output.Step{Name: "Recreating container", Fn: func() error {
 				st, _ := docker.ProxyStatus(cfg)
@@ -417,7 +417,7 @@ var proxyUpdateCmd = &cobra.Command{
 		}
 
 		if err := output.RunWithSpinner(fmt.Sprintf("Building proxy image with xray-core %s", version), func() error {
-			return docker.BuildProxyImage(cfg, version, false)
+			return docker.BuildProxyImage(cfg, version, false, nil)
 		}); err != nil {
 			return err
 		}
