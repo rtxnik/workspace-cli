@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/fsutil"
+	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
 func TestProxyProfileCommand(t *testing.T) {
@@ -82,9 +84,11 @@ func TestProxyProfileHelpExits0(t *testing.T) {
 // target file) must reach the operator instead of being swallowed by
 // os.Exit(1). The original profileUseCmd used `Run` and exited silently on
 // error; this test pins the RunE contract. Phase 1 moved the print itself: the
-// root silences cobra and renders the error through output.Fail, so what this
-// test pins is that the error propagates and which branch the root takes.
-// TestErrorOutputBaseline pins the bytes.
+// root silences cobra and prints the error, so what this test pins is that the
+// error propagates and which branch the root takes. A pre-swap error is a
+// plain error, which the root prints as its ✗ line: xray's
+// TestSwitchToLeavesTheErrorToTheRoot pins that, and TestRootProblemSelects
+// what the root prints.
 //
 // We use a slash-containing profile name to trip ValidateProfileName's regex
 // (^[a-z0-9_-]{1,32}$) — same pre-swap error path as the bind-check failure,
@@ -118,8 +122,8 @@ func TestProfileUseRendersPreSwapError(t *testing.T) {
 		t.Fatal("expected Execute() to return non-nil for invalid profile name (pre-swap error must propagate)")
 	}
 	// The root prints the error, not cobra: rootCmd sets SilenceErrors, so the
-	// text reaches the operator through run() and output.Fail, and
-	// TestErrorOutputBaseline pins the bytes that print on stderr.
+	// text reaches the operator through run() and rootProblem, which
+	// TestRootProblemSelects pins.
 	msg, code := run(err)
 	if !strings.Contains(msg, "invalid profile name") || code != 1 {
 		t.Fatalf("root protocol returned msg=%q code=%d; want the pre-swap error at exit 1", msg, code)
@@ -325,17 +329,19 @@ func TestProfileUseRendersPartialFailureWithoutRollback(t *testing.T) {
 
 	s := withSeams(t)
 	*s.verify = func(_ config.Config) error { return nil }
-	// Simulate xray.SwitchTo: do the real symlink swap, then return a
-	// wrapped error simulating post-swap restart failure. This matches
-	// the production failure path that xray.SwitchTo produces when
-	// restartProxyFn fails after AtomicSymlink succeeded.
+	// Simulate xray.SwitchTo: do the real symlink swap, then return the
+	// error of a post-swap restart failure, which carries the switch's
+	// Problem. This matches the production failure path that xray.SwitchTo
+	// produces when restartProxyFn fails after AtomicSymlink succeeded.
+	switchProblem := output.Problem{Title: `Switch to "broken" failed`,
+		Facts: []output.Fact{{K: "Previous", V: "primary"}, {K: "Active", V: "broken (not rolled back)"}}}
 	*s.switchTo = func(cfg config.Config, name string) error {
 		relativeTarget := filepath.Join("profiles", name+".json")
 		if err := fsutil.AtomicSymlink(relativeTarget, cfg.XrayConfig); err != nil {
 			return err
 		}
-		return fmt.Errorf("switch to %q failed (previous=%q): %w",
-			name, "primary", errors.New("simulated post-swap restart failure"))
+		return &output.ProblemError{P: switchProblem, Err: fmt.Errorf("switch to %q failed (previous=%q): %w",
+			name, "primary", errors.New("simulated post-swap restart failure"))}
 	}
 
 	out, errOut, err := execCapture(t, "proxy", "profile", "use", "broken", "--no-migrate")
@@ -363,6 +369,11 @@ func TestProfileUseRendersPartialFailureWithoutRollback(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "proxy reloaded in") {
 		t.Errorf("happy-path success line must NOT fire on failure; stdout=%q", out.String())
+	}
+	// The cmd layer prints nothing of the failure and hides nothing of it:
+	// the root prints the switch's Problem, once.
+	if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, switchProblem) || errOut.Len() != 0 {
+		t.Errorf("the cmd layer wrote %q and returned a Problem %+v (%t); want nothing written and the switch's Problem", errOut.String(), p, ok)
 	}
 }
 

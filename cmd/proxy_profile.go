@@ -187,10 +187,10 @@ Use --no-reload to perform only the symlink swap (advanced — operator must run
 		// Validate -> AtomicSwap -> Restart -> WaitForHealth and owns the
 		// TestManualRecoveryOnFailedSwitch tripwire contract).
 		//
-		// D-10 partial-failure boundary: on error, xray.SwitchTo already
-		// rendered output.RenderError on stderr (switch.go ~127) and
-		// wrapped the previous-profile name into the returned error. The
-		// cmd layer does NOT render a duplicate error box and does NOT
+		// D-10 partial-failure boundary: on error, xray.SwitchTo returns
+		// the error that carries its Problem, the previous-profile name
+		// wrapped into its message, and prints nothing (SwitchTo). The cmd
+		// layer returns it as it is, for the root to print, and does NOT
 		// auto-rollback the symlink. TestProfileUseRendersPartialFailureWithoutRollback
 		// pins this contract.
 		start := time.Now()

@@ -2,13 +2,17 @@ package xray
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
 // TestValidationGate asserts ValidateProfile produces an error wrapping the
@@ -199,9 +203,10 @@ func TestNoRollbackWhenLivenessTimesOut(t *testing.T) {
 // must return a non-nil error whose message mentions "legacy single-file bind
 // mount" so the cmd layer can surface it to the operator. Previously the
 // error was correctly returned by SwitchTo, but profileUseCmd swallowed it via
-// os.Exit(1) with no output. This test pins the SwitchTo-layer contract; the
-// cmd layer's rendering of it is pinned by cmd/error_protocol_test.go
-// (TestErrorOutputBaseline); cmd/proxy_profile_test.go pins that it propagates.
+// os.Exit(1) with no output. This test pins the SwitchTo-layer contract;
+// TestSwitchToLeavesTheErrorToTheRoot pins that it is a plain error, which
+// the root prints as its ✗ line; cmd/proxy_profile_test.go pins that it
+// propagates.
 func TestSwitchToReturnsPreSwapErrorOnLegacyBind(t *testing.T) {
 	origBindCheck := bindMountIsWholeDirFn
 	defer func() { bindMountIsWholeDirFn = origBindCheck }()
@@ -218,5 +223,92 @@ func TestSwitchToReturnsPreSwapErrorOnLegacyBind(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "legacy single-file bind mount") {
 		t.Fatalf("expected error to mention `legacy single-file bind mount`; got: %v", err)
+	}
+}
+
+// captureStderr returns what fn writes to the process's stderr. The render
+// layer resolves os.Stderr at write time, so pointing the variable at a pipe
+// is enough.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stderr
+	os.Stderr = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	defer func() { os.Stderr = saved }()
+	fn()
+	_ = w.Close()
+	return <-done
+}
+
+// TestSwitchToLeavesTheErrorToTheRoot: a switch that fails after its
+// pre-flight writes its step lines and nothing else — no box, no Problem —
+// and returns the error that carries its Problem, whose facts and steps
+// name the previous profile, the active one, and cfg.ProxyContainer. A
+// pre-swap failure writes nothing and is a plain error. What the root does
+// with either is cmd's TestRootProblemSelects.
+func TestSwitchToLeavesTheErrorToTheRoot(t *testing.T) {
+	cfg, _ := newSwitchFixture(t)
+	restartProxyFn = func(_ config.Config) error { return fmt.Errorf("simulated docker restart failure") }
+
+	var err error
+	stderr := captureStderr(t, func() { err = SwitchTo(cfg, "secondary") })
+	s := output.Err()
+	ok, fail, idle, busy := s.StateMark(output.StateOK), s.StateMark(output.StateFail),
+		s.StateMark(output.StateIdle), s.StateMark(output.StateBusy)
+	want := busy + " Validate target profile (xray -test)\n" + ok + " Validate target profile (xray -test)  <t>\n" +
+		busy + " Atomic symlink swap\n" + ok + " Atomic symlink swap  <t>\n" +
+		busy + " Restart dev-proxy\n" + fail + " Restart dev-proxy  <t>\n" +
+		idle + " Wait for liveness (<=1m0s)\n"
+	if got := regexp.MustCompile(`(?m)  \d+\.\ds$`).ReplaceAllString(stderr, "  <t>"); got != want {
+		t.Errorf("SwitchTo wrote\n%s\nwant exactly its step lines\n%s", got, want)
+	}
+	p, carried := output.ProblemOf(err)
+	wantP := output.Problem{
+		Title: `Switch to "secondary" failed`,
+		Cause: "simulated docker restart failure",
+		Facts: []output.Fact{{K: "Previous", V: "primary"}, {K: "Active", V: "secondary (not rolled back)"}},
+		Steps: []output.Remedy{
+			{Label: "Restore previous", Cmd: "ws proxy profile use primary"},
+			{Label: "Inspect logs", Cmd: "docker logs dev-proxy-test-xx22 --tail 50"},
+		},
+	}
+	if !carried || !reflect.DeepEqual(p, wantP) {
+		t.Errorf("the root would print %+v; want %+v", p, wantP)
+	}
+	if want := `switch to "secondary" failed (previous="primary"): simulated docker restart failure`; err == nil || err.Error() != want {
+		t.Errorf("the error reads %v; want %q", err, want)
+	}
+
+	restartProxyFn = func(_ config.Config) error { return nil }
+	stderr = captureStderr(t, func() { err = SwitchTo(cfg, "primary") })
+	if strings.Count(stderr, ok+" ") != 4 || strings.Contains(stderr, "Switched") || err != nil {
+		t.Errorf("a switch that succeeds wrote\n%s\nand returned %v; want its four result lines and nothing else", stderr, err)
+	}
+
+	stderr = captureStderr(t, func() { err = SwitchTo(cfg, "bad/name") })
+	if _, carried := output.ProblemOf(err); err == nil || carried || stderr != "" {
+		t.Errorf("a pre-swap failure wrote %q and returned %v (a Problem: %t); want nothing written and a plain error", stderr, err, carried)
+	}
+}
+
+// TestSwitchToBeforeTheSwapNamesNoActiveProfile: a switch that fails before
+// the swap has not changed the active profile, and its Problem does not say
+// it has.
+func TestSwitchToBeforeTheSwapNamesNoActiveProfile(t *testing.T) {
+	cfg, _ := newSwitchFixture(t)
+	validateProfileFn = func(_ config.Config, _ string) error { return fmt.Errorf("xray -test failed") }
+	var err error
+	_ = captureStderr(t, func() { err = SwitchTo(cfg, "secondary") })
+	p, _ := output.ProblemOf(err)
+	if want := []output.Fact{{K: "Previous", V: "primary"}}; !reflect.DeepEqual(p.Facts, want) {
+		t.Errorf("facts %+v; want %+v", p.Facts, want)
 	}
 }
