@@ -1242,12 +1242,13 @@ func runSweep(lo, hi int, checks []sweepAssertion, r *results) sweepStats {
 var assertWidthBudget = sweepAssertion{
 	name: "width_budget",
 	spec: "§6.1",
-	what: "ansi.StringWidth(line) <= budget for every line of every render, MinWidth..200",
+	what: "ansi.StringWidth(line) <= budget - slack for every line of every render, MinWidth..200",
 	check: func(rc renderCase, r *results) {
+		limit := rc.budget - rc.fx.slack
 		for i, line := range rc.plain {
-			if got := ansi.StringWidth(line); got > rc.budget {
+			if got := ansi.StringWidth(line); got > limit {
 				r.fail("width_budget", "%s @ %d (mode %d): line %d is %d cells, budget %d: %q",
-					rc.fx.name, rc.width, rc.mode, i+1, got, rc.budget, line)
+					rc.fx.name, rc.width, rc.mode, i+1, got, limit, line)
 			}
 		}
 	},
@@ -1693,7 +1694,61 @@ var assertGlyphWidths = globalAssertion{
 		if got := markerWidth(GlyphUTF8); got != 1 {
 			r.fail("glyph_widths", "markerWidth(UTF8) is %d, expected 1 under the narrow convention", got)
 		}
+		// The step runner's spinner: braille patterns in the UTF-8 mode,
+		// ASCII in the ASCII mode, every frame one cell. ambiguous_wide_test.go
+		// measures the same frames under the Ambiguous-wide convention.
+		for n := range 12 {
+			for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+				g := spinnerGlyph(mode, n)
+				if w := ansi.StringWidth(g); w != 1 {
+					r.fail("glyph_widths", "spinner frame %d mode %d %q is %d cells, expected 1", n, mode, g, w)
+				}
+				if mode == GlyphASCII && (len(g) != 1 || g[0] >= 0x80) {
+					r.fail("glyph_widths", "spinner frame %d in the ASCII mode is %q, not one ASCII byte", n, g)
+				}
+			}
+		}
 	},
+}
+
+// TestRunnerLinesReachTheirLimit is the control of the runner's lines in the
+// sweep: at every width, in both glyph modes, some frame line is exactly one
+// cell short of the budget and some step line is exactly the budget wide, so
+// a line one cell over its limit is inside what the sweep can see. The
+// 200-character title and token put such lines there at every width.
+func TestRunnerLinesReachTheirLimit(t *testing.T) {
+	var runners []fixture
+	for _, fx := range fxCorpus() {
+		if fx.kind == "runner" {
+			runners = append(runners, fx)
+		}
+	}
+	if len(runners) == 0 {
+		t.Fatal("the corpus holds no runner fixtures")
+	}
+	for w := MinWidth; w <= sweepMaxWidth; w++ {
+		frame, step := 0, 0
+		for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+			for _, fx := range runners {
+				rc := newRenderCase(fx, w, mode)
+				for _, line := range rc.plain {
+					if ansi.StringWidth(line) == rc.budget-fx.slack {
+						if fx.slack == 1 {
+							frame++
+						} else {
+							step++
+						}
+					}
+				}
+			}
+		}
+		if frame == 0 || step == 0 {
+			t.Errorf("@%d: %d frame lines at budget − 1 and %d step lines at the budget; the sweep cannot see a line one cell over", w, frame, step)
+		}
+		if w == MinWidth {
+			t.Logf("control @%d: %d frame lines at budget − 1, %d step lines at the budget", w, frame, step)
+		}
+	}
 }
 
 // ------------------------------------------- §4.3 construction-time refusal
@@ -1836,7 +1891,7 @@ func TestAcceptanceGlobals(t *testing.T) {
 // reviewer must be told about rather than have absorbed silently. Record in
 // this comment what moved it and by how much, every time.
 //
-// Measured over 50 fixtures, 19 of them tables: 455 overflowing lines of 1189.
+// Measured over 57 fixtures, 19 of them tables: 473 overflowing lines of 1243.
 // The pair has moved with every fixture set the corpus gained, and each move
 // is that set's worth of geometry at the floor:
 //
@@ -1849,12 +1904,16 @@ func TestAcceptanceGlobals(t *testing.T) {
 //	                                      none of them over it: the fixture's
 //	                                      natural widths and chrome come to 26
 //	                                      cells, under the budget everywhere)
+//	+ the step runner's seven fixtures    473 of 1243 (the four step lines fill
+//	                                      the floor on 18 lines; the three
+//	                                      frames stop a cell short of it)
 //
 // The sweep's own line count moved the other way across the tab fix, 111464 to
 // 111120, because expanded tabs are wider than the zero cells the layer used
 // to measure them at and the wraps land differently. It has grown with the
-// corpus since: 117,700 lines over 49 fixtures, 120,482 over 50.
-const control28Overflows = 455
+// corpus since: 117,700 lines over 49 fixtures, 120,482 over 50, 125,452 over
+// 57.
+const control28Overflows = 473
 
 func TestControlBudget28(t *testing.T) {
 	if mutants != (mutantSwitches{}) {

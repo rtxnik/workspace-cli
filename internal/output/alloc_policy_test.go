@@ -88,6 +88,11 @@ type fixture struct {
 	prefixState    State
 	hasPrefixState bool
 
+	// slack is how many cells short of the budget every line of the render
+	// must stop: 1 for the step runner's frame, whose lines are laid out
+	// against budget − 1 so that no line fills a terminal's last column.
+	slack int
+
 	// fidelity lists the source strings this block WRAPS (§4.4): every one must
 	// survive the render whole once line breaks and indents are collapsed.
 	// Table fixtures declare none — inside the grid, content is legitimately
