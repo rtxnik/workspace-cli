@@ -7,28 +7,31 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
 )
 
 var version = "dev"
 
-// logo renders a compact ASCII logo with gruvbox gradient.
-func logo() string {
-	lines := []struct {
-		text  string
-		color lipgloss.Color
-	}{
-		{"╦ ╦╔═╗", output.Orange},
-		{"║║║╚═╗", output.Yellow},
-		{"╚╩╝╚═╝", output.Green},
+// logoLines is the logo ws --version prints above the version on a UTF-8
+// terminal.
+var logoLines = []string{"╦ ╦╔═╗", "║║║╚═╗", "╚╩╝╚═╝"}
+
+// versionTemplate is the --version template for s, the stream the version
+// is written to. It is the version alone unless s is a terminal in the UTF-8
+// glyph mode; there the logo comes first, painted RoleAccent — without
+// colour under NO_COLOR. Piped, the output is exactly "ws <version>\n", so
+// `ws --version | head -1` is the version.
+func versionTemplate(s *output.Stream) string {
+	const versionLine = "ws {{.Version}}\n"
+	if !s.IsTTY() || s.Mode() != output.GlyphUTF8 {
+		return versionLine
 	}
-	var s string
-	for _, l := range lines {
-		s += lipgloss.NewStyle().Foreground(l.color).Bold(true).Render(l.text) + "\n"
+	var b strings.Builder
+	for _, line := range logoLines {
+		b.WriteString(s.Style(output.RoleAccent).Render(line) + "\n")
 	}
-	return s
+	return b.String() + versionLine
 }
 
 var rootCmd = &cobra.Command{
@@ -87,6 +90,9 @@ func run(err error) (msg string, code int) {
 // Execute runs the command tree. An error that reaches it is printed at most
 // once, through output.Fail, and the process exits with the code run chose.
 func Execute() {
+	// Built here rather than at package init, so that it is built for the
+	// stream --version writes to, once that stream has been resolved.
+	rootCmd.SetVersionTemplate(versionTemplate(output.Out()))
 	cmd, err := rootCmd.ExecuteC()
 	msg, code := run(err)
 	if msg != "" {
@@ -117,7 +123,6 @@ func isUnknownCommand(err error) bool {
 
 func init() {
 	rootCmd.Version = version
-	rootCmd.SetVersionTemplate(logo() + "ws {{.Version}}\n")
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	// Every command inherits --json, and only some of them read it; the
 	// usage says so, rather than promise an effect a command does not have.
