@@ -195,7 +195,7 @@ var startCmd = &cobra.Command{
 				return nil
 			}},
 			output.Step{Name: "Starting container", Fn: func() error {
-				return workspace.DevpodUp(source)
+				return workspace.DevpodUp(source, nil)
 			}},
 		)
 		if err := runner.Run(); err != nil {
@@ -217,7 +217,7 @@ var stopCmd = &cobra.Command{
 			return err
 		}
 		if err := output.RunWithSpinner(fmt.Sprintf("Stopping workspace %q", name), func() error {
-			return workspace.DevpodStop(name)
+			return workspace.DevpodStop(name, nil)
 		}); err != nil {
 			return err
 		}
@@ -249,7 +249,7 @@ var deleteCmd = &cobra.Command{
 		}
 
 		if err := output.RunWithSpinner(fmt.Sprintf("Deleting workspace %q", name), func() error {
-			if err := workspace.DevpodDelete(name); err != nil {
+			if err := workspace.DevpodDelete(name, nil); err != nil {
 				output.Warn(fmt.Sprintf("devpod delete: %s", err))
 			}
 			wsDir := filepath.Join(cfg.WorkspacesDir, name)
@@ -343,7 +343,7 @@ var restartCmd = &cobra.Command{
 
 		steps := []output.Step{
 			{Name: "Starting container", Fn: func() error {
-				return workspace.DevpodUp(source)
+				return workspace.DevpodUp(source, nil)
 			}},
 		}
 
@@ -353,7 +353,7 @@ var restartCmd = &cobra.Command{
 			if ws.Name == name && strings.EqualFold(ws.Status, "running") {
 				steps = append([]output.Step{
 					{Name: "Stopping workspace", Fn: func() error {
-						return workspace.DevpodStop(name)
+						return workspace.DevpodStop(name, nil)
 					}},
 				}, steps...)
 				break
