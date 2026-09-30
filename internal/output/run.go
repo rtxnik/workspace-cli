@@ -521,11 +521,18 @@ func (f *frame) erase() string {
 // terminals on the next row, and the redraw would then climb one row short.
 func frameLines(s *Stream, glyph, title, elapsed, live string) []string {
 	width := s.budget() - 1
+	if mutants.FrameUncut {
+		width = s.budget()
+	}
 	room := width - W(glyph) - 1 - 2 - W(elapsed)
 	lines := []string{s.paint(RoleInfo, glyph) + " " +
 		clipTail(SanitiseInline(title), room, s.mode) + "  " + s.paint(RoleMuted, elapsed)}
 	if live != "" {
-		lines = append(lines, "  "+s.paint(RoleMuted, clipTail(SanitiseInline(live), width-2, s.mode)))
+		clean := SanitiseInline(live)
+		if mutants.LiveLineRaw {
+			clean = live
+		}
+		lines = append(lines, "  "+s.paint(RoleMuted, clipTail(clean, width-2, s.mode)))
 	}
 	return lines
 }

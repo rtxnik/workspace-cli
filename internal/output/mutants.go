@@ -52,11 +52,12 @@ package output
 //     rest of the run, with `go test -race ./...` green and nothing to say so.
 //
 // This file is NEVER build-tagged (decision D-11). Production code branches
-// on these switches directly — measured with the last of them wired: 27
-// references over six files, alloc.go 6, blocks.go 6, stream.go 5, glyph.go 4,
-// text.go 3, message.go 3 — so tagging the DECLARATION out breaks the ordinary
-// build rather than the harness. The tag goes on the mutation harness and only
-// there. The cost in the shipped binary is one zero-valued struct.
+// on these switches directly — measured with the last of them wired: 30
+// references over seven files, blocks.go 7, alloc.go 6, stream.go 5, glyph.go
+// 4, text.go 3, message.go 3, run.go 2 — so tagging the DECLARATION out
+// breaks the ordinary build rather than the harness. The tag goes on the
+// mutation harness and only there. The cost in the shipped binary is one
+// zero-valued struct.
 type mutantSwitches struct {
 	// ------------------------------------------------------------ §4.3 chrome
 	ChromeOff int // chromeFor undercounts the border and padding by this many cells
@@ -141,6 +142,17 @@ type mutantSwitches struct {
 
 	// ------------------------------------------------------- §4.4 wrapping
 	TruncateInsteadOfWrap bool // Wrap emits one truncated line
+
+	// ------------------------------------------------ §4.4 Problem's title
+	// ProblemTitleUnmarked draws a Problem's title as the parent design's
+	// §4.4 did: at column 0 with no mark, the continuation lines hung by 2.
+	// A Problem holding only a title then differs from the line Fail prints
+	// for the same text.
+	ProblemTitleUnmarked bool
+
+	// ---------------------------------------------------- §4.7 step runner
+	FrameUncut  bool // the frame's lines are laid out against the whole budget, not budget − 1
+	LiveLineRaw bool // the frame's second line is the log's line as the child wrote it, escapes and all
 
 	// ------------------------------------------- §4.7 / §4.2 / §4.5 contract
 	MessagesToStdout      bool // the message helpers write to stdout

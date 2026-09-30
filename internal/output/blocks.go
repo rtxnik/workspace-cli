@@ -314,7 +314,16 @@ func (p Problem) Render(s *Stream) string {
 	// assertion. A single unbreakable token wider than that is hard-broken by
 	// Wrap itself, which is §4.4's unconditional half and text.go's behaviour
 	// rather than this block's.
-	b.WriteString(renderMessage(s, shapeFail, p.Title) + "\n")
+	if mutants.ProblemTitleUnmarked {
+		for i, line := range Wrap(Sanitise(p.Title), budget-2) {
+			if i > 0 {
+				line = "  " + line
+			}
+			b.WriteString(s.paint(RoleFail, line) + "\n")
+		}
+	} else {
+		b.WriteString(renderMessage(s, shapeFail, p.Title) + "\n")
+	}
 
 	if p.Cause != "" {
 		// Sanitised BEFORE wrapping, not after and not at all (§4.4).
