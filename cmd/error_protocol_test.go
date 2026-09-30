@@ -122,6 +122,8 @@ var errorCases = []errorCase{
 	{name: "arg-error/profile-unknown-subcommand", args: []string{"proxy", "profile", "zzz"}},
 	// ws help with a topic that names no command answers as ws <topic> does.
 	{name: "arg-error/help-unknown-topic", args: []string{"help", "nosuch"}},
+	// A shell completion does not support.
+	{name: "arg-error/completion-unsupported-shell", args: []string{"completion", "powershell"}},
 
 	// A runtime error prints no usage lines. A plain error returned from a
 	// RunE body, on a path with no spinner.
@@ -973,6 +975,26 @@ func TestCompletionStillListsCommands(t *testing.T) {
 	}
 	if !slices.Equal(root, help) {
 		t.Errorf(`ws __complete help "" lists %v; ws __complete "" lists %v`, help, root)
+	}
+}
+
+// TestCompletionReportsAFailedWrite: a script that cannot be written — a
+// full disk under `> file` — is an error, for every shell, where it used to
+// be discarded with exit 0; and a runtime error, with no usage lines.
+func TestCompletionReportsAFailedWrite(t *testing.T) {
+	rootCmd.SetOut(failingWriter{})
+	t.Cleanup(func() { rootCmd.SetOut(nil) })
+	// Over a copy: generating the bash script sorts every command's
+	// ValidArgs in place, this one's included, under the loop.
+	for _, shell := range slices.Clone(completionCmd.ValidArgs) {
+		resetSilenceUsage(t, "completion")
+		err := completionCmd.RunE(completionCmd, []string{shell})
+		if err == nil || !strings.Contains(err.Error(), "write refused") {
+			t.Errorf("ws completion %s into a failing writer returned %v; want the write error", shell, err)
+		}
+		if _, _, isUsage := usageTarget(completionCmd, err); isUsage {
+			t.Errorf("ws completion %s: a failed write is classified as a usage error", shell)
+		}
 	}
 }
 

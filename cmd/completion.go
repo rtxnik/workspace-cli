@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"os"
-
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/profile"
 	"github.com/rtxnik/workspace-cli/internal/workspace"
@@ -22,17 +20,23 @@ eval "$(ws completion bash)"
 
 # Fish: add to ~/.config/fish/config.fish
 ws completion fish | source`,
-	Args:      cobra.ExactArgs(1),
+	// ValidArgs alone only feeds shell completion; OnlyValidArgs is what
+	// rejects a shell outside it.
+	Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 	ValidArgs: []string{"bash", "zsh", "fish"},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		// A failed write — a full disk under `> file` — is returned. A closed
+		// pipe is not seen here: ws does not handle SIGPIPE, so a write to a
+		// broken pipe on stdout ends the process quietly.
+		out := cmd.OutOrStdout()
 		switch args[0] {
 		case "bash":
-			_ = rootCmd.GenBashCompletion(os.Stdout)
+			return rootCmd.GenBashCompletion(out)
 		case "zsh":
-			_ = rootCmd.GenZshCompletion(os.Stdout)
+			return rootCmd.GenZshCompletion(out)
 		case "fish":
-			_ = rootCmd.GenFishCompletion(os.Stdout, true)
+			return rootCmd.GenFishCompletion(out, true)
 		}
 		return nil
 	},

@@ -88,6 +88,13 @@ exit 1
 |✗ unknown command "nosuch" for "ws"
 |  Usage: ws [command]
 |  Run 'ws --help' for usage.
+=== arg-error/completion-unsupported-shell
+exit 1
+--- stdout (0 bytes)
+--- stderr (141 bytes)
+|✗ invalid argument "powershell" for "ws completion"
+|  Usage: ws completion [bash|zsh|fish] [flags]
+|  Run 'ws completion --help' for usage.
 === runtime/runE-plain
 exit 1
 --- stdout (0 bytes)
