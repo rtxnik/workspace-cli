@@ -187,21 +187,17 @@ var startCmd = &cobra.Command{
 			return &cliErrorWithExit{code: 1, msg: ""}
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
-		runner := output.NewStepRunner(
-			output.Step{Name: "Checking workspace", Fn: func() error {
+		return output.Run(
+			output.Task{Title: "Checking workspace", Run: func(*output.Log) error {
 				if !workspace.Exists(cfg, name) {
 					return fmt.Errorf("workspace dir missing")
 				}
 				return nil
 			}},
-			output.Step{Name: "Starting container", Fn: func() error {
-				return workspace.DevpodUp(source, nil)
+			output.Task{Title: "Starting container", Run: func(log *output.Log) error {
+				return workspace.DevpodUp(source, log)
 			}},
 		)
-		if err := runner.Run(); err != nil {
-			return err
-		}
-		return nil
 	},
 }
 
@@ -216,12 +212,10 @@ var stopCmd = &cobra.Command{
 		if err := workspace.ValidateName(name); err != nil {
 			return err
 		}
-		if err := output.RunWithSpinner(fmt.Sprintf("Stopping workspace %q", name), func() error {
-			return workspace.DevpodStop(name, nil)
-		}); err != nil {
-			return err
-		}
-		return nil
+		return output.Run(output.Task{
+			Title: fmt.Sprintf("Stopping workspace %q", name),
+			Run:   func(log *output.Log) error { return workspace.DevpodStop(name, log) },
+		})
 	},
 }
 
@@ -341,9 +335,9 @@ var restartCmd = &cobra.Command{
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 
-		steps := []output.Step{
-			{Name: "Starting container", Fn: func() error {
-				return workspace.DevpodUp(source, nil)
+		tasks := []output.Task{
+			{Title: "Starting container", Run: func(log *output.Log) error {
+				return workspace.DevpodUp(source, log)
 			}},
 		}
 
@@ -351,19 +345,16 @@ var restartCmd = &cobra.Command{
 		workspaces, _ := workspace.List(cfg)
 		for _, ws := range workspaces {
 			if ws.Name == name && strings.EqualFold(ws.Status, "running") {
-				steps = append([]output.Step{
-					{Name: "Stopping workspace", Fn: func() error {
-						return workspace.DevpodStop(name, nil)
+				tasks = append([]output.Task{
+					{Title: "Stopping workspace", Run: func(log *output.Log) error {
+						return workspace.DevpodStop(name, log)
 					}},
-				}, steps...)
+				}, tasks...)
 				break
 			}
 		}
 
-		if err := output.NewStepRunner(steps...).Run(); err != nil {
-			return err
-		}
-		return nil
+		return output.Run(tasks...)
 	},
 }
 

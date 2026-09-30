@@ -143,9 +143,9 @@ var errorCases = []errorCase{
 	// profileCmd's hook refuses to migrate a legacy config under --no-migrate.
 	{name: "runtime/migration-refusal", args: []string{"proxy", "profile", "list", "--no-migrate"}, legacyXray: true},
 
-	// The spinner prints its own line on STDOUT and returns the error, which
-	// renders again on stderr: the known second print phase 3b removes.
-	{name: "runtime/spinner-double", args: []string{"stop", "wsx"}, spinner: true},
+	// A failed step: its start and result lines, then the root's line — the
+	// error printed once, all on stderr.
+	{name: "runtime/spinner-failure", args: []string{"stop", "wsx"}},
 
 	// A *cliErrorWithExit with text, at exit 1 and at a vault exit code.
 	{name: "cli-exit/code-1", args: []string{"profile-delete", "default"}},
@@ -337,7 +337,7 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	if c.spinner {
 		stdout = normaliseSpinner(stdout)
 	}
-	return code, stdout, errBuf.String()
+	return code, normaliseStepTimes(stdout), normaliseStepTimes(errBuf.String())
 }
 
 // spinnerFrames are the runes huh/spinner cycles through while it runs. Which

@@ -140,11 +140,12 @@ exit 1
 |✗ migration required but --no-migrate is set; either run `ws proxy profile add
 |  primary <uri>` manually OR drop --no-migrate to auto-migrate
 |  home/.config/xray/config.json
-=== runtime/spinner-double
+=== runtime/spinner-failure
 exit 1
---- stdout (118 bytes)
-|Stopping workspace "wsx"✗ Stopping workspace "wsx": devpod stop: exec: "devpod": executable file not found in $PATH
---- stderr (68 bytes)
+--- stdout (0 bytes)
+--- stderr (129 bytes)
+|~ Stopping workspace "wsx"
+|✗ Stopping workspace "wsx"  <t>
 |✗ devpod stop: exec: "devpod": executable file not found in $PATH
 === cli-exit/code-1
 exit 1
