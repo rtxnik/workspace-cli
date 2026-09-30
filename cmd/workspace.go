@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/x/term"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/detect"
 	"github.com/rtxnik/workspace-cli/internal/output"
@@ -82,11 +81,6 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if len(workspaces) == 0 {
-			output.Info("No workspaces found")
-			return nil
-		}
-
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		if jsonFlag {
 			type wsJSON struct {
@@ -104,46 +98,80 @@ var listCmd = &cobra.Command{
 					Proxy:   ws.Proxy,
 				})
 			}
-			output.JSON(items)
-			return nil
+			return output.WriteJSON(cmd.OutOrStdout(), items)
 		}
 
-		termWidth := 100
-		if w, _, err := term.GetSize(0); err == nil {
-			termWidth = w
+		s := output.Out()
+		if len(workspaces) == 0 {
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), output.Empty{Subject: "workspaces", Steps: []output.Remedy{
+				{Label: "Create one", Cmd: "ws new <name>"},
+				{Label: "See profiles", Cmd: "ws profiles"},
+			}}.Render(s))
+			return err
 		}
-		narrow := termWidth < 80
-
-		running := 0
-		rows := make([][]string, 0, len(workspaces))
-		for _, ws := range workspaces {
-			st := strings.ToLower(ws.Status)
-			if st == "running" {
-				running++
-			}
-			proxy := output.StyleDim.Render("–")
-			if ws.Proxy {
-				proxy = output.StyleAccent.Render("⚡")
-			}
-			if narrow {
-				rows = append(rows, []string{ws.Name, output.StatusIcon(st), proxy})
-			} else {
-				rows = append(rows, []string{ws.Name, output.StatusText(st), ws.Profile, proxy})
-			}
+		t, err := listTable(workspaces)
+		if err != nil {
+			return err
 		}
-
-		var t fmt.Stringer
-		if narrow {
-			t = output.NewTable([]string{"NAME", "STATUS", "PROXY"}).Rows(rows...)
-		} else {
-			t = output.NewTable([]string{"NAME", "STATUS", "PROFILE", "PROXY"}).Rows(rows...)
-		}
-
-		fmt.Println(t)
-		fmt.Fprintf(os.Stderr, "\n%s\n",
-			output.StyleDim.Render(fmt.Sprintf("  %d workspace(s), %d running", len(workspaces), running)))
-		return nil
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), t.Render(s))
+		return err
 	},
+}
+
+// listTable is ws list's table, NAME, STATUS, PROFILE and PROXY, with its
+// caption. The allocator lays it out for the stream it is rendered on.
+func listTable(workspaces []workspace.Info) (output.Table, error) {
+	t, err := output.NewTableBlock([]output.Col{
+		{Title: "NAME", Prio: 1, Min: 8, Trunc: output.TruncMid},
+		{Title: "STATUS", Prio: 1, Min: 6, Atomic: true, Kind: output.ColState},
+		{Title: "PROFILE", Prio: 3, Min: 6, Trunc: output.TruncTail},
+		{Title: "PROXY", Prio: 2, Min: 3, Atomic: true},
+	}, nil)
+	if err != nil {
+		return output.Table{}, err
+	}
+	running := 0
+	for _, ws := range workspaces {
+		st, word := workspaceState(ws.Status)
+		if st == output.StateOK {
+			running++
+		}
+		proxy := "off"
+		if ws.Proxy {
+			proxy = "on"
+		}
+		t.Rows = append(t.Rows, []output.Cell{output.Text(ws.Name), output.Mark(st, word), output.Text(ws.Profile), output.Text(proxy)})
+	}
+	t.Caption = fmt.Sprintf("%s, %d running", countOf(len(workspaces), "workspace", "workspaces"), running)
+	return t, nil
+}
+
+// workspaceState is a workspace's state and its word, from devpod's status
+// lower-cased (§4.5). Anything devpod reports that is not below is shown as
+// an unknown state with devpod's own word.
+func workspaceState(status string) (output.State, string) {
+	switch status = strings.ToLower(status); status {
+	case "running":
+		return output.StateOK, "running"
+	case "stopped":
+		return output.StateIdle, "stopped"
+	case "notcreated", "":
+		return output.StateIdle, "not created"
+	case "busy", "starting":
+		return output.StateBusy, status
+	case "notfound":
+		return output.StateIdle, "not found"
+	default:
+		return output.StateUnknown, status
+	}
+}
+
+// countOf is "1 workspace" or "5 workspaces".
+func countOf(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 var detectCmd = &cobra.Command{

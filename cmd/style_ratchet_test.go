@@ -36,7 +36,6 @@ var directStyleInventory = map[string]int{
 	"cmd/proxy.go":            12,
 	"cmd/proxy_doctor.go":     3,
 	"cmd/vault_status.go":     8,
-	"cmd/workspace.go":        3,
 	"cmd/workspace_status.go": 13,
 }
 

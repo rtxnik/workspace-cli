@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
 // The stream matrix: which stream each command writes what to, in a pipe.
@@ -244,6 +246,32 @@ var streamsRows = []streamsRow{
 			"✗ inspect proxy: Cannot connect to the Docker daemon at\n" +
 			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
 			"  running?\n"},
+	{name: "ws list: five workspaces", args: []string{"list"},
+		stdout: "╭────────────────┬───────────────┬─────────┬───────╮\n" +
+			"│ NAME           │ STATUS        │ PROFILE │ PROXY │\n" +
+			"├────────────────┼───────────────┼─────────┼───────┤\n" +
+			"│ api            │ ✓ running     │ go      │ on    │\n" +
+			"│ legacy-billing │ - not created │ default │ off   │\n" +
+			"│ ml-training    │ ~ busy        │ python  │ on    │\n" +
+			"│ ops            │ - stopped     │ devops  │ off   │\n" +
+			"│ web-frontend   │ ✓ running     │ web     │ off   │\n" +
+			"╰────────────────┴───────────────┴─────────┴───────╯\n" +
+			"5 workspaces, 2 running\n"},
+	{name: "ws list: none", args: []string{"list"}, setup: withoutWorkspaces,
+		stdout: "No workspaces yet.\n  Create one    ws new <name>\n  See profiles  ws profiles\n"},
+	{name: "ws list --json: none", args: []string{"list", "--json"}, setup: withoutWorkspaces, stdout: "[]\n"},
+}
+
+// withoutWorkspaces empties the fixture's workspaces directory.
+func withoutWorkspaces(t *testing.T, fx streamsFixture) {
+	t.Helper()
+	dir := filepath.Join(fx.home, "workspaces")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // withFakeDockerBuild gives a row a proxy recipe that has drifted, for
@@ -291,5 +319,36 @@ func TestStreams(t *testing.T) {
 				t.Errorf("an ESC byte in a pipe: stdout %q, stderr %q", stdout, stderr)
 			}
 		})
+	}
+}
+
+func TestCountOf(t *testing.T) {
+	for n, want := range map[int]string{0: "0 workspaces", 1: "1 workspace", 5: "5 workspaces"} {
+		if got := countOf(n, "workspace", "workspaces"); got != want {
+			t.Errorf("countOf(%d) = %q; want %q", n, got, want)
+		}
+	}
+}
+
+// TestWorkspaceState pins every word of ws list's state vocabulary,
+// including the ones the fixture's devpod never reports.
+func TestWorkspaceState(t *testing.T) {
+	for _, c := range []struct {
+		status string
+		st     output.State
+		word   string
+	}{
+		{"Running", output.StateOK, "running"},
+		{"Stopped", output.StateIdle, "stopped"},
+		{"NotCreated", output.StateIdle, "not created"},
+		{"", output.StateIdle, "not created"},
+		{"Busy", output.StateBusy, "busy"},
+		{"Starting", output.StateBusy, "starting"},
+		{"NotFound", output.StateIdle, "not found"},
+		{"Rebuilding", output.StateUnknown, "rebuilding"},
+	} {
+		if st, word := workspaceState(c.status); st != c.st || word != c.word {
+			t.Errorf("workspaceState(%q) = (%d, %q); want (%d, %q)", c.status, st, word, c.st, c.word)
+		}
 	}
 }
