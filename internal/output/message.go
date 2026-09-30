@@ -70,7 +70,10 @@ func Fail(msg string) {
 	emit(Err(), shapeFail, msg)
 }
 
-// emit writes one message to a stream.
+// emit writes one message to a stream — or, while a task of the step runner
+// runs, queues it, and the runner writes it after the task's result line on
+// its own stream, which is Err() (run.go). The queue is what keeps the
+// frame whole: a message written under a live frame would tear it.
 //
 // The write error is discarded deliberately and only here. §4.7's rule that a
 // failed write is an error, not a shrug, is about stdout — the artifact a
@@ -81,6 +84,9 @@ func Fail(msg string) {
 func emit(s *Stream, shape messageShape, msg string) {
 	if mutants.MessagesToStdout {
 		s = Out() // §4.7 inverted: chatter written onto the answer's stream
+	}
+	if enqueue(func(q *Stream) string { return renderMessage(q, shape, msg) }) {
+		return
 	}
 	_, _ = fmt.Fprintln(s, renderMessage(s, shape, msg))
 }

@@ -1,0 +1,628 @@
+package output
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeClock is the runner's clock in these tests: it moves only when a test
+// moves it.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// testRunner is a runner over s whose clock is c and whose ticks are the
+// ones a test sends on ticks.
+func testRunner(s *Stream, c *fakeClock, ticks chan time.Time) *runner {
+	return &runner{
+		s:    s,
+		now:  c.now,
+		tick: func() (<-chan time.Time, func()) { return ticks, func() {} },
+	}
+}
+
+// syncBuffer is a bytes.Buffer the ticker goroutine and the owner can both
+// write to.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+func ok(*Log) error { return nil }
+
+// TestRunWritesPlainLinesOffATerminal: off a terminal each task gets a start
+// line and a result line, and not one ESC byte is written.
+func TestRunWritesPlainLinesOffATerminal(t *testing.T) {
+	var buf syncBuffer
+	c := &fakeClock{}
+	r := testRunner(NewStreamAt(&buf, 80, false, ColourNone, false), c, nil)
+	err := r.run([]Task{
+		{Title: "Checking workspace", Run: ok},
+		{Title: "Starting container", Run: func(*Log) error {
+			c.advance(2*time.Minute + 13*time.Second)
+			return nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want := "~ Checking workspace\n" +
+		"✓ Checking workspace  0.0s\n" +
+		"~ Starting container\n" +
+		"✓ Starting container  2m13s\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRunStopsAtTheFirstFailure: the failed task's result line carries no
+// error text, each task that did not run gets a "-" line, and the error is a
+// *TaskError holding the task's title, its error and its log's last lines.
+func TestRunStopsAtTheFirstFailure(t *testing.T) {
+	var buf syncBuffer
+	c := &fakeClock{}
+	r := testRunner(NewStreamAt(&buf, 80, false, ColourNone, false), c, nil)
+	cause := errors.New("devpod up: exit status 1")
+	err := r.run([]Task{
+		{Title: "Checking workspace", Run: ok},
+		{Title: "Starting container", Run: func(log *Log) error {
+			_, _ = fmt.Fprintln(log, "[12:01:31] info up: step two")
+			_, _ = fmt.Fprint(log, "[12:01:32] fatal up: denied")
+			c.advance(12300 * time.Millisecond)
+			return cause
+		}},
+		{Title: "Fixing routes", Run: func(*Log) error {
+			t.Error("a task ran after a failure")
+			return nil
+		}},
+	})
+	want := "~ Checking workspace\n" +
+		"✓ Checking workspace  0.0s\n" +
+		"~ Starting container\n" +
+		"✗ Starting container  12.3s\n" +
+		"- Fixing routes\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+	var te *TaskError
+	if !errors.As(err, &te) {
+		t.Fatalf("run returned %T %v; want a *TaskError", err, err)
+	}
+	if te.Title != "Starting container" || !errors.Is(err, cause) || err.Error() != cause.Error() {
+		t.Errorf("TaskError{%q, %v}; want the failed task's title and error", te.Title, te.Err)
+	}
+	if want := []string{"[12:01:31] info up: step two", "[12:01:32] fatal up: denied"}; !reflect.DeepEqual(te.Tail, want) {
+		t.Errorf("Tail = %q; want %q", te.Tail, want)
+	}
+}
+
+// TestRunDrawsAFrameOnATerminal: on a terminal the runner draws the frame and
+// redraws it at each tick — the spinner, the title and the elapsed time, then
+// the log's last line under them once there is one — and replaces it with
+// the result line, byte for byte.
+func TestRunDrawsAFrameOnATerminal(t *testing.T) {
+	var buf syncBuffer
+	c := &fakeClock{}
+	ticks := make(chan time.Time)
+	redrawn := make(chan struct{})
+	r := testRunner(NewStreamAt(&buf, 40, true, ColourNone, false), c, ticks)
+	r.hooks.redrawn = func() { redrawn <- struct{}{} }
+	tick := func(d time.Duration) {
+		c.advance(d)
+		ticks <- time.Time{}
+		<-redrawn
+	}
+	err := r.run([]Task{{Title: "Starting container", Run: func(log *Log) error {
+		tick(100 * time.Millisecond)
+		_, _ = fmt.Fprintln(log, "info Building image with BuildKit")
+		tick(time.Minute + 11900*time.Millisecond)
+		_, _ = fmt.Fprint(log, "step 1/3\rstep 2/3")
+		tick(0)
+		return nil
+	}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want := "⠋ Starting container  0.0s" +
+		"\r\x1b[J⠙ Starting container  0.1s" +
+		"\r\x1b[J⠹ Starting container  1m12s\n  info Building image with BuildKit" +
+		"\r\x1b[1A\x1b[J⠸ Starting container  1m12s\n  step 2/3" +
+		"\r\x1b[1A\x1b[J✓ Starting container  1m12s\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRunFrameFollowsTheGlyphMode: in the ASCII glyph mode the spinner and
+// the marks are ASCII.
+func TestRunFrameFollowsTheGlyphMode(t *testing.T) {
+	var buf syncBuffer
+	c := &fakeClock{}
+	ticks := make(chan time.Time)
+	redrawn := make(chan struct{})
+	r := testRunner(NewStreamAt(&buf, 40, true, ColourNone, true), c, ticks)
+	r.hooks.redrawn = func() { redrawn <- struct{}{} }
+	_ = r.run([]Task{{Title: "Stopping workspace", Run: func(*Log) error {
+		ticks <- time.Time{}
+		<-redrawn
+		return errors.New("boom")
+	}}})
+	want := "| Stopping workspace  0.0s" +
+		"\r\x1b[J/ Stopping workspace  0.0s" +
+		"\r\x1b[Jx Stopping workspace  0.0s\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRunQueuesMessagesUntilTheResultLine: a message a task writes is held
+// while the task runs and written after its result line, in order, and
+// before the lines of the tasks a failure left unrun — on a terminal and off
+// it, so the order of the lines does not depend on the mode.
+func TestRunQueuesMessagesUntilTheResultLine(t *testing.T) {
+	tasks := func() []Task {
+		return []Task{
+			{Title: "Deleting workspace", Run: func(*Log) error {
+				Warn("devpod delete: exit status 1")
+				Detail("[12:01:32] fatal delete: denied")
+				Info("still removing the directory")
+				return errors.New("remove: permission denied")
+			}},
+			{Title: "Cleaning up", Run: ok},
+		}
+	}
+	for _, tty := range []bool{false, true} {
+		var buf syncBuffer
+		r := testRunner(NewStreamAt(&buf, 80, tty, ColourNone, false), &fakeClock{}, make(chan time.Time))
+		_ = r.run(tasks())
+		got := buf.String()
+		result := strings.Index(got, "✗ Deleting workspace  0.0s\n")
+		queued := strings.Index(got, "⚠ devpod delete: exit status 1\n"+
+			"  [12:01:32] fatal delete: denied\n"+
+			"still removing the directory\n")
+		notRun := strings.Index(got, "- Cleaning up\n")
+		if result < 0 || queued < 0 || notRun < 0 || result >= queued || queued >= notRun {
+			t.Errorf("tty %t: want the result line, then the queue in order, then the unrun task:\n%q", tty, got)
+		}
+		if !strings.HasSuffix(got, "- Cleaning up\n") {
+			t.Errorf("tty %t: something was written after the unrun task's line:\n%q", tty, got)
+		}
+	}
+}
+
+// TestRunWritesDirectlyOutsideATask: with no task running, a message is
+// written at once, not queued.
+func TestRunWritesDirectlyOutsideATask(t *testing.T) {
+	var buf syncBuffer
+	r := testRunner(NewStreamAt(&buf, 80, false, ColourNone, false), &fakeClock{}, nil)
+	_ = r.run([]Task{{Title: "One", Run: ok}})
+	if enqueue(func(*Stream) string { return "late" }) {
+		t.Error("a line was queued after Run returned; it would never be written")
+	}
+}
+
+// TestRunFlushesTheQueueWhenATaskPanics: a panic inside a task still writes
+// the result line and the queue, and still reaches the caller.
+func TestRunFlushesTheQueueWhenATaskPanics(t *testing.T) {
+	var buf syncBuffer
+	r := testRunner(NewStreamAt(&buf, 80, true, ColourNone, false), &fakeClock{}, make(chan time.Time))
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = r.run([]Task{{Title: "Building proxy image", Run: func(*Log) error {
+			Warn("recipe drift ignored")
+			panic("boom")
+		}}})
+	}()
+	if recovered != "boom" {
+		t.Fatalf("the panic did not reach the caller: recovered %v", recovered)
+	}
+	want := "⠋ Building proxy image  0.0s\r\x1b[J✗ Building proxy image  0.0s\n⚠ recipe drift ignored\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+	if enqueue(func(*Stream) string { return "late" }) {
+		t.Error("the gate was left open after the panic")
+	}
+}
+
+// TestNestedRunJoinsTheQueue: a Run called inside a task draws no second
+// frame and writes nothing itself; its lines join the owner's queue, after
+// the outer task's result line, and its failure renders through the root
+// with its own Problem and tail.
+func TestNestedRunJoinsTheQueue(t *testing.T) {
+	var buf syncBuffer
+	r := testRunner(NewStreamAt(&buf, 60, true, ColourNone, false), &fakeClock{}, make(chan time.Time))
+	inner := &ProblemError{P: Problem{Title: "Switch to \"backup\" failed", Steps: []Remedy{{"Restore previous", "ws proxy profile use primary"}}},
+		Err: errors.New("switch to \"backup\" failed (previous=\"primary\"): restart: exit status 1")}
+	err := r.run([]Task{{Title: "Switching profile", Run: func(log *Log) error {
+		return Run(
+			Task{Title: "Validate target profile", Run: ok},
+			Task{Title: "Restart dev-proxy", Run: func(log *Log) error {
+				_, _ = fmt.Fprintln(log, "Error response from daemon: container is restarting")
+				return inner
+			}},
+			Task{Title: "Wait for liveness", Run: ok},
+		)
+	}}})
+	want := "⠋ Switching profile  0.0s\r\x1b[J✗ Switching profile  0.0s\n" +
+		"✓ Validate target profile  0.0s\n" +
+		"✗ Restart dev-proxy  0.0s\n" +
+		"- Wait for liveness\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+	p, ok := ProblemOf(err)
+	if !ok || p.Title != inner.P.Title || !reflect.DeepEqual(p.Steps, inner.P.Steps) ||
+		p.Cause != "Error response from daemon: container is restarting" {
+		t.Errorf("the root would print %+v; want the inner Problem with the inner tail as its cause", p)
+	}
+}
+
+// TestTaskErrorAsProblem: the Problem a failed task renders as.
+func TestTaskErrorAsProblem(t *testing.T) {
+	tail := []string{"step two", "fatal: denied"}
+	withCause := Problem{Title: "Failed to start proxy", Cause: "image not found"}
+	noCause := Problem{Title: "Failed to start proxy", Steps: []Remedy{{"Rebuild image", "ws proxy rebuild"}}}
+	inner := &TaskError{Title: "inner", Err: errors.New("inner failed"), Tail: []string{"inner line"}}
+	for _, c := range []struct {
+		name string
+		err  error
+		want Problem
+	}{
+		{"a plain error: its message and the tail",
+			errors.New("devpod stop: exit status 1"),
+			Problem{Title: "devpod stop: exit status 1", Cause: "step two\nfatal: denied"}},
+		{"a carried Problem with a cause keeps it",
+			&ProblemError{P: withCause, Err: errors.New("x")}, withCause},
+		{"a carried Problem without a cause takes the tail",
+			fmt.Errorf("up: %w", &ProblemError{P: noCause, Err: errors.New("x")}),
+			Problem{Title: noCause.Title, Cause: "step two\nfatal: denied", Steps: noCause.Steps}},
+		{"a nested TaskError keeps its own tail",
+			inner, Problem{Title: "inner failed", Cause: "inner line"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := (&TaskError{Title: "outer", Err: c.err, Tail: tail}).AsProblem()
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("AsProblem = %+v; want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestLogKeepsTheLastLines: the tail and the live line.
+func TestLogKeepsTheLastLines(t *testing.T) {
+	newTestLog := func(t *testing.T, text string) *Log {
+		t.Helper()
+		l, err := newLog()
+		if err != nil {
+			t.Fatalf("newLog: %v", err)
+		}
+		t.Cleanup(l.close)
+		_, _ = fmt.Fprint(l, text)
+		return l
+	}
+	// 25 finished lines and one still being written: the tail is the last 20
+	// of the 26.
+	var many strings.Builder
+	for i := 1; i <= 25; i++ {
+		fmt.Fprintf(&many, "line %d\n", i)
+	}
+	many.WriteString("line 26")
+	wantMany := make([]string, 0, tailLines)
+	for i := 7; i <= 26; i++ {
+		wantMany = append(wantMany, fmt.Sprintf("line %d", i))
+	}
+	long := "a" + strings.Repeat("é", 600) // 1201 bytes: the cut at 1024 falls inside the 512th é
+	for _, c := range []struct {
+		name, text string
+		tail       []string
+		live       string
+	}{
+		{"empty", "", nil, ""},
+		{"a line still being written", "one\ntwo", []string{"one", "two"}, "two"},
+		{"a redraw keeps what followed the last carriage return", "10%\r20%\r30%\n", []string{"30%"}, "30%"},
+		{"a trailing carriage return is not a redraw", "45%\r", []string{"45%"}, "45%"},
+		{"CRLF", "one\r\ntwo\r\n", []string{"one", "two"}, "two"},
+		{"blank lines do not count", "one\n\n   \n\x1b[2K\n", []string{"one"}, "one"},
+		{"both are raw", "\x1b[31mred\x1b[0m\tx\n", []string{"\x1b[31mred\x1b[0m\tx"}, "\x1b[31mred\x1b[0m\tx"},
+		{"only the last 20 lines", many.String(), wantMany, "line 26"},
+		{"a line is cut at 1 KiB on a rune boundary", long + "\n", []string{"a" + strings.Repeat("é", 511)}, "a" + strings.Repeat("é", 511)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l := newTestLog(t, c.text)
+			if got := l.Tail(); !reflect.DeepEqual(got, c.tail) && (len(got) != 0 || len(c.tail) != 0) {
+				t.Errorf("Tail = %q; want %q", got, c.tail)
+			}
+			if got := l.liveLine(); got != c.live {
+				t.Errorf("liveLine = %q; want %q", got, c.live)
+			}
+			// What the log holds is bounded too, not only what Tail returns.
+			if len(l.lines) > tailLines {
+				t.Errorf("the log holds %d finished lines; it keeps at most %d", len(l.lines), tailLines)
+			}
+		})
+	}
+}
+
+// TestLogIsAnUnlinkedFile: the log is a regular file that no longer has a
+// name, and a child given File writes to it directly.
+func TestLogIsAnUnlinkedFile(t *testing.T) {
+	l, err := newLog()
+	if err != nil {
+		t.Fatalf("newLog: %v", err)
+	}
+	defer l.close()
+	if _, err := os.Stat(l.File().Name()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the log's file is still at %s: %v", l.File().Name(), err)
+	}
+	child := exec.Command("sh", "-c", "echo out; echo err >&2")
+	child.Stdout, child.Stderr = l.File(), l.File()
+	if err := child.Run(); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	if got, want := l.Tail(), []string{"out", "err"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Tail = %q; want %q", got, want)
+	}
+}
+
+// TestRunWithoutATaskLog: when the task's log cannot be made, Run returns
+// that error and no task runs.
+func TestRunWithoutATaskLog(t *testing.T) {
+	t.Setenv("TMPDIR", "/nonexistent/ws-run-test")
+	var buf syncBuffer
+	r := testRunner(NewStreamAt(&buf, 80, false, ColourNone, false), &fakeClock{}, nil)
+	err := r.run([]Task{
+		{Title: "Stopping workspace", Run: func(*Log) error { t.Error("the task ran"); return nil }},
+		{Title: "Starting container", Run: func(*Log) error { t.Error("the task ran"); return nil }},
+	})
+	if err == nil || !strings.Contains(err.Error(), "create the task log") {
+		t.Fatalf("run returned %v; want the log's error", err)
+	}
+	if want := "- Stopping workspace\n- Starting container\n"; buf.String() != want {
+		t.Errorf("got\n%q\nwant\n%q", buf.String(), want)
+	}
+}
+
+// TestElapsedText: the time a step line carries.
+func TestElapsedText(t *testing.T) {
+	for _, c := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0.0s"},
+		{400 * time.Millisecond, "0.4s"},
+		{12345 * time.Millisecond, "12.3s"},
+		{59960 * time.Millisecond, "59.9s"},
+		{time.Minute, "1m00s"},
+		{2*time.Minute + 13*time.Second, "2m13s"},
+		{59*time.Minute + 59*time.Second + 999*time.Millisecond, "59m59s"},
+		{time.Hour, "1h00m"},
+		{time.Hour + 4*time.Minute + 59*time.Second, "1h04m"},
+		{-time.Second, "0.0s"},
+	} {
+		if got := elapsedText(c.d); got != c.want {
+			t.Errorf("elapsedText(%v) = %q; want %q", c.d, got, c.want)
+		}
+	}
+}
+
+// TestStepLineLayout: a step line wraps its title as a message does and puts
+// its time two spaces after the title's last line, or on a line of its own.
+func TestStepLineLayout(t *testing.T) {
+	s := NewStreamAt(&bytes.Buffer{}, 30, false, ColourNone, false)
+	for _, c := range []struct {
+		name, title, suffix, want string
+	}{
+		{"fits", "Starting container", "2m13s", "✓ Starting container  2m13s"},
+		{"wraps, the time after the last line", "Building proxy image with xray-core v26.2.6", "0.4s",
+			"✓ Building proxy image with\n  xray-core v26.2.6  0.4s"},
+		{"no room left: the time on its own line", "Building the proxy image once more", "12.3s",
+			"✓ Building the proxy image\n  once more  12.3s"},
+		{"a last line too long for the time", "Waiting for dev-proxy liveness", "12.3s",
+			"✓ Waiting for dev-proxy\n  liveness  12.3s"},
+		{"no time", "Fixing workspace routes", "", "✓ Fixing workspace routes"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := stepLine(s, StateOK, c.title, c.suffix); got != c.want {
+				t.Errorf("got\n%s\nwant\n%s", got, c.want)
+			}
+		})
+	}
+	own := stepLine(s, StateFail, strings.Repeat("x", 27), "12.3s")
+	if want := "✗ " + strings.Repeat("x", 27) + "\n  12.3s"; own != want {
+		t.Errorf("a title filling its last line: got\n%s\nwant\n%s", own, want)
+	}
+}
+
+// TestFrameCleansTheLiveLine: the frame shows the log's line without its
+// escapes — no ESC byte and no payload reaches the terminal under the frame.
+func TestFrameCleansTheLiveLine(t *testing.T) {
+	s := NewStreamAt(&bytes.Buffer{}, 80, true, ColourNone, false)
+	lines := frameLines(s, "⠋", "Starting container", "0.0s", "\x1b[2Kinfo \x1b]0;pwned\x07building\x1b[1A")
+	if len(lines) != 2 || lines[1] != "  info building" {
+		t.Errorf("the live line is %q; want %q", lines[len(lines)-1], "  info building")
+	}
+}
+
+// TestFrameLinesAreCutOneCellShort: both frame lines are laid out against
+// the budget less one cell.
+func TestFrameLinesAreCutOneCellShort(t *testing.T) {
+	for w := MinWidth; w <= 200; w++ {
+		s := NewStreamAt(&bytes.Buffer{}, w, true, ColourNone, false)
+		lines := frameLines(s, "⠋", fxToken200, "1m12s", fxToken200)
+		for i, line := range lines {
+			if got := W(line); got != w-1 {
+				t.Fatalf("@%d frame line %d is %d cells; want %d, one less than the budget: %q", w, i+1, got, w-1, line)
+			}
+		}
+	}
+}
+
+// TestRunDrainOrdersALateMessage: a message that reaches the queue while the
+// owner is writing a batch is written in the next batch, and a message that
+// arrives once the gate has closed is written directly — after every drained
+// one.
+func TestRunDrainOrdersALateMessage(t *testing.T) {
+	var buf syncBuffer
+	r := testRunner(NewStreamAt(&buf, 80, false, ColourNone, false), &fakeClock{}, nil)
+	batches := 0
+	r.hooks.drainTook = func() {
+		if batches++; batches == 1 {
+			Info("arrived while the first batch was taken")
+		}
+	}
+	_ = r.run([]Task{{Title: "Recreating container", Run: func(*Log) error {
+		Info("queued in the task")
+		return nil
+	}}})
+	_, direct := capture(t, func() { Info("written after Run returned") })
+	want := "~ Recreating container\n✓ Recreating container  0.0s\n" +
+		"queued in the task\narrived while the first batch was taken\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+	if direct != "written after Run returned\n" {
+		t.Errorf("a message after Run returned was not written directly: %q", direct)
+	}
+	if batches != 2 {
+		t.Errorf("the drain took %d batches; want 2", batches)
+	}
+}
+
+// blockingWriter blocks the write that contains trigger until release is
+// closed, and records every write in order.
+type blockingWriter struct {
+	syncBuffer
+	trigger string
+	blocked chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), w.trigger) {
+		w.once.Do(func() {
+			close(w.blocked)
+			<-w.release
+		})
+	}
+	return w.syncBuffer.Write(p)
+}
+
+// TestRunWaitsForTheTickerBeforeTheResultLine: a redraw in flight when the
+// task returns is finished before the frame is erased, so the result line
+// never lands inside a frame.
+func TestRunWaitsForTheTickerBeforeTheResultLine(t *testing.T) {
+	w := &blockingWriter{trigger: "⠙", blocked: make(chan struct{}), release: make(chan struct{})}
+	c := &fakeClock{}
+	ticks := make(chan time.Time)
+	r := testRunner(NewStreamAt(w, 40, true, ColourNone, false), c, ticks)
+	done := make(chan error)
+	go func() {
+		done <- r.run([]Task{{Title: "Starting proxy", Run: func(*Log) error {
+			ticks <- time.Time{} // the redraw that blocks
+			<-w.blocked
+			return nil
+		}}})
+	}()
+	select {
+	case <-done:
+		t.Fatal("run returned while a redraw was still being written")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(w.release)
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want := "⠋ Starting proxy  0.0s\r\x1b[J⠙ Starting proxy  0.0s\r\x1b[J✓ Starting proxy  0.0s\n"
+	if got := w.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRunUnderLoad is the stress half of the ownership protocol, for -race: a
+// child printing without pause into the log while the task writes a warning
+// in a loop and the frame redraws every millisecond. Every warning comes
+// out once, in order, after the result line.
+func TestRunUnderLoad(t *testing.T) {
+	var buf syncBuffer
+	r := &runner{
+		s:   NewStreamAt(&buf, 80, true, ColourNone, false),
+		now: time.Now,
+		tick: func() (<-chan time.Time, func()) {
+			tk := time.NewTicker(time.Millisecond)
+			return tk.C, tk.Stop
+		},
+	}
+	const warnings = 500
+	err := r.run([]Task{{Title: "Starting container", Run: func(log *Log) error {
+		child := exec.Command("sh", "-c", "while :; do echo tick; done")
+		child.Stdout, child.Stderr = log.File(), log.File()
+		if err := child.Start(); err != nil {
+			return err
+		}
+		for i := 0; i < warnings; i++ {
+			Warn(fmt.Sprintf("warning %d", i))
+			if i%50 == 0 {
+				time.Sleep(time.Millisecond)
+			}
+		}
+		_ = child.Process.Kill()
+		_ = child.Wait()
+		return nil
+	}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := buf.String()
+	result := strings.Index(got, "✓ Starting container")
+	if result < 0 {
+		t.Fatalf("no result line:\n%s", got)
+	}
+	after := got[result:]
+	last := -1
+	for i := 0; i < warnings; i++ {
+		at := strings.Index(after, fmt.Sprintf("⚠ warning %d\n", i))
+		if at < 0 || at < last {
+			t.Fatalf("warning %d is missing or out of order after the result line", i)
+		}
+		last = at
+	}
+	if strings.Contains(got[:result], "warning") {
+		t.Error("a warning was written while the task ran")
+	}
+}
