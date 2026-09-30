@@ -76,6 +76,13 @@ type errorCase struct {
 	// spinner marks a case whose stdout carries huh/spinner frames, which
 	// depend on how long the action ran; see normaliseSpinner.
 	spinner bool
+
+	// legacyXray runs the child in a fresh directory holding a legacy
+	// regular-file home/.config/xray/config.json, with HOME=home. HOME is
+	// relative on purpose: the refusal that state provokes names the file,
+	// and an absolute temporary path would differ in length from machine to
+	// machine, and so would where the message wraps.
+	legacyXray bool
 }
 
 // errorCases covers the four branches of the root protocol, the argument
@@ -113,6 +120,9 @@ var errorCases = []errorCase{
 	{name: "runtime/proxy-init-no-scheme", args: []string{"proxy", "init", "nosuch"}},
 	{name: "runtime/proxy-init-bad-scheme", args: []string{"proxy", "init", "ftp://x"}},
 	{name: "runtime/proxy-debug-bad-mode", args: []string{"proxy", "debug", "maybe", "--force"}},
+	// A pre-run hook's refusal is a runtime error, with no usage lines:
+	// profileCmd's hook refuses to migrate a legacy config under --no-migrate.
+	{name: "runtime/migration-refusal", args: []string{"proxy", "profile", "list", "--no-migrate"}, legacyXray: true},
 
 	// The spinner prints its own line on STDOUT and returns the error, which
 	// renders again on stderr: the known second print phase 3b removes.
@@ -218,6 +228,25 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 		t.Fatalf("encoding args: %v", err)
 	}
 
+	home := childHome
+	var dir string
+	if c.legacyXray {
+		dir, home = t.TempDir(), "home"
+		xrayDir := filepath.Join(dir, home, ".config", "xray")
+		if err := os.MkdirAll(xrayDir, 0o700); err != nil {
+			t.Fatalf("creating %s: %v", xrayDir, err)
+		}
+		if err := os.WriteFile(filepath.Join(xrayDir, "config.json"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("writing the legacy config: %v", err)
+		}
+	}
+	// Absolute, because a relative path to the test binary would be read
+	// from the child's own directory once dir is set.
+	testBinary, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatalf("resolving the test binary: %v", err)
+	}
+
 	// No -test.v: the framework's own "=== RUN" line would land on stdout.
 	// The deadline names the case when a child blocks: without one, a
 	// regression that reintroduces an interactive path (P-9) would hang the
@@ -225,7 +254,8 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	// dump that names no case.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestExecuteChildProcess$")
+	cmd := exec.CommandContext(ctx, testBinary, "-test.run=^TestExecuteChildProcess$")
+	cmd.Dir = dir
 	// WaitDelay bounds Run itself: the context only kills the child, and a
 	// grandchild holding the pipes open would otherwise keep Run waiting past
 	// the 30s deadline above.
@@ -245,7 +275,7 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 		executeArgsEnv + "=" + string(argv),
 		executeStubEnv + "=" + c.stub,
 		"PATH=" + emptyDir,
-		"HOME=" + childHome,
+		"HOME=" + home,
 		"WORKSPACES_DIR=" + wsDir,
 		// Every Docker SDK call in the tree builds its client with
 		// client.FromEnv, so a DOCKER_HOST pointing at a socket that does not

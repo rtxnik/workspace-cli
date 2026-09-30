@@ -100,6 +100,13 @@ exit 1
 --- stdout (0 bytes)
 --- stderr (35 bytes)
 |✗ usage: ws proxy debug <on|off>
+=== runtime/migration-refusal
+exit 1
+--- stdout (0 bytes)
+--- stderr (176 bytes)
+|✗ migration required but --no-migrate is set; either run `ws proxy profile add
+|  primary <uri>` manually OR drop --no-migrate to auto-migrate
+|  home/.config/xray/config.json
 === runtime/spinner-double
 exit 1
 --- stdout (118 bytes)
