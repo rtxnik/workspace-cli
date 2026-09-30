@@ -77,10 +77,6 @@ type errorCase struct {
 	// workspace, when set, is created under WORKSPACES_DIR before the run.
 	workspace string
 
-	// spinner marks a case whose stdout carries huh/spinner frames, which
-	// depend on how long the action ran; see normaliseSpinner.
-	spinner bool
-
 	// legacyXray runs the child in a fresh directory holding a legacy
 	// regular-file home/.config/xray/config.json, with HOME=home. HOME is
 	// relative on purpose: the refusal that state provokes names the file,
@@ -166,7 +162,7 @@ var errorCases = []errorCase{
 	// The paths that reach the Docker SDK: every one of them fails on the
 	// unreachable DOCKER_HOST that runExecuteChild sets, which is what makes
 	// them hermetic.
-	{name: "body-exit/proxy-up-unreachable", args: []string{"proxy", "up"}, spinner: true},
+	{name: "body-exit/proxy-up-unreachable", args: []string{"proxy", "up"}},
 	{name: "body-exit/proxy-doctor-unreachable", args: []string{"proxy", "doctor"}},
 	{name: "body-exit/proxy-doctor-json-unreachable", args: []string{"proxy", "doctor", "--json"}},
 	{name: "runtime/proxy-test-not-running", args: []string{"proxy", "test"}},
@@ -338,95 +334,7 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	default:
 		t.Fatalf("running case %s: %v\n%s", c.name, err, errBuf.String())
 	}
-	stdout = out.String()
-	if c.spinner {
-		stdout = normaliseSpinner(stdout)
-	}
-	return code, normaliseStepTimes(stdout), normaliseStepTimes(errBuf.String())
-}
-
-// spinnerFrames are the runes huh/spinner cycles through while it runs. Which
-// one is on screen when the action ends depends on how long it took, so they
-// are the only thing normaliseSpinner is allowed to drop.
-const spinnerFrames = "⣾⣽⣻⢿⡿⣟⣯⣷⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-// normaliseSpinner collapses the spinner animation to the one line it leaves
-// on screen, independent of how many frames it rendered before the test's
-// action finished. Text after the spinner's last erase-line survives as it
-// is (ANSI stripped, \r removed). Text before it splits at the last
-// newline: complete lines that precede the spinner survive too, ANSI
-// stripped and \r-free, because an erase-line clears only one line and a
-// diagnostic printed earlier is still on the operator's screen; the
-// spinner's own line — redraws separated by \r — collapses to its last
-// non-empty redraw, with the frame rune and surrounding whitespace trimmed.
-// ansi.Strip runs over the whole stream, including the erase-line and the
-// cursor-restore sequences around it, so a regression that stopped
-// restoring the cursor would not show up in this comparison.
-func normaliseSpinner(s string) string {
-	const eraseLine = "\x1b[2K"
-	// The carriage returns the animation leaves behind are not escape
-	// sequences, so ansi.Strip keeps them; in the golden they would be
-	// invisible bytes inside a line.
-	clean := func(part string) string { return strings.ReplaceAll(ansi.Strip(part), "\r", "") }
-	i := strings.LastIndex(s, eraseLine)
-	if i < 0 {
-		return clean(s)
-	}
-	pre := ansi.Strip(s[:i])
-	prefix, spinnerLine := "", pre
-	if j := strings.LastIndex(pre, "\n"); j >= 0 {
-		prefix, spinnerLine = pre[:j+1], pre[j+1:]
-	}
-	prefix = strings.ReplaceAll(prefix, "\r", "")
-	last := ""
-	for _, redraw := range strings.Split(spinnerLine, "\r") {
-		if redraw != "" {
-			last = redraw
-		}
-	}
-	before := strings.Trim(last, spinnerFrames+" \t\n")
-	return prefix + before + clean(s[i+len(eraseLine):])
-}
-
-// TestNormaliseSpinner pins normaliseSpinner against synthetic input built
-// from the real shape huh/spinner writes (captured from `stop wsx`), with
-// one, two and three redraws before the erase-line — the review's finding
-// was that only the one-frame shape was ever exercised, so the two- and
-// three-frame cases here are the regression pin.
-func TestNormaliseSpinner(t *testing.T) {
-	const title = `Stopping workspace "wsx"`
-	const tail = `✗ Stopping workspace "wsx": boom` + "\n"
-	const wantSpinner = title + tail
-
-	frame := func(runes string) string {
-		var b strings.Builder
-		for _, r := range runes {
-			fmt.Fprintf(&b, "\r%c %s", r, title)
-		}
-		return "\x1b[?25l\x1b[?2004h" + b.String() +
-			"\r\x1b[2K\r\x1b[?2004l\x1b[?25h" + tail
-	}
-	one := frame("⣽")
-	two := frame("⣽⣻")
-	three := frame("⣽⣻⢿")
-
-	for _, c := range []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"one redraw", one, wantSpinner},
-		{"two redraws", two, wantSpinner},
-		{"three redraws", three, wantSpinner},
-		{"diagnostic line before the spinner starts", "⚠ something\n" + one, "⚠ something\n" + wantSpinner},
-		{"no erase-line at all", "\x1b[1msuccess\x1b[0m\n", "success\n"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := normaliseSpinner(c.in); got != c.want {
-				t.Errorf("normaliseSpinner(%q) = %q; want %q", c.in, got, c.want)
-			}
-		})
-	}
+	return code, normaliseStepTimes(out.String()), normaliseStepTimes(errBuf.String())
 }
 
 // renderErrorCase is one case's block of the golden file. Each stream is

@@ -23,13 +23,6 @@ import (
 type Fact struct{ K, V string }
 
 // Remedy is a next step: a short label and a copy-pasteable command.
-//
-// The type is named Remedy and not Step because steps.go already declares
-// `type Step struct{ Name string; Fn func() error }`, consumed by
-// NewStepRunner at five call sites. This package gains the block types while
-// StepRunner is still live, so a second Step would be an immediate compile
-// failure; the existing type keeps its name until the spinner migration
-// retires it.
 type Remedy struct {
 	Label string
 	Cmd   string
