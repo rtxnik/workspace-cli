@@ -6,62 +6,95 @@ exit 0
 === arg-error/runE-command
 exit 1
 --- stdout (0 bytes)
---- stderr (336 bytes)
-|Usage:
-|  ws proxy profile use <name> [flags]
-|
-|Flags:
-|  -h, --help        help for use
-|      --no-reload   Skip proxy restart after switching profile (advanced — operator must run 'ws proxy restart' manually to apply)
-|
-|Use "ws proxy profile use [command] --help" for more information about a command.
-|
+--- stderr (125 bytes)
 |✗ accepts 1 arg(s), received 0
+|  Usage: ws proxy profile use <name> [flags]
+|  Run 'ws proxy profile use --help' for usage.
 === arg-error/converted-body
 exit 1
 --- stdout (0 bytes)
---- stderr (176 bytes)
-|Usage:
-|  ws start <name> [flags]
-|
-|Flags:
-|  -h, --help   help for start
-|
-|Use "ws start [command] --help" for more information about a command.
-|
+--- stderr (101 bytes)
 |✗ accepts 1 arg(s), received 0
+|  Usage: ws start <name> [flags]
+|  Run 'ws start --help' for usage.
 === arg-error/unknown-command
 exit 1
 --- stdout (0 bytes)
---- stderr (65 bytes)
+--- stderr (89 bytes)
 |✗ unknown command "nosuch" for "ws"
-|Run 'ws --help' for usage.
+|  Usage: ws [command]
+|  Run 'ws --help' for usage.
 === arg-error/unknown-flag
 exit 1
 --- stdout (0 bytes)
---- stderr (169 bytes)
-|Usage:
-|  ws start <name> [flags]
-|
-|Flags:
-|  -h, --help   help for start
-|
-|Use "ws start [command] --help" for more information about a command.
-|
+--- stderr (94 bytes)
 |✗ unknown flag: --bogus
+|  Usage: ws start <name> [flags]
+|  Run 'ws start --help' for usage.
 === arg-error/noargs-extra
 exit 1
 --- stdout (0 bytes)
---- stderr (179 bytes)
-|Usage:
-|  ws status [flags]
-|
-|Flags:
-|  -h, --help   help for status
-|
-|Use "ws status [command] --help" for more information about a command.
-|
+--- stderr (103 bytes)
 |✗ unknown command "x" for "ws status"
+|  Usage: ws status [flags]
+|  Run 'ws status --help' for usage.
+=== arg-error/unknown-command-suggested
+exit 1
+--- stdout (0 bytes)
+--- stderr (113 bytes)
+|✗ unknown command "lst" for "ws"
+|  Did you mean: list, ssh?
+|  Usage: ws [command]
+|  Run 'ws --help' for usage.
+=== arg-error/unknown-command-with-help
+exit 1
+--- stdout (0 bytes)
+--- stderr (89 bytes)
+|✗ unknown command "nosuch" for "ws"
+|  Usage: ws [command]
+|  Run 'ws --help' for usage.
+=== arg-error/root-unknown-flag
+exit 1
+--- stdout (0 bytes)
+--- stderr (77 bytes)
+|✗ unknown flag: --bogus
+|  Usage: ws [command]
+|  Run 'ws --help' for usage.
+=== arg-error/proxy-unknown-subcommand
+exit 1
+--- stdout (0 bytes)
+--- stderr (104 bytes)
+|✗ unknown command "zzz" for "ws proxy"
+|  Usage: ws proxy [command]
+|  Run 'ws proxy --help' for usage.
+=== arg-error/vault-unknown-subcommand
+exit 1
+--- stdout (0 bytes)
+--- stderr (104 bytes)
+|✗ unknown command "zzz" for "ws vault"
+|  Usage: ws vault [command]
+|  Run 'ws vault --help' for usage.
+=== arg-error/profile-unknown-subcommand
+exit 1
+--- stdout (0 bytes)
+--- stderr (128 bytes)
+|✗ unknown command "zzz" for "ws proxy profile"
+|  Usage: ws proxy profile [command]
+|  Run 'ws proxy profile --help' for usage.
+=== arg-error/help-unknown-topic
+exit 1
+--- stdout (0 bytes)
+--- stderr (89 bytes)
+|✗ unknown command "nosuch" for "ws"
+|  Usage: ws [command]
+|  Run 'ws --help' for usage.
+=== arg-error/completion-unsupported-shell
+exit 1
+--- stdout (0 bytes)
+--- stderr (141 bytes)
+|✗ invalid argument "powershell" for "ws completion"
+|  Usage: ws completion [bash|zsh|fish] [flags]
+|  Run 'ws completion --help' for usage.
 === runtime/runE-plain
 exit 1
 --- stdout (0 bytes)
@@ -100,6 +133,13 @@ exit 1
 --- stdout (0 bytes)
 --- stderr (35 bytes)
 |✗ usage: ws proxy debug <on|off>
+=== runtime/migration-refusal
+exit 1
+--- stdout (0 bytes)
+--- stderr (176 bytes)
+|✗ migration required but --no-migrate is set; either run `ws proxy profile add
+|  primary <uri>` manually OR drop --no-migrate to auto-migrate
+|  home/.config/xray/config.json
 === runtime/spinner-double
 exit 1
 --- stdout (118 bytes)

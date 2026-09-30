@@ -214,9 +214,16 @@ type Empty struct {
 }
 
 // KV is a titled list of ordered pairs. A report body: Out() (§4.7).
+//
+// Keys are painted RoleMuted unless PlainKeys is set, which renders them with
+// no role and so with no SGR at all. The zero value is the muted form every
+// KV and Problem.Facts rendered before the field existed, byte for byte; the
+// help document sets it, because there the section titles are the only text
+// that carries colour.
 type KV struct {
-	Title string
-	Pairs []Fact
+	Title     string
+	Pairs     []Fact
+	PlainKeys bool
 }
 
 // Check is one line of a Checks block. It carries no word of its own: the
@@ -339,7 +346,7 @@ func (p Problem) Render(s *Stream) string {
 	}
 	if len(p.Facts) > 0 {
 		b.WriteString("\n")
-		b.WriteString(renderPairs(s, p.Facts, budget))
+		b.WriteString(renderPairs(s, p.Facts, budget, RoleMuted))
 	}
 	if len(p.Steps) > 0 {
 		b.WriteString("\n")
@@ -350,8 +357,10 @@ func (p Problem) Render(s *Stream) string {
 
 // renderPairs is the shared label/value column used by Problem.Facts and KV:
 // 2sp + key padded to the widest key + 2sp + value, the value wrapped at a
-// hanging indent aligned to the value column (§4.4).
-func renderPairs(s *Stream, pairs []Fact, budget int) string {
+// hanging indent aligned to the value column (§4.4). Every key is painted
+// keyRole, on the aligned path and on the stacked one; RoleDefault paints
+// nothing.
+func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 	const indent, gap = 2, 2
 	keyWidth := 0
 	for _, f := range pairs {
@@ -373,7 +382,7 @@ func renderPairs(s *Stream, pairs []Fact, budget int) string {
 		key, value := Sanitise(f.K), Sanitise(f.V)
 		if stacked {
 			for _, line := range wrapIndent(key, indent, budget) {
-				b.WriteString(s.paint(RoleMuted, line) + "\n")
+				b.WriteString(s.paint(keyRole, line) + "\n")
 			}
 			for _, line := range wrapIndent(value, indent+2, budget) {
 				b.WriteString(line + "\n")
@@ -389,7 +398,7 @@ func renderPairs(s *Stream, pairs []Fact, budget int) string {
 		}
 		lines := Wrap(value, valueWidth)
 		b.WriteString(strings.Repeat(" ", indent) +
-			s.paint(RoleMuted, Pad(key, keyWidth)) +
+			s.paint(keyRole, Pad(key, keyWidth)) +
 			strings.Repeat(" ", gap) + lines[0] + "\n")
 		for _, line := range lines[1:] {
 			b.WriteString(strings.Repeat(" ", valueIndent) + line + "\n")
@@ -485,7 +494,11 @@ func (k KV) Render(s *Stream) string {
 			b.WriteString(s.paint(RoleAccent, line) + "\n")
 		}
 	}
-	b.WriteString(renderPairs(s, k.Pairs, budget))
+	keyRole := RoleMuted
+	if k.PlainKeys {
+		keyRole = RoleDefault
+	}
+	b.WriteString(renderPairs(s, k.Pairs, budget, keyRole))
 	return strings.TrimRight(b.String(), "\n")
 }
 

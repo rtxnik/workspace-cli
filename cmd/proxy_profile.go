@@ -24,6 +24,7 @@ var (
 	switchToSymlinkOnlyFn = xray.SwitchToSymlinkOnly
 	proxyRestartFn        = docker.ProxyRestart
 	loadConfigFn          = config.Load
+	ensureMigratedFn      = xray.EnsureMigrated
 )
 
 // profileCmd is the depth-3 parent for `ws proxy profile *` per CONTEXT.md D-01.
@@ -36,6 +37,11 @@ var (
 // feedback_no_auto_state_mutation). Cobra short-circuits --help / completion
 // before PersistentPreRunE, so help output remains available even on a host
 // with no xray state.
+//
+// The hook sets SilenceUsage on its error path and nowhere else. Its refusal
+// is a runtime error, which prints no usage lines. Set before the call, it
+// would also make a runtime error of what cobra rejects after the hooks — a
+// leaf's missing required flag — and that is an argument error.
 var profileCmd = &cobra.Command{
 	Use:         "profile",
 	Short:       "Manage xray VLESS profiles",
@@ -50,7 +56,11 @@ var profileCmd = &cobra.Command{
 		}
 		cfg := config.Load()
 		noMigrate, _ := cmd.Flags().GetBool("no-migrate")
-		return xray.EnsureMigrated(cfg, !noMigrate)
+		if err := ensureMigratedFn(cfg, !noMigrate); err != nil {
+			cmd.SilenceUsage = true
+			return err
+		}
+		return nil
 	},
 }
 
@@ -147,6 +157,7 @@ Use --no-reload to perform only the symlink swap (advanced — operator must run
 	Args:        cobra.ExactArgs(1),
 	Annotations: proxyAnnotation,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := loadConfigFn()
 		noReload, _ := cmd.Flags().GetBool("no-reload")
 
@@ -156,7 +167,6 @@ Use --no-reload to perform only the symlink swap (advanced — operator must run
 		// still defends against legacy single-file bind.
 		if noReload {
 			if err := switchToSymlinkOnlyFn(cfg, args[0]); err != nil {
-				cmd.SilenceUsage = true
 				return err
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(),
@@ -170,7 +180,6 @@ Use --no-reload to perform only the symlink swap (advanced — operator must run
 		// swap the symlink so the operator never sees disk/runtime
 		// divergence from a preventable cause.
 		if err := verifyProxyReadyFn(cfg); err != nil {
-			cmd.SilenceUsage = true
 			return fmt.Errorf("proxy not ready for reload: %w", err)
 		}
 
@@ -186,7 +195,6 @@ Use --no-reload to perform only the symlink swap (advanced — operator must run
 		// pins this contract.
 		start := time.Now()
 		if err := switchToFn(cfg, args[0]); err != nil {
-			cmd.SilenceUsage = true
 			return err
 		}
 

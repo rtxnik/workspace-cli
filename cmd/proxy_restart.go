@@ -26,6 +26,7 @@ swapped the symlink but the auto-reload failed. For container-level changes
 (image, env, network) use 'ws proxy recreate' instead.`,
 	Annotations: proxyAnnotation,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		cmd.SilenceUsage = true
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
@@ -34,12 +35,10 @@ swapped the symlink but the auto-reload failed. For container-level changes
 					output.Info("Aborted")
 					return nil
 				}
-				cmd.SilenceUsage = true
 				return err
 			}
 		}
 		if err := proxyRestartCmdFn(cfg); err != nil {
-			cmd.SilenceUsage = true
 			return fmt.Errorf("proxy restart failed: %w", err)
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Proxy restarted")

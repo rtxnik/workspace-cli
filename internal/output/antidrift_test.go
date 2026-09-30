@@ -15,8 +15,9 @@ import (
 // cannot be made correct by construction — §4.6 keeps colour on roles only so
 // that the light-background case needs no second palette, and that only holds
 // while every colour value is declared in one file. A style built at a call
-// site is also chosen BEFORE any Stream exists, which is what makes
-// cmd/root.go's package-init usage template unfixable by a runtime probe.
+// site is also chosen BEFORE any Stream exists, which is what made
+// cmd/root.go's package-init usage template, since replaced by the help
+// renderer, unfixable by a runtime probe.
 
 const colourLiteral = `lipgloss.Color("#`
 
@@ -29,8 +30,8 @@ const colourLiteral = `lipgloss.Color("#`
 // ROOT IS THE REPOSITORY, NOT THIS PACKAGE, and `permitted` is a repository-
 // relative PATH, not a basename. §6.8 is a repo-wide clause ("no
 // lipgloss.Color(\"# outside internal/output/theme.go") and the drift it
-// exists to catch lives outside this package by construction: §7 names ten
-// direct-style sites under cmd/, with cmd/root.go baking styles into the usage
+// exists to catch lives outside this package by construction: §7 named ten
+// direct-style sites under cmd/, cmd/root.go then baking styles into its usage
 // template at package-init time. A walk rooted at "." inside a Go test is
 // rooted at internal/output and is structurally blind to every one of them; a
 // permit matched by filepath.Base would also accept any file called theme.go

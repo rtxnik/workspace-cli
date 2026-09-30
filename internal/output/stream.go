@@ -205,6 +205,12 @@ func (s *Stream) Write(p []byte) (int, error) { return s.w.Write(p) }
 // the MinWidth floor applied.
 func (s *Stream) budget() int { return clampBudget(s.width) }
 
+// Budget is budget for a renderer outside this package that lays text out
+// itself — cmd's help document wraps its description and synopsis against
+// it. Reading the floor here keeps clampBudget its one definition; a caller
+// that re-derived it from Width and MinWidth would be a second copy.
+func (s *Stream) Budget() int { return s.budget() }
+
 // clampBudget applies §4.2's floor. It is an invariant of the layer rather
 // than a side effect of one constructor: any path that reaches the allocator
 // with a sub-MinWidth budget gets the same clamp.

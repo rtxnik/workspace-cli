@@ -91,7 +91,8 @@ func TestProxyRecreateFailure(t *testing.T) {
 		cmd.SetErr(nil)
 	})
 
-	err := cmd.Execute()
+	resetSilenceUsage(t, "proxy", "recreate")
+	failed, err := cmd.ExecuteC()
 	if err == nil {
 		t.Fatal("expected error when proxyRecreateCmdFn fails")
 	}
@@ -102,8 +103,9 @@ func TestProxyRecreateFailure(t *testing.T) {
 	if !strings.Contains(combined, "docker daemon unreachable") {
 		t.Errorf("expected underlying error preserved; got %q / err=%v", combined, err)
 	}
-	if strings.Contains(combined, "Usage:") {
-		t.Errorf("SilenceUsage must suppress usage block; got %q", combined)
+	// A runtime error, not a usage error: the root prints no usage lines.
+	if _, _, isUsage := usageTarget(failed, err); isUsage {
+		t.Errorf("a failed recreate is classified as a usage error: %v", err)
 	}
 }
 

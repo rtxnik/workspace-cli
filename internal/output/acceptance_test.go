@@ -925,6 +925,55 @@ func TestKVStacksBelowTwelve(t *testing.T) {
 	}
 }
 
+// TestKVPlainKeys pins both values of KV.PlainKeys by the exact bytes of the
+// key's line, on a stream with colour ON, on the aligned path and on the
+// stacked one: the zero value paints the key RoleMuted, PlainKeys paints
+// nothing. The title keeps RoleAccent either way. Problem.Facts, which shares
+// renderPairs, is held to the muted form it had before the field existed.
+//
+// Exact bytes, because the weak form — "the plain line carries no ESC" — also
+// passes a renderer that drops the key.
+func TestKVPlainKeys(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	muted := fxSGR(t, roleColours[RoleMuted].trueColour, ColourTrue)
+	accent := fxSGR(t, roleColours[RoleAccent].trueColour, ColourTrue)
+	key := strings.Repeat("k", 20) // valueIndent = 2 + 20 + 2 = 24
+	const value, valueIndent = "on", 24
+
+	for _, c := range []struct {
+		name   string
+		budget int
+		plain  bool
+		want   string // the key's line
+	}{
+		{"aligned, zero value", valueIndent + 12, false, "  " + muted + key + fxReset + "  " + value},
+		{"aligned, PlainKeys", valueIndent + 12, true, "  " + key + "  " + value},
+		{"stacked, zero value", valueIndent + 11, false, muted + "  " + key + fxReset},
+		{"stacked, PlainKeys", valueIndent + 11, true, "  " + key},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out := KV{Title: "Report", Pairs: []Fact{{key, value}}, PlainKeys: c.plain}.Render(blockStream(c.budget))
+			lines := strings.Split(out, "\n")
+			if len(lines) < 2 {
+				t.Fatalf("want a title line and a key line, got %q", out)
+			}
+			if want := accent + "Report" + fxReset; lines[0] != want {
+				t.Errorf("title line = %q, want %q", lines[0], want)
+			}
+			if lines[1] != c.want {
+				t.Errorf("key line = %q, want %q", lines[1], c.want)
+			}
+		})
+	}
+
+	p := Problem{Title: "pull failed", Facts: []Fact{{"image", "ws:dev"}}}
+	if out := p.Render(blockStream(80)); !strings.Contains(out, "\n  "+muted+"image"+fxReset+"  ws:dev") {
+		t.Errorf("Problem.Facts no longer paints its keys RoleMuted: %q", out)
+	}
+}
+
 // TestChecksFloorIsVocabularyWide asserts that the badge column is sized from
 // §4.5's whole vocabulary and not from the items present.
 //

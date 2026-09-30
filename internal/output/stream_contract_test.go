@@ -615,6 +615,9 @@ func TestWidthConstantsArePinnedToTheirValues(t *testing.T) {
 // Width() reports the resolved number unclamped; the MinWidth floor belongs to
 // the render budget. Keeping them separate is what lets a caller see that the
 // terminal really is 20 columns while every render still lays out at 29.
+//
+// Budget() is the exported read of the same floor, for a renderer outside the
+// package; it must agree with budget() on both sides of MinWidth.
 func TestBudgetFloorIsSeparateFromWidth(t *testing.T) {
 	s := NewStreamAt(io.Discard, 20, false, ColourNone, false)
 	if s.Width() != 20 {
@@ -623,9 +626,15 @@ func TestBudgetFloorIsSeparateFromWidth(t *testing.T) {
 	if s.budget() != MinWidth {
 		t.Errorf("budget() = %d for a 20-column stream, want the MinWidth floor %d", s.budget(), MinWidth)
 	}
+	if s.Budget() != MinWidth {
+		t.Errorf("Budget() = %d for a 20-column stream, want the MinWidth floor %d", s.Budget(), MinWidth)
+	}
 	wide := NewStreamAt(io.Discard, 120, false, ColourNone, false)
 	if wide.budget() != 120 {
 		t.Errorf("budget() = %d for a 120-column stream, want 120", wide.budget())
+	}
+	if wide.Budget() != 120 {
+		t.Errorf("Budget() = %d for a 120-column stream, want 120", wide.Budget())
 	}
 }
 

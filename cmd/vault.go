@@ -19,8 +19,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// vaultAnnotation is the per-leaf group tag consumed by the groupedUsageTemplate
-// in cmd/root.go to render the "Vault Commands:" section.
+// vaultAnnotation is the group tag of `ws vault`: the root's help lists it
+// under "Vault Commands:". The leaves carry it too, but the tag is read on
+// the root's children only; below the root the help lists every child under
+// one "Commands:" heading.
 var vaultAnnotation = map[string]string{"group": "vault"}
 
 var vaultCmd = &cobra.Command{
