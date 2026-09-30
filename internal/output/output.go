@@ -8,17 +8,11 @@ import (
 // stream, their colour level and their width budget per file descriptor.
 // Confirm and ConfirmDestructive below are untouched by that move.
 //
-// Three style aliases went with the helpers, because they had no other
-// caller. The three that stay each still have a caller, measured rather than
-// assumed: spinner.go:23 and :29 render through errorStyle and successStyle,
-// and SectionStyle is read from cmd (profile.go, vault_status.go).
-// §4.6 replaces all three, in the phase that reaches those call sites.
-var (
-	SectionStyle = StyleHeader
-
-	successStyle = StyleSuccess
-	errorStyle   = StyleError
-)
+// Of the style aliases the helpers left behind, SectionStyle is the one with
+// a caller: cmd reads it (profile.go, vault_status.go), and §4.6 replaces it
+// in the phase that reaches those call sites. successStyle and errorStyle
+// went with the spinner, their last caller.
+var SectionStyle = StyleHeader
 
 // Confirm shows an interactive confirmation dialog. Returns true only if
 // the user explicitly confirms. Default is No (safe default).
