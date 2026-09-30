@@ -612,6 +612,56 @@ func TestRootProtocolBranches(t *testing.T) {
 	}
 }
 
+// TestUsageTargetClassifies drives usageTarget directly: which errors are
+// usage errors, and which command their usage lines name. The bytes those
+// lines print are TestErrorOutputBaseline's.
+func TestUsageTargetClassifies(t *testing.T) {
+	leaf := &cobra.Command{Use: "leaf"}
+	started := &cobra.Command{Use: "started", SilenceUsage: true}
+	group := &cobra.Command{Use: "group"}
+	group.AddCommand(&cobra.Command{Use: "child"})
+	named := &cobra.Command{Use: "named"}
+	typed := &usageError{cmd: named, err: errors.New("unknown command"), suggestions: []string{"near"}}
+
+	for _, c := range []struct {
+		name        string
+		cmd         *cobra.Command
+		err         error
+		wantTarget  *cobra.Command
+		wantSuggest []string
+		wantUsage   bool
+	}{
+		{"no error", leaf, nil, nil, nil, false},
+		{"typed, naming its own command", leaf, typed, named, []string{"near"}, true},
+		{"typed and wrapped", started, fmt.Errorf("context: %w", typed), named, []string{"near"}, true},
+		{"a leaf whose body had not started", leaf, errors.New("accepts 1 arg(s), received 0"), leaf, nil, true},
+		{"a leaf whose body had started", started, errors.New("proxy restart failed"), nil, nil, false},
+		{"a command with subcommands", group, errors.New("write /dev/stdout: broken pipe"), nil, nil, false},
+		{"a flag that failed to parse", started, flagError(started, errors.New("unknown flag: --bogus")), started, nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			target, suggestions, ok := usageTarget(c.cmd, c.err)
+			if ok != c.wantUsage || target != c.wantTarget || strings.Join(suggestions, ",") != strings.Join(c.wantSuggest, ",") {
+				t.Errorf("usageTarget = (%v, %v, %v); want (%v, %v, %v)", target, suggestions, ok, c.wantTarget, c.wantSuggest, c.wantUsage)
+			}
+		})
+	}
+
+	// Every command inherits the root's FlagErrorFunc. The type is what makes
+	// a flag error a usage error on a command with subcommands: such a
+	// command has no body, so its SilenceUsage marks nothing and rule 2 does
+	// not apply. On a leaf rule 2 would catch it untyped.
+	for _, cmd := range []*cobra.Command{rootCmd, proxyCmd} {
+		err := cmd.FlagErrorFunc()(cmd, errors.New("unknown flag: --bogus"))
+		if err.Error() != "unknown flag: --bogus" {
+			t.Errorf("%s: the FlagErrorFunc changed the message: %q", cmd.CommandPath(), err)
+		}
+		if target, _, ok := usageTarget(cmd, err); !ok || target != cmd {
+			t.Errorf("%s: a flag error is not a usage error of the command: (%v, %v)", cmd.CommandPath(), target, ok)
+		}
+	}
+}
+
 // TestUnknownCommandIsRecognised pins isUnknownCommand against the error
 // cobra actually builds, not against a copy of its text: if cobra rewords it,
 // this goes red instead of the hint silently disappearing.

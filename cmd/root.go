@@ -87,6 +87,48 @@ func run(err error) (msg string, code int) {
 	return err.Error(), 1
 }
 
+// usageError is an argument error: what the operator typed was wrong, and
+// the remedy is cmd's synopsis. Its text is the text of the error it
+// carries, so wrapping an error in it changes no message. suggestions are
+// the commands to offer for an unknown subcommand.
+type usageError struct {
+	cmd         *cobra.Command
+	err         error
+	suggestions []string
+}
+
+func (e *usageError) Error() string { return e.err.Error() }
+func (e *usageError) Unwrap() error { return e.err }
+
+// flagError is the root's FlagErrorFunc, which every command inherits: a
+// flag that fails to parse is a usage error of the command that parsed it.
+func flagError(cmd *cobra.Command, err error) error {
+	return &usageError{cmd: cmd, err: err}
+}
+
+// usageTarget reports whether err, returned by ExecuteC for cmd, is a usage
+// error, and if it is, the command its usage lines name and the suggestions
+// to print. Two things make one, and nothing else does:
+//
+//  1. err is, or wraps, a *usageError, which names its own command;
+//  2. cmd is a leaf whose SilenceUsage is still false. Its body had not
+//     started — every body sets SilenceUsage first, and a hook sets it only
+//     on its own error path (TestSilenceUsageForms) — so cobra rejected its
+//     arguments, or its required or grouped flags.
+//
+// A command with subcommands has no body; any other error it returns — a
+// failed write of the --version output — is a runtime error.
+func usageTarget(cmd *cobra.Command, err error) (target *cobra.Command, suggestions []string, ok bool) {
+	var ue *usageError
+	if errors.As(err, &ue) {
+		return ue.cmd, ue.suggestions, true
+	}
+	if err != nil && cmd != nil && !cmd.HasSubCommands() && !cmd.SilenceUsage {
+		return cmd, nil, true
+	}
+	return nil, nil, false
+}
+
 // Execute runs the command tree. An error that reaches it is printed at most
 // once, through output.Fail, and the process exits with the code run chose.
 func Execute() {
@@ -128,6 +170,7 @@ func init() {
 	// usage says so, rather than promise an effect a command does not have.
 	rootCmd.PersistentFlags().Bool("json", false, "Output in JSON format, where the command supports it")
 	rootCmd.SetHelpFunc(helpFunc)
+	rootCmd.SetFlagErrorFunc(flagError)
 
 	cobra.AddTemplateFunc("groupTag", func(cmd *cobra.Command) []string {
 		if tag, ok := cmd.Annotations["group"]; ok {
