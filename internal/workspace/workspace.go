@@ -30,10 +30,23 @@ func Exists(cfg config.Config, name string) bool {
 }
 
 // Create sets up a new workspace directory with devcontainer config.
-func Create(cfg config.Config, name, profile string, withProxy bool) error {
+//
+// A workspace directory this call creates is removed again when a later step
+// fails, so a failed ws new leaves nothing behind that the next ws new would
+// refuse as existing. A directory that was already there is left as it is.
+// The error returned does not change.
+func Create(cfg config.Config, name, profile string, withProxy bool) (err error) {
 	wsDir := filepath.Join(cfg.WorkspacesDir, name)
 	dcDir := filepath.Join(wsDir, ".devcontainer")
 	profileDir := filepath.Join(cfg.ProfilesDir, profile)
+
+	if _, statErr := os.Lstat(wsDir); errors.Is(statErr, os.ErrNotExist) {
+		defer func() {
+			if err != nil {
+				_ = os.RemoveAll(wsDir)
+			}
+		}()
+	}
 
 	if err := os.MkdirAll(dcDir, 0o755); err != nil {
 		return fmt.Errorf("create workspace dir: %w", err)

@@ -2,12 +2,67 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rtxnik/workspace-cli/internal/config"
 )
+
+// TestCreateRemovesWhatItCreated: a step of Create that fails after the
+// workspace directory was made removes the directory again and returns the
+// step's error unchanged; a directory that was there before is left alone.
+func TestCreateRemovesWhatItCreated(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		WorkspacesDir: filepath.Join(root, "workspaces"),
+		ProfilesDir:   filepath.Join(root, "profiles"),
+		SharedDir:     filepath.Join(root, "shared"),
+	}
+	// The profile has its devcontainer.json and no Dockerfile: the second
+	// copy fails, after the directory and the first file are made.
+	if err := os.MkdirAll(filepath.Join(cfg.ProfilesDir, "go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.ProfilesDir, "go", "devcontainer.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Create(cfg, "api", "go", false)
+	if err == nil || !strings.HasPrefix(err.Error(), "copy Dockerfile: ") || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Create returned %v; want the failed copy's error, unchanged", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(cfg.WorkspacesDir, "api")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("the workspace directory a failed Create made is still there: %v", statErr)
+	}
+
+	kept := filepath.Join(cfg.WorkspacesDir, "web", "notes.md")
+	if err := os.MkdirAll(filepath.Dir(kept), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kept, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Create(cfg, "web", "go", false); err == nil {
+		t.Fatal("Create succeeded without a Dockerfile")
+	}
+	if _, statErr := os.Stat(kept); statErr != nil {
+		t.Errorf("a failed Create removed a workspace directory it did not make: %v", statErr)
+	}
+
+	if err := os.WriteFile(filepath.Join(cfg.ProfilesDir, "go", "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Create(cfg, "api", "go", false); err != nil {
+		t.Fatalf("Create after the failure: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cfg.WorkspacesDir, "api", ".devcontainer", "Dockerfile")); statErr != nil {
+		t.Errorf("a successful Create left no Dockerfile: %v", statErr)
+	}
+}
 
 func TestStripJSONCComments(t *testing.T) {
 	tests := []struct {
