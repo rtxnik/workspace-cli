@@ -103,7 +103,7 @@ var proxyStatusCmd = &cobra.Command{
 			if perr != nil {
 				scanErr = perr.Error()
 			}
-			output.JSON(struct {
+			return output.WriteJSON(cmd.OutOrStdout(), struct {
 				Running             bool                      `json:"running"`
 				Health              string                    `json:"health"`
 				Uptime              string                    `json:"uptime"`
@@ -122,7 +122,6 @@ var proxyStatusCmd = &cobra.Command{
 				WorkspaceProtection: protectionJSON(prot),
 				ProtectionScanError: scanErr,
 			})
-			return nil
 		}
 
 		stateStatus := "stopped"
@@ -292,14 +291,16 @@ var proxyTestCmd = &cobra.Command{
 				dnsExit = dnsRes.ExitIP
 			}
 			verdict, exitNonZero := testDNSVerdict(result, dnsExit)
-			output.JSON(testJSONResult{
+			if err := output.WriteJSON(cmd.OutOrStdout(), testJSONResult{
 				DirectIP:  result.DirectIP,
 				ProxiedIP: result.ProxiedIP,
 				Tunneled:  result.Tunneled,
 				LatencyMs: result.Latency.Milliseconds(),
 				DNS:       verdict,
 				DNSExitIP: dnsExit,
-			})
+			}); err != nil {
+				return err
+			}
 			if exitNonZero {
 				return &cliErrorWithExit{code: 1, msg: ""}
 			}

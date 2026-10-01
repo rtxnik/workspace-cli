@@ -25,6 +25,24 @@ func TestDoctorStopsAtFirstFailure(t *testing.T) {
 	}
 }
 
+// TestDoctorJSONReportsAFailedWrite: a --json report that cannot be written
+// is the error the root prints, where it used to be discarded and the verdict
+// returned as if the report had been read. Docker is unreachable, so the run
+// stops at its first check.
+func TestDoctorJSONReportsAFailedWrite(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///nonexistent/ws-test/docker.sock")
+	rootCmd.SetOut(failingWriter{})
+	rootCmd.SetArgs([]string{"proxy", "doctor", "--json"})
+	t.Cleanup(func() {
+		rootCmd.SetOut(nil)
+		rootCmd.SetArgs(nil)
+		_ = proxyDoctorCmd.Flags().Set("json", "false")
+	})
+	if _, err := execute(rootCmd); err == nil || !strings.Contains(err.Error(), "write refused") {
+		t.Errorf("ws proxy doctor --json into a failing writer returned %v; want the write error", err)
+	}
+}
+
 // TestDoctorAllPass proves a clean run: every check OK, FailedAt sentinel -1,
 // Result.OK true, and all outcomes recorded in order.
 func TestDoctorAllPass(t *testing.T) {
