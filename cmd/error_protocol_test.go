@@ -86,9 +86,9 @@ type errorCase struct {
 }
 
 // errorCases covers the four branches of the root protocol, the argument
-// and runtime halves of the usage distinction, the spinner's known second
-// print, and every helper and in-body exit that phase 1 moves onto a
-// returned value and a hermetic process can reach.
+// and runtime halves of the usage distinction, a failed step, whose error
+// the spinner used to print a second time, and every helper and in-body exit
+// that phase 1 moves onto a returned value and a hermetic process can reach.
 var errorCases = []errorCase{
 	// A successful command: no error text, exit 0.
 	{name: "success/detect", args: []string{"detect", emptyDirArg}},

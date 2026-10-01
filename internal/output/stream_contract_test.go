@@ -744,12 +744,11 @@ func TestNewStreamAtTakesEveryPropertyFromItsArguments(t *testing.T) {
 }
 
 // §4.1's memoisation is a sync.Once and not a nil check, and this is the test
-// that says why: cmd/workspace.go:242 calls output.Warn from inside the closure
-// handed to output.RunWithSpinner, and huh/spinner runs that closure on its own
-// goroutine while the spinner redraws. Two goroutines therefore reach Err()
-// concurrently the moment a step function logs. No file that launches a
-// goroutine imports internal/output today — internal/mcp is the only package
-// with a `go func` and it does not — so the race is latent rather than live,
+// that says why: a stream may be resolved from more than one goroutine.
+// output.Run draws its frame from a ticker goroutine while the task logs
+// through the message helpers on the caller's (run.go). Today the ticker
+// writes through the stream Run resolved before it started, so no two
+// goroutines resolve one at once and the race is latent rather than live,
 // which is exactly why it would otherwise be found late.
 //
 // Pointer identity is asserted here; the data race itself is reported by the

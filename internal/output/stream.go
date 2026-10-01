@@ -162,12 +162,13 @@ func newStdStream(f *os.File, err bool) *Stream {
 // Out is stdout: the answer. Resolved once per process and memoised (§4.1);
 // the destination itself is late-bound, see stdWriter.
 //
-// The memoisation is a sync.Once rather than a nil check because
-// cmd/workspace.go:242 calls output.Warn from inside the closure handed to
-// output.RunWithSpinner, and huh/spinner runs that closure on its own
-// goroutine while the spinner redraws. No file that launches a goroutine
-// imports this package today, so -race is currently quiet — the race is
-// latent, which is exactly why a nil check would survive review.
+// The memoisation is a sync.Once rather than a nil check because a stream
+// may be resolved from more than one goroutine. output.Run draws its frame
+// from a ticker goroutine while the task logs through the message helpers on
+// the caller's (run.go); today the ticker writes through the stream Run
+// resolved before it started, so no two goroutines resolve one at once, and
+// -race is quiet. The race a nil check would carry is latent, which is
+// exactly why a nil check would survive review.
 func Out() *Stream {
 	if mutants.NoStreamMemo {
 		return newStdStream(os.Stdout, false)
