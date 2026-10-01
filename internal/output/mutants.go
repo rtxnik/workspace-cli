@@ -160,7 +160,7 @@ type mutantSwitches struct {
 
 	// ------------------------------------------- §4.7 / §4.2 / §4.5 contract
 	MessagesToStdout      bool // the message helpers write to stdout
-	FailUnwrapped         bool // Fail stops wrapping, and so the root's error print; mark, role and sanitising unchanged
+	FailUnwrapped         bool // Fail stops wrapping; mark, role and sanitising unchanged
 	ColumnsRejectBelowMin bool // a COLUMNS below MinWidth is rejected instead of clamped
 	ProbeWrongFd          bool // newStream probes fd 0 instead of its own fd
 	NoStreamMemo          bool // Out()/Err() rebuild a Stream on every call

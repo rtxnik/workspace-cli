@@ -665,11 +665,10 @@ func contractMutants() []contractMutant {
 		},
 		{
 			name: "fail_stops_wrapping",
-			spec: "§6.1 / §4.8",
-			defect: "Fail stops wrapping — and with it the root's error print, which renders through it; the " +
-				"four helpers the sweep reaches through renderMessage are untouched, and so are the fail " +
-				"shape's mark, role and sanitising: the switch moves the wrap and nothing else, so a kill " +
-				"cannot be attributed to a second change",
+			spec: "§6.1",
+			defect: "Fail stops wrapping; the four helpers the sweep reaches through renderMessage are " +
+				"untouched, and so are the fail shape's mark, role and sanitising: the switch moves the wrap " +
+				"and nothing else, so a kill cannot be attributed to a second change",
 			apply: func(m *mutantSwitches) { m.FailUnwrapped = true },
 			probe: probeFail,
 		},

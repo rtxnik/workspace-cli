@@ -45,9 +45,10 @@ func Warn(msg string) { emit(Err(), shapeWarn, msg) }
 // Detail is continuation prose under another message. stderr.
 func Detail(msg string) { emit(Err(), shapeDetail, msg) }
 
-// Fail reports a fatal problem on stderr and returns. It does not exit: the
-// root's error protocol in cmd/root.go prints through Fail every error that
-// reaches it with a message, and chooses the exit code itself.
+// Fail reports a fatal problem on stderr and returns. It does not exit. The
+// root prints every error as a Problem, whose title is drawn as Fail draws a
+// message — renderMessage with the fail shape (blocks.go) — so a Problem
+// holding only a title is byte for byte the line Fail prints.
 func Fail(msg string) {
 	if mutants.FailUnwrapped {
 		// The defect §6.1 cannot otherwise see: the fail shape is swept only
