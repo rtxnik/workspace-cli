@@ -1,0 +1,178 @@
+=== ws list at COLUMNS=80
+exit 0
+--- stdout (877 bytes)
+|╭────────────────┬───────────────┬─────────┬───────╮
+|│ NAME           │ STATUS        │ PROFILE │ PROXY │
+|├────────────────┼───────────────┼─────────┼───────┤
+|│ api            │ ✓ running     │ go      │ on    │
+|│ legacy-billing │ - not created │ default │ off   │
+|│ ml-training    │ ~ busy        │ python  │ on    │
+|│ ops            │ - stopped     │ devops  │ off   │
+|│ web-frontend   │ ✓ running     │ web     │ off   │
+|╰────────────────┴───────────────┴─────────┴───────╯
+|5 workspaces, 2 running
+--- stderr (0 bytes)
+=== ws list at COLUMNS=40
+exit 0
+--- stdout (704 bytes)
+|╭──────────────┬───────────────┬───────╮
+|│ NAME         │ STATUS        │ PROXY │
+|├──────────────┼───────────────┼───────┤
+|│ api          │ ✓ running     │ on    │
+|│ legac…illing │ - not created │ off   │
+|│ ml-training  │ ~ busy        │ on    │
+|│ ops          │ - stopped     │ off   │
+|│ web-frontend │ ✓ running     │ off   │
+|╰──────────────┴───────────────┴───────╯
+|5 workspaces, 2 running. Hidden: PROFILE
+--- stderr (0 bytes)
+=== ws status at COLUMNS=80
+exit 1
+--- stdout (875 bytes)
+|╭───────────────┬────────────────────┬───────────┬───────────╮
+|│ REPO          │ BRANCH             │ STATUS    │ SYNC      │
+|├───────────────┼────────────────────┼───────────┼───────────┤
+|│ workspace-cli │ main               │ ✓ clean   │ +2 -1     │
+|│ vault-ai      │ feat/render-tables │ ~ dirty   │ no remote │
+|│ dotfiles      │                    │ ✗ missing │           │
+|╰───────────────┴────────────────────┴───────────┴───────────╯
+|1/3 repos healthy
+--- stderr (0 bytes)
+=== ws status at COLUMNS=40
+exit 1
+--- stdout (599 bytes)
+|╭────────────┬─────────────┬───────────╮
+|│ REPO       │ BRANCH      │ STATUS    │
+|├────────────┼─────────────┼───────────┤
+|│ work…e-cli │ main        │ ✓ clean   │
+|│ vault-ai   │ feat/…ables │ ~ dirty   │
+|│ dotfiles   │             │ ✗ missing │
+|╰────────────┴─────────────┴───────────╯
+|1/3 repos healthy. Hidden: SYNC
+--- stderr (0 bytes)
+=== ws profiles at COLUMNS=80
+exit 0
+--- stdout (1734 bytes)
+|╭─────────┬──────────────────────────┬─────────────────────────────────────────╮
+|│ NAME    │ BASE IMAGE               │ TOOLS                                   │
+|├─────────┼──────────────────────────┼─────────────────────────────────────────┤
+|│ default │ …iners/base:ubuntu-24.04 │                                         │
+|│ devops  │ …iners/base:ubuntu-24.04 │ kubectl, helm, terraform, awscli, gclo… │
+|│ go      │ …m/devcontainers/go:1.26 │ go, golangci-lint, gopls, delve         │
+|│ java    │ …m/devcontainers/java:21 │ java, maven, gradle                     │
+|│ ml      │ …cudnn-devel-ubuntu22.04 │ python, uv, jupyter, ruff               │
+|│ python  │ …vcontainers/python:3.13 │ python, uv, ruff, mypy, pre-commit      │
+|│ rust    │ …om/devcontainers/rust:1 │ rust, cargo-nextest, cargo-deny         │
+|│ ter…orm │ hashicorp/terraform:1.9  │ terraform, tflint, terragrunt           │
+|│ web     │ …ners/typescript-node:22 │ node, pnpm, bun, deno                   │
+|│ zig     │ debian:bookworm-slim     │ zig, zls                                │
+|╰─────────┴──────────────────────────┴─────────────────────────────────────────╯
+|10 profiles
+--- stderr (0 bytes)
+=== ws profiles at COLUMNS=40
+exit 0
+--- stdout (954 bytes)
+|╭────────┬──────────────┬──────────────╮
+|│ NAME   │ BASE IMAGE   │ TOOLS        │
+|├────────┼──────────────┼──────────────┤
+|│ de…ult │ …buntu-24.04 │              │
+|│ devops │ …buntu-24.04 │ kubectl, he… │
+|│ go     │ …ers/go:1.26 │ go, golangc… │
+|│ java   │ …ers/java:21 │ java, maven… │
+|│ ml     │ …ubuntu22.04 │ python, uv,… │
+|│ python │ …python:3.13 │ python, uv,… │
+|│ rust   │ …ners/rust:1 │ rust, cargo… │
+|│ te…orm │ …rraform:1.9 │ terraform, … │
+|│ web    │ …ipt-node:22 │ node, pnpm,… │
+|│ zig    │ …okworm-slim │ zig, zls     │
+|╰────────┴──────────────┴──────────────╯
+|10 profiles
+--- stderr (0 bytes)
+=== ws proxy profile list at COLUMNS=80
+exit 0
+--- stdout (1051 bytes)
+|╭────────┬──────────┬───────────┬─────────────────┬─────────────┬──────────────╮
+|│ ACTIVE │ NAME     │ TRANSPORT │ ADDRESS:PORT    │ SNI         │ UUID         │
+|├────────┼──────────┼───────────┼─────────────────┼─────────────┼──────────────┤
+|│ - no   │ bac…p-nl │ ws        │ …370:7334]:8443 │ …delivr.net │ 9a8b7c6d-**… │
+|│ ✓ yes  │ primary  │ tcp       │ …le-vpn.net:443 │ …rosoft.com │ 1f2e3d4c-**… │
+|╰────────┴──────────┴───────────┴─────────────────┴─────────────┴──────────────╯
+|2 profiles, active primary
+--- stderr (0 bytes)
+=== ws proxy profile list at COLUMNS=40
+exit 0
+--- stdout (575 bytes)
+|╭────────┬──────────┬──────────────────╮
+|│ ACTIVE │ NAME     │ ADDRESS:PORT     │
+|├────────┼──────────┼──────────────────┤
+|│ - no   │ bac…p-nl │ …:370:7334]:8443 │
+|│ ✓ yes  │ primary  │ …ple-vpn.net:443 │
+|╰────────┴──────────┴──────────────────╯
+|2 profiles, active primary. Hidden:
+|TRANSPORT, SNI, UUID
+--- stderr (0 bytes)
+=== ws proxy profile list --reveal at COLUMNS=80
+exit 0
+--- stdout (1055 bytes)
+|╭────────┬──────────┬───────────────────┬──────────────────────────────────────╮
+|│ ACTIVE │ NAME     │ ADDRESS:PORT      │ UUID                                 │
+|├────────┼──────────┼───────────────────┼──────────────────────────────────────┤
+|│ - no   │ bac…p-nl │ …e:370:7334]:8443 │ 9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d │
+|│ ✓ yes  │ primary  │ …mple-vpn.net:443 │ 1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b │
+|╰────────┴──────────┴───────────────────┴──────────────────────────────────────╯
+|2 profiles, active primary. Hidden: TRANSPORT, SNI
+--- stderr (0 bytes)
+=== ws proxy profile list --reveal at COLUMNS=40
+exit 0
+--- stdout (361 bytes)
+|╭────────┬───────────╮
+|│ ACTIVE │ NAME      │
+|├────────┼───────────┤
+|│ - no   │ backup-nl │
+|│ ✓ yes  │ primary   │
+|╰────────┴───────────╯
+|2 profiles, active primary. Hidden:
+|TRANSPORT, ADDRESS:PORT, SNI, UUID
+--- stderr (0 bytes)
+=== ws list: none at COLUMNS=80
+exit 0
+--- stdout (77 bytes)
+|No workspaces yet.
+|  Create one    ws new <name>
+|  See profiles  ws profiles
+--- stderr (0 bytes)
+=== ws list: none at COLUMNS=40
+exit 0
+--- stdout (77 bytes)
+|No workspaces yet.
+|  Create one    ws new <name>
+|  See profiles  ws profiles
+--- stderr (0 bytes)
+=== ws profiles: none at COLUMNS=80
+exit 0
+--- stdout (56 bytes)
+|No profiles yet.
+|  Create one  ws profile-create <name>
+--- stderr (0 bytes)
+=== ws profiles: none at COLUMNS=40
+exit 0
+--- stdout (56 bytes)
+|No profiles yet.
+|  Create one  ws profile-create <name>
+--- stderr (0 bytes)
+=== ws proxy profile list: none at COLUMNS=80
+exit 0
+--- stdout (117 bytes)
+|No proxy profiles yet.
+|  Initialize  ws proxy init <proxy-uri>
+|  Add one     ws proxy profile add <name> <vless-uri>
+--- stderr (0 bytes)
+=== ws proxy profile list: none at COLUMNS=40
+exit 0
+--- stdout (117 bytes)
+|No proxy profiles yet.
+|  Initialize  ws proxy init <proxy-uri>
+|  Add one
+|  ws proxy profile add <name>
+|  <vless-uri>
+--- stderr (0 bytes)

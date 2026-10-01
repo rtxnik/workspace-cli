@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -296,6 +297,89 @@ func TestSwitchToLeavesTheErrorToTheRoot(t *testing.T) {
 	stderr = captureStderr(t, func() { err = SwitchTo(cfg, "bad/name") })
 	if _, carried := output.ProblemOf(err); err == nil || carried || stderr != "" {
 		t.Errorf("a pre-swap failure wrote %q and returned %v (a Problem: %t); want nothing written and a plain error", stderr, err, carried)
+	}
+}
+
+// TestSwitchProblemFitsEveryWidth: the Problem of a failed switch, before
+// and after the swap, at every width from MinWidth to 200 in both glyph
+// modes, and not one line wider than the width, measured with the layer's W.
+// The profiles' names are 64 characters and the cause carries a 20-line tail
+// with a 200-character token, CJK and escapes. The control counts the lines
+// exactly the width: the token is hard-broken into such lines at every width,
+// or the sweep could not see an overflow of one cell.
+func TestSwitchProblemFitsEveryWidth(t *testing.T) {
+	sweepSwitchProblem(t, []bool{false, true})
+}
+
+func sweepSwitchProblem(t *testing.T, modes []bool) {
+	t.Helper()
+	name, previous := strings.Repeat("backup-", 9)+"x", strings.Repeat("primary", 9)+"x"
+	tail := []string{strings.Repeat("9f86d081884c7d65", 13)[:200], "错误：无法连接到代理服务器，正在重试",
+		"\x1b[31mred\x1b[0m \x1b]0;title\x07 done\r"}
+	for i := len(tail); i < 20; i++ {
+		tail = append(tail, fmt.Sprintf("[12:01:%02d] info restart dev-proxy: step %d of 20", i, i))
+	}
+	cfg := config.Config{ProxyContainer: "dev-proxy-" + name}
+	err := &output.TaskError{Title: "Restart dev-proxy", Err: fmt.Errorf("restart %s: exit status 1", cfg.ProxyContainer), Tail: tail}
+	problems := []output.Problem{switchProblem(cfg, name, previous, true, err), switchProblem(cfg, name, "", false, err)}
+	renders, lines, over := 0, 0, 0
+	for w := output.MinWidth; w <= 200; w++ {
+		control := 0
+		for _, ascii := range modes {
+			s := output.NewStreamAt(io.Discard, w, true, output.ColourTrue, ascii)
+			for _, p := range problems {
+				renders++
+				for _, line := range strings.Split(p.Render(s), "\n") {
+					lines++
+					switch n := output.W(line); {
+					case n > w:
+						if over++; over <= 10 {
+							t.Errorf("at %d columns a line is %d cells wide: %q", w, n, line)
+						}
+					case n == w:
+						control++
+					}
+				}
+			}
+		}
+		if control == 0 {
+			t.Errorf("control at %d columns: no line is wider than %d, so the sweep cannot see an overflow of one cell", w, w-1)
+		}
+		if w == output.MinWidth {
+			t.Logf("control at %d columns: %d lines are wider than %d", w, control, w-1)
+		}
+	}
+	if over > 0 {
+		t.Errorf("%d lines over the width in all", over)
+	}
+	t.Logf("swept %d renders, %d lines", renders, lines)
+}
+
+const switchAmbiWideEnv = "WS_TEST_SWITCH_AMBIWIDE"
+
+// TestSwitchProblemFitsEveryWidthAmbiguousWide runs the sweep under
+// RUNEWIDTH_EASTASIAN=1 in a child, since x/ansi reads the variable in
+// init(), in the glyph mode the layer selects there: ASCII, because the
+// UTF-8 marks and borders are Ambiguous. The child checks both.
+func TestSwitchProblemFitsEveryWidthAmbiguousWide(t *testing.T) {
+	if os.Getenv(switchAmbiWideEnv) == "1" {
+		if n := output.W("…"); n != 2 {
+			t.Fatalf("U+2026 measures %d cells under RUNEWIDTH_EASTASIAN=1, want 2: the convention did not reach x/ansi", n)
+		}
+		if mode := output.Err().Mode(); mode != output.GlyphASCII {
+			t.Fatalf("the layer selected glyph mode %v on an Ambiguous-wide terminal; want ASCII", mode)
+		}
+		sweepSwitchProblem(t, []bool{true})
+		return
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestSwitchProblemFitsEveryWidthAmbiguousWide$", "-test.v")
+	child.Env = append(os.Environ(), "RUNEWIDTH_EASTASIAN=1", switchAmbiWideEnv+"=1")
+	out, err := child.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the Ambiguous-wide sweep failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "swept ") {
+		t.Fatalf("the child ran no sweep:\n%s", out)
 	}
 }
 
