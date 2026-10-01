@@ -39,6 +39,22 @@ var fixtureWorkspaces = []struct {
 	{"legacy-billing", "default", false},
 }
 
+// fixtureProfiles are the fixture's workspace profiles: name, base image and
+// tools, some of them longer than any terminal is wide.
+var fixtureProfiles = []struct{ name, image, tools string }{
+	{"default", "mcr.microsoft.com/devcontainers/base:ubuntu-24.04", ""},
+	{"devops", "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+		"kubectl, helm, terraform, awscli, gcloud, azure-cli, ansible, packer, vault, jq, yq, k9s, stern"},
+	{"go", "mcr.microsoft.com/devcontainers/go:1.26", "go, golangci-lint, gopls, delve"},
+	{"java", "mcr.microsoft.com/devcontainers/java:21", "java, maven, gradle"},
+	{"ml", "nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04", "python, uv, jupyter, ruff"},
+	{"python", "mcr.microsoft.com/devcontainers/python:3.13", "python, uv, ruff, mypy, pre-commit"},
+	{"rust", "mcr.microsoft.com/devcontainers/rust:1", "rust, cargo-nextest, cargo-deny"},
+	{"terraform", "hashicorp/terraform:1.9", "terraform, tflint, terragrunt"},
+	{"web", "mcr.microsoft.com/devcontainers/typescript-node:22", "node, pnpm, bun, deno"},
+	{"zig", "debian:bookworm-slim", "zig, zls"},
+}
+
 // fakeDevpod is the devpod the fixture puts on PATH. devpod knows four of the
 // five workspaces; legacy-billing has never been created.
 const fakeDevpod = `#!/bin/sh
@@ -89,6 +105,24 @@ func newStreamsFixture(t *testing.T) streamsFixture {
 			t.Fatal(err)
 		}
 	}
+	for _, p := range fixtureProfiles {
+		dir := filepath.Join(fx.home, ".config", "workspaces", "profiles", p.name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM "+p.image+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mise := "[tools]\n"
+		for _, tool := range strings.Split(p.tools, ", ") {
+			if tool != "" {
+				mise += tool + " = \"latest\"\n"
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, "mise.toml"), []byte(mise), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.MkdirAll(fx.bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +143,9 @@ type streamsRow struct {
 	stderr string                                // with every step time normalised to <t>
 	after  func(t *testing.T, fx streamsFixture) // what the row must have left behind, when it matters
 	setup  func(t *testing.T, fx streamsFixture) // what the row needs beyond the fixture
+	// check replaces the byte comparison of stdout, for a row whose stdout
+	// the tables baseline pins.
+	check func(t *testing.T, stdout string)
 }
 
 // runStreamsChild runs row in a child over fx.
@@ -260,6 +297,35 @@ var streamsRows = []streamsRow{
 	{name: "ws list: none", args: []string{"list"}, setup: withoutWorkspaces,
 		stdout: "No workspaces yet.\n  Create one    ws new <name>\n  See profiles  ws profiles\n"},
 	{name: "ws list --json: none", args: []string{"list", "--json"}, setup: withoutWorkspaces, stdout: "[]\n"},
+	// COLUMNS empty: a pipe with no width, the budget is unbounded.
+	{name: "ws profiles: ten profiles, nothing cut", args: []string{"profiles"}, env: []string{"COLUMNS="},
+		check: func(t *testing.T, stdout string) {
+			for _, p := range fixtureProfiles {
+				for _, cell := range []string{"│ " + p.name + " ", " " + p.image + " ", " " + p.tools + " "} {
+					if !strings.Contains(stdout, cell) {
+						t.Errorf("a pipe lost %q:\n%s", cell, stdout)
+					}
+				}
+			}
+			if strings.Contains(stdout, "…") || !strings.HasSuffix(stdout, "╯\n10 profiles\n") {
+				t.Errorf("a pipe cut a cell, or the caption is not under the table:\n%s", stdout)
+			}
+		}},
+	{name: "ws profiles: none", args: []string{"profiles"}, setup: withoutProfiles,
+		stdout: "No profiles yet.\n  Create one  ws profile-create <name>\n"},
+	{name: "ws profiles --json: none", args: []string{"profiles", "--json"}, setup: withoutProfiles, stdout: "[]\n"},
+}
+
+// withoutProfiles empties the fixture's profiles directory.
+func withoutProfiles(t *testing.T, fx streamsFixture) {
+	t.Helper()
+	dir := filepath.Join(fx.home, ".config", "workspaces", "profiles")
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // withoutWorkspaces empties the fixture's workspaces directory.
@@ -310,6 +376,10 @@ func TestStreams(t *testing.T) {
 			code, stdout, stderr := runStreamsChild(t, fx, row)
 			if row.after != nil {
 				row.after(t, fx)
+			}
+			if row.check != nil {
+				row.check(t, stdout)
+				stdout = row.stdout
 			}
 			if code != row.code || stdout != row.stdout || stderr != row.stderr {
 				t.Errorf("exit %d\n--- stdout:\n%s--- stderr:\n%s\nwant exit %d\n--- stdout:\n%s--- stderr:\n%s",

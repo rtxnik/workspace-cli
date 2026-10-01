@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/x/term"
 	"github.com/mattn/go-isatty"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
@@ -27,11 +26,6 @@ var profilesCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if len(profiles) == 0 {
-			output.Info("No profiles found")
-			return nil
-		}
-
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		if jsonFlag {
 			type profileJSON struct {
@@ -47,33 +41,42 @@ var profilesCmd = &cobra.Command{
 					Tools:     p.Tools,
 				})
 			}
-			output.JSON(items)
-			return nil
+			return output.WriteJSON(cmd.OutOrStdout(), items)
 		}
 
-		// Truncate long tool lists based on terminal width.
-		maxTools := 40
-		if w, _, err := term.GetSize(0); err == nil && w > 80 {
-			maxTools = w - 50
+		s := output.Out()
+		if len(profiles) == 0 {
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), output.Empty{Subject: "profiles", Steps: []output.Remedy{
+				{Label: "Create one", Cmd: "ws profile-create <name>"},
+			}}.Render(s))
+			return err
 		}
-
-		rows := make([][]string, 0, len(profiles))
-		for _, p := range profiles {
-			tools := p.Tools
-			if len(tools) > maxTools {
-				tools = tools[:maxTools-1] + "…"
-			}
-			name := output.StyleAqua.Render(p.Name)
-			image := output.StyleDim.Render(p.BaseImage)
-			rows = append(rows, []string{name, image, tools})
+		t, err := profilesTable(profiles)
+		if err != nil {
+			return err
 		}
-
-		t := output.NewTable([]string{"NAME", "BASE IMAGE", "TOOLS"}).
-			Rows(rows...)
-
-		fmt.Println(t)
-		return nil
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), t.Render(s))
+		return err
 	},
+}
+
+// profilesTable is ws profiles' table, NAME, BASE IMAGE and TOOLS, with its
+// caption. The tool list is cut by the allocator at the width of the stream
+// it is rendered on, and not at all in a pipe.
+func profilesTable(profiles []profile.Info) (output.Table, error) {
+	t, err := output.NewTableBlock([]output.Col{
+		{Title: "NAME", Prio: 1, Min: 6, Trunc: output.TruncMid},
+		{Title: "BASE IMAGE", Prio: 3, Min: 12, Trunc: output.TruncHead},
+		{Title: "TOOLS", Prio: 2, Min: 12, Trunc: output.TruncTail},
+	}, nil)
+	if err != nil {
+		return output.Table{}, err
+	}
+	for _, p := range profiles {
+		t.Rows = append(t.Rows, []output.Cell{output.Text(p.Name), output.Text(p.BaseImage), output.Text(p.Tools)})
+	}
+	t.Caption = countOf(len(profiles), "profile", "profiles")
+	return t, nil
 }
 
 var profileCreateCmd = &cobra.Command{
