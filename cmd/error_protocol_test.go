@@ -168,7 +168,8 @@ var errorCases = []errorCase{
 	{name: "runtime/proxy-test-not-running", args: []string{"proxy", "test"}},
 	{name: "runtime/proxy-fix-routes-not-running", args: []string{"proxy", "fix-routes"}},
 
-	// A body that renders its own error box, then leaves with exit 1.
+	// A body that refuses with the Problem it returns, exit 1; it rendered
+	// its own error box before phase 3.
 	{name: "body-exit/start-not-found", args: []string{"start", "nope"}},
 	{name: "body-exit/new-exists", args: []string{"new", "wsx"}, workspace: "wsx"},
 

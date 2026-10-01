@@ -17,6 +17,7 @@ import (
 
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
 // The stream matrix: which stream each command writes what to, in a pipe.
@@ -248,6 +249,8 @@ var streamsRows = []streamsRow{
 			"  [12:01:30] info stop api: step one\n" +
 			"  [12:01:31] info stop api: step two\n" +
 			"  [12:01:32] fatal stop api: denied: requested access to the resource is denied\n"},
+	{name: "ws start: missing", args: []string{"start", "nosuch"}, code: 1,
+		stderr: "✗ Workspace \"nosuch\" not found\n\n  1. List workspaces  ws list\n  2. Create it        ws new nosuch\n"},
 	{name: "ws delete --force: missing", args: []string{"delete", "--force", "nosuch"}, code: 1, stderr: deleteNotFound},
 	{name: "ws delete: missing, no confirmation", args: []string{"delete", "nosuch"}, code: 1, stderr: deleteNotFound},
 	{name: "ws delete: devpod delete fails", args: []string{"delete", "--force", "ops"}, env: []string{"FAKE_DEVPOD=fail"},
@@ -487,6 +490,35 @@ func TestWorkspaceState(t *testing.T) {
 	} {
 		if st, word := workspaceState(c.status); st != c.st || word != c.word {
 			t.Errorf("workspaceState(%q) = (%d, %q); want (%d, %q)", c.status, st, word, c.st, c.word)
+		}
+	}
+}
+
+// TestWorkspaceRefusalsReturnTheirProblem runs each refusal in process: the
+// command returns the error that carries its Problem, for the root to print.
+// A command printing the Problem itself and returning an empty exit is byte
+// for byte the same in a pipe, which is why the streams cannot tell.
+func TestWorkspaceRefusalsReturnTheirProblem(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WORKSPACES_DIR", dir)
+	if err := os.Mkdir(filepath.Join(dir, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		cmd   *cobra.Command
+		args  []string
+		title string
+		next  output.Remedy
+	}{
+		{newCmd, []string{"api"}, `Workspace "api" already exists`, output.Remedy{Label: "List workspaces", Cmd: "ws list"}},
+		{startCmd, []string{"nosuch"}, `Workspace "nosuch" not found`, output.Remedy{Label: "Create it", Cmd: "ws new nosuch"}},
+		{deleteCmd, []string{"nosuch"}, `Workspace "nosuch" not found`, output.Remedy{Label: "Remove it from devpod", Cmd: "devpod delete nosuch"}},
+	} {
+		err := c.cmd.RunE(c.cmd, c.args)
+		p, ok := output.ProblemOf(err)
+		if !ok || p.Title != c.title || len(p.Steps) != 2 || p.Steps[1] != c.next {
+			t.Errorf("ws %s %s returned %v (Problem %+v); want the error carrying %q with the step %+v",
+				c.cmd.Name(), c.args[0], err, p, c.title, c.next)
 		}
 	}
 }

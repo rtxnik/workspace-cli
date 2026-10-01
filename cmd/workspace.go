@@ -39,11 +39,7 @@ var newCmd = &cobra.Command{
 		}
 
 		if workspace.Exists(cfg, name) {
-			fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
-				Title:       fmt.Sprintf("Workspace %q already exists", name),
-				Suggestions: []string{"Choose a different name", fmt.Sprintf("Delete existing: ws delete %s", name)},
-			}))
-			return &cliErrorWithExit{code: 1, msg: ""}
+			return workspaceExists(name)
 		}
 
 		var profile string
@@ -166,6 +162,25 @@ func workspaceState(status string) (output.State, string) {
 	}
 }
 
+// workspaceNotFound is the error of a command on a workspace that is not
+// there, carrying its Problem: list the workspaces, or take next, the step
+// that fits the command.
+func workspaceNotFound(name string, next output.Remedy) error {
+	return &output.ProblemError{P: output.Problem{
+		Title: fmt.Sprintf("Workspace %q not found", name),
+		Steps: []output.Remedy{{Label: "List workspaces", Cmd: "ws list"}, next},
+	}}
+}
+
+// workspaceExists is the error of ws new for a name already taken, carrying
+// its Problem.
+func workspaceExists(name string) error {
+	return &output.ProblemError{P: output.Problem{
+		Title: fmt.Sprintf("Workspace %q already exists", name),
+		Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete " + name}, {Label: "List workspaces", Cmd: "ws list"}},
+	}}
+}
+
 // countOf is "1 workspace" or "5 workspaces".
 func countOf(n int, one, many string) string {
 	if n == 1 {
@@ -208,11 +223,7 @@ var startCmd = &cobra.Command{
 			return err
 		}
 		if !workspace.Exists(cfg, name) {
-			fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
-				Title:       fmt.Sprintf("Workspace %q not found", name),
-				Suggestions: []string{"List workspaces: ws list", fmt.Sprintf("Create it: ws new %s", name)},
-			}))
-			return &cliErrorWithExit{code: 1, msg: ""}
+			return workspaceNotFound(name, output.Remedy{Label: "Create it", Cmd: "ws new " + name})
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 		return output.Run(
@@ -267,13 +278,7 @@ var deleteCmd = &cobra.Command{
 		// A workspace that is not there is refused before the confirmation,
 		// with or without --force.
 		if !workspace.Exists(cfg, name) {
-			return &output.ProblemError{P: output.Problem{
-				Title: fmt.Sprintf("Workspace %q not found", name),
-				Steps: []output.Remedy{
-					{Label: "List workspaces", Cmd: "ws list"},
-					{Label: "Remove it from devpod", Cmd: "devpod delete " + name},
-				},
-			}}
+			return workspaceNotFound(name, output.Remedy{Label: "Remove it from devpod", Cmd: "devpod delete " + name})
 		}
 
 		force, _ := cmd.Flags().GetBool("force")

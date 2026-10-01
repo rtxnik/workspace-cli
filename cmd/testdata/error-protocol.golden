@@ -257,23 +257,19 @@ exit 1
 === body-exit/start-not-found
 exit 1
 --- stdout (0 bytes)
---- stderr (352 bytes)
-|╭───────────────────────────────╮
-|│ Workspace "nope" not found    │
-|│                               │
-|│   1. List workspaces: ws list │
-|│   2. Create it: ws new nope   │
-|╰───────────────────────────────╯
+--- stderr (96 bytes)
+|✗ Workspace "nope" not found
+|
+|  1. List workspaces  ws list
+|  2. Create it        ws new nope
 === body-exit/new-exists
 exit 1
 --- stdout (0 bytes)
---- stderr (412 bytes)
-|╭─────────────────────────────────────╮
-|│ Workspace "wsx" already exists      │
-|│                                     │
-|│   1. Choose a different name        │
-|│   2. Delete existing: ws delete wsx │
-|╰─────────────────────────────────────╯
+--- stderr (102 bytes)
+|✗ Workspace "wsx" already exists
+|
+|  1. Delete it        ws delete wsx
+|  2. List workspaces  ws list
 === runtime/delete-not-found
 exit 1
 --- stdout (0 bytes)
