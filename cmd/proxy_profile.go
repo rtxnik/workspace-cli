@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
@@ -97,6 +99,7 @@ var profileListCmd = &cobra.Command{
 		// UUID. hy2 auth/obfs are never surfaced by list — the raw superset
 		// carries them, but neither the table nor the JSON row does (D-13:
 		// dp.UUID is empty for hy2, and ProfileSummary omits every secret).
+		var rows []proxyProfileRow
 		if reveal {
 			details, err := xray.ListProfilesDetailed(cfg)
 			if err != nil {
@@ -107,45 +110,91 @@ var profileListCmd = &cobra.Command{
 					xray.ProfileSummary
 					UUIDFull string `json:"uuid_full,omitempty"`
 				}
-				rows := make([]fullRow, 0, len(details))
+				full := make([]fullRow, 0, len(details))
 				for _, dp := range details {
-					rows = append(rows, fullRow{ProfileSummary: dp.Summary(), UUIDFull: dp.UUID})
+					full = append(full, fullRow{ProfileSummary: dp.Summary(), UUIDFull: dp.UUID})
 				}
-				output.JSON(rows)
-				return nil
+				return output.WriteJSON(cmd.OutOrStdout(), full)
 			}
-			t := output.NewTable([]string{"ACTIVE", "NAME", "TRANSPORT", "ADDRESS:PORT", "SNI", "UUID"})
 			for _, dp := range details {
-				active := ""
-				if dp.Active {
-					active = "*"
-				}
-				t.Row(active, dp.Name, dp.Transport, fmt.Sprintf("%s:%d", dp.Address, dp.Port), dp.SNI, dp.UUID)
+				rows = append(rows, proxyProfileRow{dp.Active, dp.Name, dp.Transport, dp.Address, dp.Port, dp.SNI, dp.UUID})
 			}
-			fmt.Println(t)
-			return nil
+		} else {
+			// Default (masked) path.
+			profiles, err := xray.ListProfiles(cfg)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				return output.WriteJSON(cmd.OutOrStdout(), profiles)
+			}
+			for _, p := range profiles {
+				rows = append(rows, proxyProfileRow{p.Active, p.Name, p.Transport, p.Address, p.Port, p.SNI, p.UUIDMasked})
+			}
 		}
 
-		// Default (masked) path.
-		profiles, err := xray.ListProfiles(cfg)
+		s := output.Out()
+		if len(rows) == 0 {
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), output.Empty{Subject: "proxy profiles", Steps: []output.Remedy{
+				{Label: "Initialize", Cmd: "ws proxy init <proxy-uri>"},
+				{Label: "Add one", Cmd: "ws proxy profile add <name> <vless-uri>"},
+			}}.Render(s))
+			return err
+		}
+		t, err := proxyProfileTable(rows, reveal)
 		if err != nil {
 			return err
 		}
-		if jsonFlag {
-			output.JSON(profiles)
-			return nil
-		}
-		t := output.NewTable([]string{"ACTIVE", "NAME", "TRANSPORT", "ADDRESS:PORT", "SNI", "UUID"})
-		for _, p := range profiles {
-			active := ""
-			if p.Active {
-				active = "*"
-			}
-			t.Row(active, p.Name, p.Transport, fmt.Sprintf("%s:%d", p.Address, p.Port), p.SNI, p.UUIDMasked)
-		}
-		fmt.Println(t)
-		return nil
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), t.Render(s))
+		return err
 	},
+}
+
+// proxyProfileRow is one row of ws proxy profile list: the masked UUID, or
+// the whole one under --reveal.
+type proxyProfileRow struct {
+	active                bool
+	name, transport, addr string
+	port                  int
+	sni, uuid             string
+}
+
+// proxyProfileTable is ws proxy profile list's table, ACTIVE, NAME,
+// TRANSPORT, ADDRESS:PORT, SNI and UUID, with its caption. Under --reveal the
+// whole UUID outranks every column but ACTIVE and NAME, and is shown whole
+// or not at all: a cut UUID is useless. An address is joined to its port as
+// a host and port are, so an IPv6 address is bracketed.
+func proxyProfileTable(rows []proxyProfileRow, reveal bool) (output.Table, error) {
+	transport := output.Col{Title: "TRANSPORT", Prio: 3, Min: 4, Atomic: true}
+	address := output.Col{Title: "ADDRESS:PORT", Prio: 2, Min: 12, Trunc: output.TruncHead}
+	sni := output.Col{Title: "SNI", Prio: 4, Min: 10, Trunc: output.TruncHead}
+	uuid := output.Col{Title: "UUID", Prio: 5, Min: 8, Trunc: output.TruncTail}
+	if reveal {
+		uuid = output.Col{Title: "UUID", Prio: 2, Min: 36, Atomic: true}
+		address.Prio, transport.Prio, sni.Prio = 3, 4, 5
+	}
+	t, err := output.NewTableBlock([]output.Col{
+		{Title: "ACTIVE", Prio: 1, Min: 4, Atomic: true, Kind: output.ColState},
+		{Title: "NAME", Prio: 1, Min: 8, Trunc: output.TruncMid},
+		transport, address, sni, uuid,
+	}, nil)
+	if err != nil {
+		return output.Table{}, err
+	}
+	active := ""
+	for _, r := range rows {
+		state := output.Mark(output.StateIdle, "no")
+		if r.active {
+			state, active = output.Mark(output.StateOK, "yes"), r.name
+		}
+		t.Rows = append(t.Rows, []output.Cell{state, output.Text(r.name), output.Text(r.transport),
+			output.Text(net.JoinHostPort(r.addr, strconv.Itoa(r.port))), output.Text(r.sni), output.Text(r.uuid)})
+	}
+	t.Caption = countOf(len(rows), "profile", "profiles") + ", none active"
+	if active != "" {
+		t.Caption = countOf(len(rows), "profile", "profiles") + ", active " + active
+	}
+	return t, nil
 }
 
 var profileUseCmd = &cobra.Command{

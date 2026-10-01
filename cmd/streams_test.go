@@ -55,6 +55,13 @@ var fixtureProfiles = []struct{ name, image, tools string }{
 	{"zig", "debian:bookworm-slim", "zig, zls"},
 }
 
+// fixtureXrayProfiles are the fixture's proxy profiles; primary is active,
+// and backup-nl's address is IPv6.
+var fixtureXrayProfiles = []struct{ name, addr, port, network, sni, uuid string }{
+	{"primary", "de-fra-01.example-vpn.net", "443", "tcp", "www.microsoft.com", "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b"},
+	{"backup-nl", "2001:db8:85a3::8a2e:370:7334", "8443", "ws", "cdn.jsdelivr.net", "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"},
+}
+
 // fakeDevpod is the devpod the fixture puts on PATH. devpod knows four of the
 // five workspaces; legacy-billing has never been created.
 const fakeDevpod = `#!/bin/sh
@@ -122,6 +129,21 @@ func newStreamsFixture(t *testing.T) streamsFixture {
 		if err := os.WriteFile(filepath.Join(dir, "mise.toml"), []byte(mise), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	xrayProfiles := filepath.Join(fx.home, ".config", "xray", "profiles")
+	if err := os.MkdirAll(xrayProfiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range fixtureXrayProfiles {
+		body := `{"outbounds":[{"tag":"proxy-1","protocol":"vless","settings":{"vnext":[{"address":"` + p.addr +
+			`","port":` + p.port + `,"users":[{"id":"` + p.uuid + `","encryption":"none"}]}]},"streamSettings":{"network":"` +
+			p.network + `","security":"reality","realitySettings":{"serverName":"` + p.sni + `","publicKey":"pk","shortId":"ab"}}}]}` + "\n"
+		if err := os.WriteFile(filepath.Join(xrayProfiles, p.name+".json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("profiles", "primary.json"), filepath.Join(fx.home, ".config", "xray", "config.json")); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.MkdirAll(fx.bin, 0o755); err != nil {
 		t.Fatal(err)
@@ -314,6 +336,50 @@ var streamsRows = []streamsRow{
 	{name: "ws profiles: none", args: []string{"profiles"}, setup: withoutProfiles,
 		stdout: "No profiles yet.\n  Create one  ws profile-create <name>\n"},
 	{name: "ws profiles --json: none", args: []string{"profiles", "--json"}, setup: withoutProfiles, stdout: "[]\n"},
+	{name: "ws proxy profile list: two profiles", args: []string{"proxy", "profile", "list"}, env: []string{"COLUMNS="},
+		check: func(t *testing.T, stdout string) {
+			for _, want := range []string{"│ ✓ yes  │ primary ", "│ - no   │ backup-nl ", " [2001:db8:85a3::8a2e:370:7334]:8443 ",
+				" de-fra-01.example-vpn.net:443 ", "╯\n2 profiles, active primary\n"} {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("stdout lacks %q:\n%s", want, stdout)
+				}
+			}
+		}},
+	{name: "ws proxy profile list --reveal: two profiles", args: []string{"proxy", "profile", "list", "--reveal"}, env: []string{"COLUMNS="},
+		check: func(t *testing.T, stdout string) {
+			want := []string{"│ ✓ yes  │ primary ", "│ - no   │ backup-nl ", " [2001:db8:85a3::8a2e:370:7334]:8443 ",
+				"╯\n2 profiles, active primary\n"}
+			for _, p := range fixtureXrayProfiles {
+				want = append(want, " "+p.uuid+" ")
+			}
+			for _, w := range want {
+				if !strings.Contains(stdout, w) {
+					t.Errorf("stdout lacks %q:\n%s", w, stdout)
+				}
+			}
+		}},
+	{name: "ws proxy profile list: none", args: []string{"proxy", "profile", "list"}, setup: withoutXrayProfiles,
+		stdout: proxyProfilesEmpty},
+	{name: "ws proxy profile list --reveal: none", args: []string{"proxy", "profile", "list", "--reveal"}, setup: withoutXrayProfiles,
+		stdout: proxyProfilesEmpty},
+	{name: "ws proxy profile list --json: none", args: []string{"proxy", "profile", "list", "--json"}, setup: withoutXrayProfiles,
+		stdout: "[]\n"},
+	{name: "ws proxy profile list --reveal --json: none", args: []string{"proxy", "profile", "list", "--reveal", "--json"},
+		setup: withoutXrayProfiles, stdout: "[]\n"},
+}
+
+// proxyProfilesEmpty is what ws proxy profile list answers with no profile.
+const proxyProfilesEmpty = "No proxy profiles yet.\n" +
+	"  Initialize  ws proxy init <proxy-uri>\n" +
+	"  Add one     ws proxy profile add <name> <vless-uri>\n"
+
+// withoutXrayProfiles removes the fixture's proxy profiles and its xray
+// configuration.
+func withoutXrayProfiles(t *testing.T, fx streamsFixture) {
+	t.Helper()
+	if err := os.RemoveAll(filepath.Join(fx.home, ".config", "xray")); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // withoutProfiles empties the fixture's profiles directory.

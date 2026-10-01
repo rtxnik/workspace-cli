@@ -85,7 +85,7 @@ Swaps the symlink only, does not touch the container. xray keeps running the pre
 ## Inspecting profiles
 
 ```bash
-ws proxy profile list                # table view (active marked with *)
+ws proxy profile list                # table view (ACTIVE reads ✓ yes or - no)
 ws proxy profile list --json         # machine-readable
 ws proxy profile show secondary      # masked (UUID, REALITY private key hidden)
 ws proxy profile show secondary --reveal   # unmasked
