@@ -17,9 +17,9 @@ import (
 // (§4.1).
 
 // Fact is an ordered key/value pair. The blocks that carry Facts hold them in
-// a slice and not a map because RenderError in error.go ranges over a map
-// today and Go randomises map iteration, so the same failure prints its
-// context in a different order every run.
+// a slice and not a map: Go randomises map iteration, so a map would print
+// the same failure's context in a different order every run, as the error box
+// the Problem replaced did.
 type Fact struct{ K, V string }
 
 // Remedy is a next step: a short label and a copy-pasteable command.
@@ -46,9 +46,7 @@ type Table struct {
 //
 // §4.3 rejects at construction a Col set whose forced chrome plus its
 // un-droppable Min widths cannot fit MinWidth, so that case is reachable only
-// through a programming error. The constructor is not named NewTable because
-// table.go already exports `NewTable(headers []string) *table.Table`, live at
-// six call sites under cmd/ until the table migration retires it.
+// through a programming error.
 func NewTableBlock(cols []Col, rows [][]Cell) (Table, error) {
 	if err := validateCols(cols); err != nil {
 		return Table{}, err
