@@ -45,8 +45,3 @@ func Select(title string, options []SelectOption) (string, bool, error) {
 	}
 	return selected, true, nil
 }
-
-// StatusLabel formats a workspace status for display in the selector.
-func StatusLabel(name, status string) string {
-	return fmt.Sprintf("%s  %s", name, StatusText(status))
-}

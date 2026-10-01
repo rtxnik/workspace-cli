@@ -459,13 +459,18 @@ func selectWorkspace() (string, bool, error) {
 		return "", false, errors.New("no workspaces found")
 	}
 
+	// huh draws its forms on stderr, so the labels are rendered for it.
+	return output.Select("Select workspace:", workspaceOptions(output.Err(), workspaces))
+}
+
+// workspaceOptions labels each workspace "<name>  <mark> <word>" for s, with
+// ws list's state vocabulary.
+func workspaceOptions(s *output.Stream, workspaces []workspace.Info) []output.SelectOption {
 	opts := make([]output.SelectOption, 0, len(workspaces))
 	for _, ws := range workspaces {
-		label := output.StatusLabel(ws.Name, strings.ToLower(ws.Status))
-		opts = append(opts, output.SelectOption{Label: label, Value: ws.Name})
+		opts = append(opts, output.SelectOption{Label: ws.Name + "  " + s.StateText(workspaceState(ws.Status)), Value: ws.Name})
 	}
-
-	return output.Select("Select workspace:", opts)
+	return opts
 }
 
 func init() {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/workspace"
 )
 
 // The stream matrix: which stream each command writes what to, in a pipe.
@@ -485,6 +487,30 @@ func TestWorkspaceState(t *testing.T) {
 	} {
 		if st, word := workspaceState(c.status); st != c.st || word != c.word {
 			t.Errorf("workspaceState(%q) = (%d, %q); want (%d, %q)", c.status, st, word, c.st, c.word)
+		}
+	}
+}
+
+// TestWorkspaceOptions pins the selector's labels of ws ssh and ws code: the
+// name, two spaces, and ws list's mark and word for the stream given.
+func TestWorkspaceOptions(t *testing.T) {
+	workspaces := []workspace.Info{{Name: "api", Status: "Running"}, {Name: "ops", Status: "Stopped"},
+		{Name: "legacy-billing", Status: ""}, {Name: "ml-training", Status: "Busy"}, {Name: "web", Status: "Rebuilding"}}
+	for _, c := range []struct {
+		ascii bool
+		want  []string
+	}{
+		{false, []string{"api  ✓ running", "ops  - stopped", "legacy-billing  - not created", "ml-training  ~ busy", "web  ? rebuilding"}},
+		{true, []string{"api  + running", "ops  - stopped", "legacy-billing  - not created", "ml-training  ~ busy", "web  ? rebuilding"}},
+	} {
+		opts := workspaceOptions(output.NewStreamAt(io.Discard, 80, false, output.ColourNone, c.ascii), workspaces)
+		if len(opts) != len(workspaces) {
+			t.Fatalf("ascii=%v: %d options for %d workspaces", c.ascii, len(opts), len(workspaces))
+		}
+		for i, o := range opts {
+			if o.Label != c.want[i] || o.Value != workspaces[i].Name {
+				t.Errorf("ascii=%v: option %d = {%q, %q}; want {%q, %q}", c.ascii, i, o.Label, o.Value, c.want[i], workspaces[i].Name)
+			}
 		}
 	}
 }
