@@ -26,6 +26,6 @@ jobs:
         uses: ./.github/actions/setup-yq
       - name: Validate workflow security (A5)
         run: bash scripts/ci/validate-workflow-security.sh
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
       - name: zizmor (workflow-security depth — second hard gate)
         run: uvx zizmor@1.25.2 --offline --persona regular .github/workflows/ .github/actions/
