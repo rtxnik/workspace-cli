@@ -123,7 +123,15 @@ type runner struct {
 	// sends it to the process.
 	signals func() (sigs <-chan os.Signal, stop func())
 	die     func(sig os.Signal)
-	hooks   runnerHooks
+	// quietPipe makes a write to a stream whose reader is gone fail with
+	// EPIPE instead of killing the process with SIGPIPE, for a signal's
+	// drain: off a terminal the pipeline's reader may have died of the
+	// same signal, and the process must die of the one it caught.
+	quietPipe func()
+	// grace is how long a second signal waits for the first one's drain
+	// before it ends the process.
+	grace time.Duration
+	hooks runnerHooks
 
 	// The task state the owner and an interrupt share. Nothing is written
 	// while mu is held.
@@ -200,6 +208,8 @@ func newRunner(s *Stream) *runner {
 			signal.Notify(c, caught...)
 			return c, func() { signal.Stop(c) }
 		},
+		quietPipe: func() { signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE) },
+		grace:     time.Second,
 		die: func(sig os.Signal) {
 			signal.Reset(sig)
 			num, _ := sig.(syscall.Signal)
@@ -423,8 +433,11 @@ func (r *runner) halt() error {
 }
 
 // watch waits for a signal while Run runs. A signal already delivered when
-// Run finishes is still handled, not dropped; a second one while the first
-// is drained dies at once.
+// Run finishes is still handled, not dropped. A second one while the first
+// is drained ends the process once the drain has had grace to finish: one
+// event can send two signals — systemd's SIGTERM and then SIGHUP, timeout's
+// to the process and then to its group — and the second must not cut the
+// first one's drain short.
 func (r *runner) watch(sigs <-chan os.Signal, quit <-chan struct{}) {
 	var sig os.Signal
 	select {
@@ -444,8 +457,12 @@ func (r *runner) watch(sigs <-chan os.Signal, quit <-chan struct{}) {
 	select {
 	case <-interrupted:
 	case again := <-sigs:
-		r.die(again)
-		<-interrupted
+		select {
+		case <-interrupted:
+		case <-time.After(r.grace):
+			r.die(again)
+			<-interrupted
+		}
 	}
 }
 
@@ -453,6 +470,9 @@ func (r *runner) watch(sigs <-chan os.Signal, quit <-chan struct{}) {
 // or a drain the owner has begun, drains a task still running with the
 // interrupted line, and dies of sig.
 func (r *runner) interrupt(sig os.Signal) {
+	if r.quietPipe != nil {
+		r.quietPipe()
+	}
 	r.mu.Lock()
 	r.pending = true
 	for r.state == taskStarting || r.state == taskDraining {
