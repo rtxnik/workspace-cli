@@ -22,9 +22,11 @@ import (
 //
 // One owner. The outermost Run owns the frame, the queue and the ticker for
 // its whole duration; a Run called inside a task neither draws nor drains,
-// and its lines join the owner's queue. Each task passes through three
+// and its lines join the owner's queue. Each task passes through four
 // states:
 //
+//   - Starting. The owner has claimed the task and writes its start line or
+//     its first frame; a signal waits until it is written.
 //   - Running. The ticker redraws the frame. A message helper appends to the
 //     queue under the queue's lock and returns. No lock is held while
 //     anything is written, and neither the log nor a message helper calls
@@ -37,14 +39,23 @@ import (
 //     written directly and after the drained ones.
 //   - Closed. The next task starts, or Run returns.
 //
-// SIGINT and a panic take the same path out, from whichever state the task
-// is in. On a terminal, if SIGINT is not ignored when Run starts, the owner
-// catches it: it drains as above with the result line "✗ <title>
-// interrupted after <time>", then restores SIGINT's default disposition and
-// sends it to itself, so the process still dies of the signal — 130 to the
-// shell. The child received SIGINT from the terminal too, and keeps writing
-// to its log, which is a file and not a pipe. Off a terminal nothing is
-// caught.
+// A signal and a panic take the same path out, from whichever state the task
+// is in. The owner catches SIGINT, SIGTERM and SIGHUP — each one that is not
+// ignored when Run starts, so `ws … &` from a script stays deaf to SIGINT —
+// on a terminal and off it: the messages a task queued would otherwise die
+// with the process. It drains as above with the result line "✗ <title>
+// interrupted after <time>", then restores the signal's default disposition
+// and sends it to itself, so the process still dies of the signal — 130 to
+// the shell for SIGINT. A child received a terminal's SIGINT too, and keeps
+// writing to its log, which is a file and not a pipe. A task is claimed
+// before anything of it is written, so a signal between two tasks leaves no
+// frame behind and starts no further task; a second signal while the drain
+// is written ends the process at once, as a stream that does not drain — a
+// terminal stopped with Ctrl-S — would otherwise hold the first one back.
+//
+// The message helpers are called from the goroutine that called Run or from
+// a task, not from a goroutine of their own that outlives one: a message is
+// queued or written directly as the gate stands when it is called.
 
 // Task is one step the runner shows progress for. Run receives the step's
 // log: what a child or the task writes there feeds the live line and the
@@ -91,27 +102,29 @@ func Run(tasks ...Task) error {
 	return newRunner(Err()).run(tasks)
 }
 
-// runner is one call of Run. Its clock, its ticker and its SIGINT are seams:
-// the tests drive the frame with a clock and ticks of their own, and an
-// interrupt with a channel of their own and a die that returns.
+// runner is one call of Run. Its clock, its ticker and its signals are
+// seams: the tests drive the frame with a clock and ticks of their own, and
+// an interrupt with a channel of their own and a die that returns.
 type runner struct {
 	s    *Stream
 	now  func() time.Time
 	tick func() (ticks <-chan time.Time, stop func())
-	// signals starts catching SIGINT and returns its channel, and the
-	// function that stops catching it; a nil channel catches nothing. die
-	// restores SIGINT's default disposition and sends it to the process.
-	signals func() (sigint <-chan os.Signal, stop func())
-	die     func()
+	// signals starts catching the signals the runner drains for and returns
+	// their channel, and the function that stops catching them; a nil
+	// channel catches nothing. die restores sig's default disposition and
+	// sends it to the process.
+	signals func() (sigs <-chan os.Signal, stop func())
+	die     func(sig os.Signal)
 	hooks   runnerHooks
 
 	// The task state the owner and an interrupt share. Nothing is written
 	// while mu is held.
-	mu    sync.Mutex
-	cond  *sync.Cond
-	state taskState
-	cur   current
-	dead  chan struct{} // closed when die returns, which it does only in a test
+	mu      sync.Mutex
+	cond    *sync.Cond
+	state   taskState
+	pending bool // a signal was caught: no further task is claimed
+	cur     current
+	dead    chan struct{} // closed when die returns, which it does only in a test
 }
 
 // taskState is where the running task is in the ownership protocol.
@@ -119,6 +132,9 @@ type taskState int
 
 const (
 	taskClosed taskState = iota
+	// taskStarting is a claimed task whose start line or first frame the
+	// owner is writing.
+	taskStarting
 	taskRunning
 	taskDraining
 	taskInterrupted
@@ -140,9 +156,10 @@ var errInterrupted = errors.New("interrupted")
 // Each is nil in production.
 type runnerHooks struct {
 	redrawn      func() // the ticker goroutine has written a redraw
+	starting     func() // the owner has claimed a task and written nothing of it yet
 	drainTook    func() // the owner has taken a batch of the queue, and not yet written it
 	draining     func() // the owner has taken the drain from the running task
-	watcherWaits func() // an interrupt waits for the owner's drain; called with mu held
+	watcherWaits func() // an interrupt waits for the owner's start or drain; called with mu held
 }
 
 // frameInterval is how often the frame is redrawn.
@@ -159,23 +176,34 @@ func newRunner(s *Stream) *runner {
 		signals: func() (<-chan os.Signal, func()) {
 			// Catching a signal the process was started with ignored would
 			// start delivering it: `ws … &` from a script must stay deaf.
-			if signal.Ignored(os.Interrupt) {
+			var caught []os.Signal
+			for _, sig := range drainedSignals {
+				if !signal.Ignored(sig) {
+					caught = append(caught, sig)
+				}
+			}
+			if len(caught) == 0 {
 				return nil, func() {}
 			}
-			c := make(chan os.Signal, 1)
-			signal.Notify(c, os.Interrupt)
+			c := make(chan os.Signal, len(caught))
+			signal.Notify(c, caught...)
 			return c, func() { signal.Stop(c) }
 		},
-		die: func() {
-			signal.Reset(os.Interrupt)
-			_ = syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+		die: func(sig os.Signal) {
+			signal.Reset(sig)
+			num, _ := sig.(syscall.Signal)
+			_ = syscall.Kill(syscall.Getpid(), num)
 			// The signal ends the process. Should it not within a second,
-			// exit with the status a shell gives a death by SIGINT.
+			// exit with the status a shell gives a death by that signal.
 			time.Sleep(time.Second)
-			os.Exit(130)
+			os.Exit(128 + int(num))
 		},
 	}
 }
+
+// drainedSignals are the signals the owner catches, drains the running task
+// for, and then dies of.
+var drainedSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 
 // owner is what the outermost Run holds for its whole duration: the queue and
 // its gate, and the running task's log for a Run nested inside it.
@@ -220,16 +248,12 @@ func (r *runner) run(tasks []Task) error {
 		owner.mu.Unlock()
 	}()
 	r.cond, r.dead = sync.NewCond(&r.mu), make(chan struct{})
-	if r.s.IsTTY() && r.signals != nil {
-		if sigint, stop := r.signals(); sigint != nil {
+	if r.signals != nil {
+		if sigs, stop := r.signals(); sigs != nil {
 			quit, done := make(chan struct{}), make(chan struct{})
 			go func() {
 				defer close(done)
-				select {
-				case <-quit:
-				case <-sigint:
-					r.interrupt()
-				}
+				r.watch(sigs, quit)
 			}()
 			defer func() { stop(); close(quit); <-done }()
 		}
@@ -266,6 +290,14 @@ func (r *runner) runTask(t Task) error {
 
 	start := r.now()
 	tty := r.s.IsTTY() || mutants.FrameOffTerminal
+	// The task is claimed before anything of it is written: after a signal
+	// it is not started, and a signal while it starts waits for its frame.
+	if !r.claim() {
+		return r.halt()
+	}
+	if r.hooks.starting != nil {
+		r.hooks.starting()
+	}
 	if !tty {
 		r.writeLine(stepLine(r.s, StateBusy, t.Title, ""))
 	}
@@ -277,13 +309,7 @@ func (r *runner) runTask(t Task) error {
 	if tty {
 		f = r.startFrame(t.Title, start, log)
 	}
-	if !r.enter(current{f: f, title: t.Title, start: start}) {
-		if f != nil {
-			close(f.stop)
-			<-f.done
-		}
-		return r.halt()
-	}
+	r.publish(current{f: f, title: t.Title, start: start})
 
 	// A panic takes the same path out as a failure: the result line and the
 	// queue are written, then the panic goes on.
@@ -324,15 +350,23 @@ func (r *runner) runTask(t Task) error {
 	return nil
 }
 
-// enter publishes the running task, unless an interrupt came first.
-func (r *runner) enter(cur current) bool {
+// claim starts a task, unless a signal came first.
+func (r *runner) claim() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state == taskInterrupted {
+	if r.pending || r.state == taskInterrupted {
 		return false
 	}
-	r.state, r.cur = taskRunning, cur
+	r.state = taskStarting
 	return true
+}
+
+// publish makes the claimed task the running one, its frame drawn.
+func (r *runner) publish(cur current) {
+	r.mu.Lock()
+	r.state, r.cur = taskRunning, cur
+	r.cond.Broadcast()
+	r.mu.Unlock()
 }
 
 // leave takes the drain from the running task, unless an interrupt took it
@@ -367,11 +401,40 @@ func (r *runner) halt() error {
 	return errInterrupted
 }
 
-// interrupt is SIGINT's path: it waits out a drain the owner has begun,
-// drains a task still running with the interrupted line, and dies.
-func (r *runner) interrupt() {
+// watch waits for a signal while Run runs. A signal already delivered when
+// Run finishes is still handled, not dropped; a second one while the first
+// is drained dies at once.
+func (r *runner) watch(sigs <-chan os.Signal, quit <-chan struct{}) {
+	var sig os.Signal
+	select {
+	case sig = <-sigs:
+	case <-quit:
+		select {
+		case sig = <-sigs:
+		default:
+			return
+		}
+	}
+	interrupted := make(chan struct{})
+	go func() {
+		defer close(interrupted)
+		r.interrupt(sig)
+	}()
+	select {
+	case <-interrupted:
+	case again := <-sigs:
+		r.die(again)
+		<-interrupted
+	}
+}
+
+// interrupt is a signal's path: it bars any further task, waits out a start
+// or a drain the owner has begun, drains a task still running with the
+// interrupted line, and dies of sig.
+func (r *runner) interrupt(sig os.Signal) {
 	r.mu.Lock()
-	for r.state == taskDraining {
+	r.pending = true
+	for r.state == taskStarting || r.state == taskDraining {
 		if r.hooks.watcherWaits != nil {
 			r.hooks.watcherWaits()
 		}
@@ -384,7 +447,7 @@ func (r *runner) interrupt() {
 		r.drain(cur.f, stepLine(r.s, StateFail, cur.title,
 			"interrupted after "+elapsedText(r.now().Sub(cur.start))))
 	}
-	r.die()
+	r.die(sig)
 	close(r.dead)
 }
 

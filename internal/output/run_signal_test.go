@@ -9,19 +9,26 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// interruptibleRunner is a terminal runner whose SIGINT is the channel it
-// returns and whose die reports on died and returns.
-func interruptibleRunner(buf *syncBuffer) (r *runner, sigint chan os.Signal, died chan struct{}) {
-	r = testRunner(NewStreamAt(buf, 60, true, ColourNone, false), &fakeClock{}, make(chan time.Time))
-	sigint, died = make(chan os.Signal, 1), make(chan struct{}, 1)
-	r.signals = func() (<-chan os.Signal, func()) { return sigint, func() {} }
-	r.die = func() { died <- struct{}{} }
-	return r, sigint, died
+// interruptibleRunner is a terminal runner whose signals are the channel it
+// returns and whose die reports the signal on died and returns.
+func interruptibleRunner(buf *syncBuffer) (r *runner, sigint chan os.Signal, died chan os.Signal) {
+	return signalledRunner(NewStreamAt(buf, 60, true, ColourNone, false))
+}
+
+// signalledRunner is a runner over s whose signals are the channel it returns
+// and whose die reports the signal on died and returns.
+func signalledRunner(s *Stream) (r *runner, sigs chan os.Signal, died chan os.Signal) {
+	r = testRunner(s, &fakeClock{}, make(chan time.Time))
+	sigs, died = make(chan os.Signal, 2), make(chan os.Signal, 2)
+	r.signals = func() (<-chan os.Signal, func()) { return sigs, func() {} }
+	r.die = func(sig os.Signal) { died <- sig }
+	return r, sigs, died
 }
 
 func waitOrFail(t *testing.T, c <-chan struct{}, what string) {
@@ -30,6 +37,18 @@ func waitOrFail(t *testing.T, c <-chan struct{}, what string) {
 	case <-c:
 	case <-time.After(10 * time.Second):
 		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// waitForDeath is the signal die was called with.
+func waitForDeath(t *testing.T, died <-chan os.Signal, what string) os.Signal {
+	t.Helper()
+	select {
+	case sig := <-died:
+		return sig
+	case <-time.After(10 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		return nil
 	}
 }
 
@@ -56,7 +75,9 @@ func TestInterruptDrainsTheRunningTask(t *testing.T) {
 	}()
 	waitOrFail(t, started, "the task to start")
 	sigint <- os.Interrupt
-	waitOrFail(t, died, "die")
+	if sig := waitForDeath(t, died, "die"); sig != os.Interrupt {
+		t.Errorf("die was called with %v; want the signal caught", sig)
+	}
 	close(release)
 	if err := <-done; !errors.Is(err, errInterrupted) {
 		t.Errorf("run returned %v; want the interrupt", err)
@@ -93,7 +114,7 @@ func TestInterruptWaitsForTheOwnersDrain(t *testing.T) {
 		Warn("written by the owner's drain")
 		return nil
 	}}})
-	waitOrFail(t, died, "die")
+	waitForDeath(t, died, "die")
 	if err != nil {
 		t.Errorf("run returned %v; the task had finished before the interrupt", err)
 	}
@@ -105,15 +126,199 @@ func TestInterruptWaitsForTheOwnersDrain(t *testing.T) {
 	}
 }
 
-// TestNothingIsCaughtOffATerminal: off a terminal SIGINT is left alone.
-func TestNothingIsCaughtOffATerminal(t *testing.T) {
+// TestASignalBetweenTasksStartsNothing: a signal caught while the owner
+// drains a task that another follows starts no further task and draws none
+// of it — whichever of the owner and the interrupt takes the lock first once
+// the drain is written.
+func TestASignalBetweenTasksStartsNothing(t *testing.T) {
 	var buf syncBuffer
-	r := testRunner(NewStreamAt(&buf, 60, false, ColourNone, false), &fakeClock{}, nil)
-	r.signals = func() (<-chan os.Signal, func()) {
-		t.Error("SIGINT is caught off a terminal")
-		return nil, func() {}
+	r, sigint, died := interruptibleRunner(&buf)
+	waiting := make(chan struct{}, 1)
+	r.hooks.watcherWaits = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
 	}
-	_ = r.run([]Task{{Title: "Stopping workspace", Run: ok}})
+	first := true
+	r.hooks.draining = func() {
+		if !first {
+			return
+		}
+		first = false
+		sigint <- os.Interrupt
+		select {
+		case <-waiting:
+		case <-time.After(5 * time.Second):
+			t.Error("the interrupt did not wait for the owner's drain")
+		}
+	}
+	err := r.run([]Task{
+		{Title: "Stopping workspace", Run: ok},
+		{Title: "Starting container", Run: func(*Log) error {
+			t.Error("a task started after the signal")
+			return nil
+		}},
+	})
+	waitForDeath(t, died, "die")
+	if !errors.Is(err, errInterrupted) {
+		t.Errorf("run returned %v; want the interrupt", err)
+	}
+	if want := "⠋ Stopping workspace  0.0s\r\x1b[J✓ Stopping workspace  0.0s\n"; buf.String() != want {
+		t.Errorf("got\n%q\nwant\n%q", buf.String(), want)
+	}
+}
+
+// TestAClaimAfterASignalIsRefused: once a signal is caught no task is
+// claimed, even while the interrupt still waits for the owner's drain to be
+// written — the order in which the two take the lock afterwards does not
+// matter.
+func TestAClaimAfterASignalIsRefused(t *testing.T) {
+	var buf syncBuffer
+	r, _, died := interruptibleRunner(&buf)
+	r.cond, r.dead = sync.NewCond(&r.mu), make(chan struct{})
+	waiting := make(chan struct{}, 1)
+	r.hooks.watcherWaits = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	}
+	r.state = taskDraining
+	go r.interrupt(os.Interrupt)
+	waitOrFail(t, waiting, "the interrupt to wait for the drain")
+	// The drain is written; the interrupt has not taken the lock again.
+	r.mu.Lock()
+	r.state = taskClosed
+	r.mu.Unlock()
+	if r.claim() {
+		t.Error("a task was claimed after a signal was caught")
+	}
+	r.mu.Lock()
+	r.state = taskClosed
+	r.cond.Broadcast()
+	r.mu.Unlock()
+	waitForDeath(t, died, "die")
+}
+
+// TestASignalWhileATaskStartsWaitsForItsFrame: a signal that comes while the
+// owner writes a task's first frame waits for it, then erases it and writes
+// the interrupted line — the frame is never left on screen.
+func TestASignalWhileATaskStartsWaitsForItsFrame(t *testing.T) {
+	var buf syncBuffer
+	r, sigint, died := interruptibleRunner(&buf)
+	waiting := make(chan struct{}, 1)
+	r.hooks.watcherWaits = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	}
+	r.hooks.starting = func() {
+		sigint <- os.Interrupt
+		select {
+		case <-waiting:
+		case <-time.After(5 * time.Second):
+			t.Error("the signal did not wait for the task's start")
+		}
+	}
+	release, done := make(chan struct{}), make(chan error)
+	go func() {
+		done <- r.run([]Task{{Title: "Starting container", Run: func(*Log) error {
+			<-release
+			return nil
+		}}})
+	}()
+	waitForDeath(t, died, "die")
+	close(release)
+	if err := <-done; !errors.Is(err, errInterrupted) {
+		t.Errorf("run returned %v; want the interrupt", err)
+	}
+	if want := "⠋ Starting container  0.0s\r\x1b[J✗ Starting container  interrupted after 0.0s\n"; buf.String() != want {
+		t.Errorf("got\n%q\nwant\n%q", buf.String(), want)
+	}
+}
+
+// TestASecondSignalDiesAtOnce: while the first signal's drain is stuck
+// behind a stream that does not take it, a second signal ends the process.
+func TestASecondSignalDiesAtOnce(t *testing.T) {
+	w := &blockingWriter{trigger: "interrupted after", blocked: make(chan struct{}), release: make(chan struct{})}
+	r, sigs, died := signalledRunner(NewStreamAt(w, 60, true, ColourNone, false))
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error)
+	go func() {
+		done <- r.run([]Task{{Title: "Starting container", Run: func(*Log) error {
+			close(started)
+			<-release
+			return nil
+		}}})
+	}()
+	waitOrFail(t, started, "the task to start")
+	sigs <- os.Interrupt
+	waitOrFail(t, w.blocked, "the interrupted line to block")
+	sigs <- syscall.SIGTERM
+	if sig := waitForDeath(t, died, "the second signal's death"); sig != syscall.SIGTERM {
+		t.Errorf("die was called with %v first; want the second signal, at once", sig)
+	}
+	close(w.release)
+	waitForDeath(t, died, "the first signal's death")
+	close(release)
+	if err := <-done; !errors.Is(err, errInterrupted) {
+		t.Errorf("run returned %v; want the interrupt", err)
+	}
+}
+
+// TestASignalAsRunFinishesIsNotDropped: a signal already delivered when Run
+// finishes is handled — the process dies of it — rather than lost to the
+// watcher's exit. Both are ready at once, so a watcher that chose between
+// them would drop about one in two; it runs 64 times.
+func TestASignalAsRunFinishesIsNotDropped(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		var buf syncBuffer
+		r, _, died := interruptibleRunner(&buf)
+		r.cond, r.dead = sync.NewCond(&r.mu), make(chan struct{})
+		sigs, quit := make(chan os.Signal, 1), make(chan struct{})
+		sigs <- syscall.SIGHUP
+		close(quit)
+		r.watch(sigs, quit)
+		select {
+		case sig := <-died:
+			if sig != syscall.SIGHUP {
+				t.Fatalf("die was called with %v; want the signal delivered", sig)
+			}
+		default:
+			t.Fatalf("run %d: a signal delivered as Run finished was dropped", i)
+		}
+	}
+}
+
+// TestASignalOffATerminalDrainsTheQueue: off a terminal a signal is caught
+// too: the task's queue is written after its interrupted line, in plain
+// lines, and the process dies of that signal.
+func TestASignalOffATerminalDrainsTheQueue(t *testing.T) {
+	var buf syncBuffer
+	r, sigs, died := signalledRunner(NewStreamAt(&buf, 60, false, ColourNone, false))
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error)
+	go func() {
+		done <- r.run([]Task{{Title: "Rebuilding proxy", Run: func(*Log) error {
+			Warn("queued before the signal")
+			close(started)
+			<-release
+			return nil
+		}}})
+	}()
+	waitOrFail(t, started, "the task to start")
+	sigs <- syscall.SIGTERM
+	if sig := waitForDeath(t, died, "die"); sig != syscall.SIGTERM {
+		t.Errorf("die was called with %v; want the signal caught", sig)
+	}
+	close(release)
+	if err := <-done; !errors.Is(err, errInterrupted) {
+		t.Errorf("run returned %v; want the interrupt", err)
+	}
+	want := "~ Rebuilding proxy\n✗ Rebuilding proxy  interrupted after 0.0s\n⚠ queued before the signal\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
 }
 
 const (
@@ -122,16 +327,27 @@ const (
 )
 
 // TestRunSIGINTChild is the far side of TestSIGINT: a runner on a terminal
-// stream over the real stderr, with the real SIGINT, whose task starts a
+// stream over the real stderr, with the real signals, whose task starts a
 // child that traps SIGINT, keeps writing for a second and then writes a
 // marker file. WS_TEST_RUN_SIGINT_CHILD=pipe gives the child a pipe instead
-// of the task's log.
+// of the task's log, =plain runs the runner off a terminal, and =after runs
+// one task to its end and then waits five seconds with Run returned.
 func TestRunSIGINTChild(t *testing.T) {
 	mode := os.Getenv(sigintChildEnv)
 	if mode == "" {
 		t.Skip("child half of TestSIGINT; runs only in the subprocess")
 	}
-	r := newRunner(NewStreamAt(stdWriter{err: true}, 80, true, ColourNone, false))
+	if mode == "after" {
+		r := newRunner(NewStreamAt(stdWriter{err: true}, 80, true, ColourNone, false))
+		if err := r.run([]Task{{Title: "Checking workspace", Run: ok}}); err != nil {
+			fmt.Fprintf(os.Stderr, "RUN-ERROR %v\n", err)
+			os.Exit(3)
+		}
+		fmt.Println("READY")
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
+	}
+	r := newRunner(NewStreamAt(stdWriter{err: true}, 80, mode != "plain", ColourNone, false))
 	err := r.run([]Task{{Title: "Starting container", Run: func(log *Log) error {
 		child := exec.Command("sh", "-c", `trap 'echo cleaning up' INT
 i=0
@@ -176,6 +392,13 @@ echo done > "$WS_TEST_RUN_SIGINT_MARKER"`)
 // child it started wrote its marker.
 func runSIGINTChild(t *testing.T, mode string, ignored bool) (status syscall.WaitStatus, stderr string, survived bool) {
 	t.Helper()
+	return runSignalChild(t, mode, ignored, syscall.SIGINT, true)
+}
+
+// runSignalChild is runSIGINTChild with the signal, and whether it goes to
+// the whole group or to the process alone — what `kill <pid>` does.
+func runSignalChild(t *testing.T, mode string, ignored bool, sig syscall.Signal, group bool) (status syscall.WaitStatus, stderr string, survived bool) {
+	t.Helper()
 	marker := filepath.Join(t.TempDir(), "survived")
 	var cmd *exec.Cmd
 	if ignored {
@@ -208,7 +431,11 @@ func runSIGINTChild(t *testing.T, mode string, ignored bool) (status syscall.Wai
 		}
 	}()
 	waitOrFail(t, ready, "the task to start")
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGINT); err != nil {
+	target := cmd.Process.Pid
+	if group {
+		target = -target
+	}
+	if err := syscall.Kill(target, sig); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
 	waited := make(chan error, 1)
@@ -220,6 +447,9 @@ func runSIGINTChild(t *testing.T, mode string, ignored bool) (status syscall.Wai
 		t.Fatalf("the process did not end after SIGINT; stderr:\n%s", errBuf.String())
 	}
 	status = cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if mode == "after" {
+		return status, errBuf.String(), false
+	}
 	// The child writes for a second after SIGINT and then its marker.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -236,12 +466,20 @@ func runSIGINTChild(t *testing.T, mode string, ignored bool) (status syscall.Wai
 var interruptedTail = regexp.MustCompile(`\r\x1b\[(1A\x1b\[)?J✗ Starting container  interrupted after \d+\.\ds\n` +
 	`⚠ queued before the interrupt\n$`)
 
+// interruptedPlain is how it ends off a terminal: the start line, the result
+// line and the queue, and nothing else.
+var interruptedPlain = regexp.MustCompile(`^~ Starting container\n✗ Starting container  interrupted after \d+\.\ds\n` +
+	`⚠ queued before the interrupt\n$`)
+
 // TestSIGINT: SIGINT on a terminal drains the running task with the
 // interrupted line and its queue, and the process dies of the signal; the
 // child it interrupted keeps writing to the log, which is a file, and ends
 // on its own. A child given a pipe instead dies of SIGPIPE with the runner —
-// the control that shows the marker can be missing. A process started with
-// SIGINT ignored catches nothing, and its task runs to the end.
+// the control that shows the marker can be missing. Off a terminal the
+// queue is drained the same way, in plain lines; so it is for SIGTERM sent
+// to the process alone. Once Run has returned SIGINT kills as it always
+// did. A process started with SIGINT ignored catches nothing, and its task
+// runs to the end.
 func TestSIGINT(t *testing.T) {
 	t.Run("the log", func(t *testing.T) {
 		status, stderr, survived := runSIGINTChild(t, "log", false)
@@ -262,6 +500,32 @@ func TestSIGINT(t *testing.T) {
 		}
 		if survived {
 			t.Error("a child writing to a pipe outlived the runner; the marker check cannot see a SIGPIPE")
+		}
+	})
+	t.Run("off a terminal", func(t *testing.T) {
+		status, stderr, _ := runSIGINTChild(t, "plain", false)
+		if !status.Signaled() || status.Signal() != syscall.SIGINT {
+			t.Errorf("the process ended with %v; want death by SIGINT\n%s", status, stderr)
+		}
+		if !interruptedPlain.MatchString(stderr) {
+			t.Errorf("stderr is not the start line, the interrupted line and the queue:\n%q", stderr)
+		}
+	})
+	t.Run("SIGTERM to the process", func(t *testing.T) {
+		status, stderr, _ := runSignalChild(t, "log", false, syscall.SIGTERM, false)
+		if !status.Signaled() || status.Signal() != syscall.SIGTERM {
+			t.Errorf("the process ended with %v; want death by SIGTERM\n%s", status, stderr)
+		}
+		if !interruptedTail.MatchString(stderr) {
+			t.Errorf("stderr does not end with the interrupted line and the queue:\n%q", stderr)
+		}
+	})
+	t.Run("after Run returned", func(t *testing.T) {
+		// Run gave SIGINT its default disposition back: the process dies of
+		// it, where a handler left behind would swallow it and exit 0.
+		status, stderr, _ := runSIGINTChild(t, "after", false)
+		if !status.Signaled() || status.Signal() != syscall.SIGINT {
+			t.Errorf("the process ended with %v; want death by SIGINT\n%s", status, stderr)
 		}
 	})
 	t.Run("SIGINT ignored", func(t *testing.T) {
