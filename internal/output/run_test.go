@@ -468,21 +468,39 @@ func TestLogIsAnUnlinkedFile(t *testing.T) {
 	}
 }
 
-// TestRunWithoutATaskLog: when the task's log cannot be made, Run returns
-// that error and no task runs.
+// TestRunWithoutATaskLog: when no task log can be made — $TMPDIR is missing,
+// read-only or full — the tasks run all the same with their output
+// discarded, and one warning says why: most tasks never read their log, and
+// none is worth not stopping a workspace for.
 func TestRunWithoutATaskLog(t *testing.T) {
 	t.Setenv("TMPDIR", "/nonexistent/ws-run-test")
 	var buf syncBuffer
 	r := testRunner(NewStreamAt(&buf, 80, false, ColourNone, false), &fakeClock{}, nil)
+	ran := 0
 	err := r.run([]Task{
-		{Title: "Stopping workspace", Run: func(*Log) error { t.Error("the task ran"); return nil }},
-		{Title: "Starting container", Run: func(*Log) error { t.Error("the task ran"); return nil }},
+		{Title: "Stopping workspace", Run: func(log *Log) error {
+			ran++
+			_, _ = fmt.Fprintln(log, "not kept")
+			return nil
+		}},
+		{Title: "Starting container", Run: func(log *Log) error {
+			ran++
+			_, _ = fmt.Fprintln(log, "not kept either")
+			return errors.New("devpod up: exit status 1")
+		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "create the task log") {
-		t.Fatalf("run returned %v; want the log's error", err)
+	if ran != 2 {
+		t.Errorf("%d of the 2 tasks ran; want both", ran)
 	}
-	if want := "- Stopping workspace\n- Starting container\n"; buf.String() != want {
-		t.Errorf("got\n%q\nwant\n%q", buf.String(), want)
+	var te *TaskError
+	if !errors.As(err, &te) || te.Title != "Starting container" || len(te.Tail) != 0 {
+		t.Errorf("run returned %#v; want the failed task's TaskError, with no tail", err)
+	}
+	got := buf.String()
+	warning := "⚠ Step output is not kept: create the task log: "
+	steps := "~ Stopping workspace\n✓ Stopping workspace  0.0s\n~ Starting container\n✗ Starting container  0.0s\n"
+	if !strings.HasPrefix(got, warning) || !strings.HasSuffix(got, "\n"+steps) || strings.Count(got, "⚠") != 1 {
+		t.Errorf("got\n%q\nwant one warning that starts %q, then\n%q", got, warning, steps)
 	}
 }
 

@@ -60,6 +60,21 @@ func newLog() (*Log, error) {
 	return &Log{w: w, r: r}, nil
 }
 
+// nullLog is the log of a task whose log file cannot be made: what is
+// written to it is discarded, and its tail and live line stay empty.
+func nullLog() (*Log, error) {
+	w, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open the null log: %w", err)
+	}
+	r, err := os.Open(os.DevNull)
+	if err != nil {
+		_ = w.Close()
+		return nil, fmt.Errorf("open the null log: %w", err)
+	}
+	return &Log{w: w, r: r}, nil
+}
+
 // Write appends p to the log, as a child writing to File does.
 func (l *Log) Write(p []byte) (int, error) { return l.w.Write(p) }
 

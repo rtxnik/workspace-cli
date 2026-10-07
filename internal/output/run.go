@@ -124,6 +124,9 @@ type runner struct {
 	state   taskState
 	pending bool // a signal was caught: no further task is claimed
 	cur     current
+	// lostLog is why the tasks' output is not kept, once a task's log could
+	// not be made; it is reported once per Run.
+	lostLog error
 	dead    chan struct{} // closed when die returns, which it does only in a test
 }
 
@@ -266,8 +269,8 @@ func (r *runner) run(tasks []Task) error {
 		if errors.Is(err, errInterrupted) {
 			return err
 		}
-		// A task whose log could not be made did not start: it is listed with
-		// the tasks that did not run.
+		// A task that could not be given even the null device as its log did
+		// not start: it is listed with the tasks that did not run.
 		notRun := tasks[i+1:]
 		if _, ran := err.(*TaskError); !ran {
 			notRun = tasks[i:]
@@ -282,9 +285,14 @@ func (r *runner) run(tasks []Task) error {
 
 // runTask runs one task as the owner.
 func (r *runner) runTask(t Task) error {
-	log, err := newLog()
-	if err != nil {
-		return err
+	// A task whose log cannot be made runs with its output discarded: most
+	// tasks never read their log, and none is worth not running for.
+	log, logErr := newLog()
+	if logErr != nil {
+		var err error
+		if log, err = nullLog(); err != nil {
+			return err
+		}
 	}
 	defer log.close()
 
@@ -297,6 +305,10 @@ func (r *runner) runTask(t Task) error {
 	}
 	if r.hooks.starting != nil {
 		r.hooks.starting()
+	}
+	if logErr != nil && r.lostLog == nil {
+		r.lostLog = logErr
+		r.writeLine(renderMessage(r.s, shapeWarn, "Step output is not kept: "+logErr.Error()))
 	}
 	if !tty {
 		r.writeLine(stepLine(r.s, StateBusy, t.Title, ""))
