@@ -666,10 +666,17 @@ func TestStepLineLayout(t *testing.T) {
 		{"fits", "Starting container", "2m13s", "✓ Starting container  2m13s"},
 		{"wraps, the time after the last line", "Building proxy image with xray-core v26.2.6", "0.4s",
 			"✓ Building proxy image with\n  xray-core v26.2.6  0.4s"},
-		{"no room left: the time on its own line", "Building the proxy image once more", "12.3s",
+		{"wraps, the time after a short last line", "Building the proxy image once more", "12.3s",
 			"✓ Building the proxy image\n  once more  12.3s"},
-		{"a last line too long for the time", "Waiting for dev-proxy liveness", "12.3s",
+		{"wraps, the time after another short last line", "Waiting for dev-proxy liveness", "12.3s",
 			"✓ Waiting for dev-proxy\n  liveness  12.3s"},
+		// Width 28 after the mark: a last line of 21 cells, two spaces and the
+		// time's five fill it exactly; one cell more and the time takes a line
+		// of its own.
+		{"the time fits the last line exactly", "Building the proxy image once more for the day", "12.3s",
+			"✓ Building the proxy image\n  once more for the day  12.3s"},
+		{"one cell too many: the time on its own line", "Building the proxy image once more for the days", "12.3s",
+			"✓ Building the proxy image\n  once more for the days\n  12.3s"},
 		{"no time", "Fixing workspace routes", "", "✓ Fixing workspace routes"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -767,6 +774,8 @@ func TestRunWaitsForTheTickerBeforeTheResultLine(t *testing.T) {
 	c := &fakeClock{}
 	ticks := make(chan time.Time)
 	r := testRunner(NewStreamAt(w, 40, true, ColourNone, false), c, ticks)
+	draining := make(chan struct{})
+	r.hooks.draining = func() { close(draining) }
 	done := make(chan error)
 	go func() {
 		done <- r.run([]Task{{Title: "Starting proxy", Run: func(*Log) error {
@@ -775,10 +784,16 @@ func TestRunWaitsForTheTickerBeforeTheResultLine(t *testing.T) {
 			return nil
 		}}})
 	}()
+	// The redraw is blocked and the owner has begun its drain: from here,
+	// nothing may be written until the redraw is.
+	waitOrFail(t, draining, "the owner's drain")
 	select {
 	case <-done:
 		t.Fatal("run returned while a redraw was still being written")
 	case <-time.After(50 * time.Millisecond):
+	}
+	if got := w.String(); strings.Contains(got, "✓") {
+		t.Fatalf("the result line was written while a redraw was still being written: %q", got)
 	}
 	close(w.release)
 	if err := <-done; err != nil {
@@ -790,10 +805,11 @@ func TestRunWaitsForTheTickerBeforeTheResultLine(t *testing.T) {
 	}
 }
 
-// TestRunUnderLoad is the stress half of the ownership protocol, for -race: a
-// child printing without pause into the log while the task writes a warning
-// in a loop and the frame redraws every millisecond. Every warning comes
-// out once, in order, after the result line.
+// TestRunUnderLoad runs the ticker and the log against a busy child, for
+// -race: a child printing without pause into the log while the task writes
+// a warning in a loop and the frame redraws every millisecond. Every warning
+// comes out once, in order, after the result line. The interleavings of the
+// queue, the gate and a signal are driven one by one by the tests above.
 func TestRunUnderLoad(t *testing.T) {
 	var buf syncBuffer
 	r := &runner{
@@ -832,11 +848,18 @@ func TestRunUnderLoad(t *testing.T) {
 	after := got[result:]
 	last := -1
 	for i := 0; i < warnings; i++ {
-		at := strings.Index(after, fmt.Sprintf("⚠ warning %d\n", i))
+		line := fmt.Sprintf("⚠ warning %d\n", i)
+		at := strings.Index(after, line)
 		if at < 0 || at < last {
 			t.Fatalf("warning %d is missing or out of order after the result line", i)
 		}
+		if n := strings.Count(after, line); n != 1 {
+			t.Fatalf("warning %d came out %d times; want once", i, n)
+		}
 		last = at
+	}
+	if n := strings.Count(got, "⚠ warning"); n != warnings {
+		t.Errorf("%d warnings came out; want %d", n, warnings)
 	}
 	if strings.Contains(got[:result], "warning") {
 		t.Error("a warning was written while the task ran")
