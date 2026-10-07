@@ -31,8 +31,9 @@ type Log struct {
 	partial []byte   // the line being written, after its last carriage return
 	cr      bool     // the last byte read was a carriage return
 	full    bool     // the line being written reached lineCap; the rest is dropped
-	cut     bool     // a read's window began inside the line being written: it is shown after "…"
+	cut     bool     // a read's window began inside the line being written: it is shown after marker
 	lines   []string // the last tailLines complete lines that are not blank
+	marker  string   // the truncation marker of the glyph mode the log is shown in
 
 	readHook func() // a test's: called after each read of the file
 }
@@ -48,8 +49,8 @@ const (
 	readWindow = 256 << 10
 )
 
-// newLog creates a task's log.
-func newLog() (*Log, error) {
+// newLog creates a task's log, to be shown in glyph mode mode.
+func newLog(mode GlyphMode) (*Log, error) {
 	w, err := os.CreateTemp("", "ws-task-*.log")
 	if err != nil {
 		return nil, fmt.Errorf("create the task log: %w", err)
@@ -63,7 +64,7 @@ func newLog() (*Log, error) {
 		}
 		return nil, fmt.Errorf("open the task log: %w", errors.Join(oerr, rerr))
 	}
-	return &Log{w: w, r: r}, nil
+	return &Log{w: w, r: r, marker: marker(mode)}, nil
 }
 
 // nullLog is the log of a task whose log file cannot be made: what is
@@ -136,8 +137,8 @@ func (l *Log) readNew() {
 	if end-l.off > readWindow+1 {
 		// Bytes are skipped. The read starts one byte before the window, so
 		// a line that starts there is kept whole; the line it starts inside
-		// is cut — shown after "…" — unless the byte before it ends a line.
-		// What was kept before goes, so the tail stays contiguous.
+		// is cut — shown after the marker — unless the byte before it ends
+		// a line. What was kept before goes, so the tail stays contiguous.
 		start := end - readWindow - 1
 		var before [1]byte
 		if _, err := l.r.ReadAt(before[:], start-1); err != nil {
@@ -221,7 +222,8 @@ func trimIncompleteRune(b []byte) []byte {
 }
 
 // shown is a line as the log keeps it: one a read's window cut at its start
-// begins with "…", still within lineCap. The window may start inside a rune;
+// begins with the truncation marker of the log's glyph mode, still within
+// lineCap. The window may start inside a rune;
 // what is left of that rune goes with the cut.
 func (l *Log) shown(line string) string {
 	if !l.cut {
@@ -233,7 +235,7 @@ func (l *Log) shown(line string) string {
 	if blank(line) {
 		return line
 	}
-	line = "…" + line
+	line = l.marker + line
 	if len(line) > lineCap {
 		line = string(trimIncompleteRune([]byte(line[:lineCap])))
 	}

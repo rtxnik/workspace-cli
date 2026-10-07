@@ -130,6 +130,33 @@ func TestRunStopsAtTheFirstFailure(t *testing.T) {
 	}
 }
 
+// TestACutTailIsMarkedInTheStreamsGlyphMode: the marker before a line the
+// log's read window cut is one of the glyphs the layer emits, so it follows
+// the stream's glyph mode as every other truncation marker does — in a
+// task's log and in the log a nested Run with no running task is given.
+func TestACutTailIsMarkedInTheStreamsGlyphMode(t *testing.T) {
+	tasks := []Task{{Title: "Pulling image", Run: func(log *Log) error {
+		_, _ = fmt.Fprint(log, strings.Repeat("z", 300*1024)+"\n")
+		return errors.New("pull failed")
+	}}}
+	for _, tc := range []struct {
+		ascii       bool
+		marker, not string
+	}{{true, "...", "…"}, {false, "…", "..."}} {
+		var buf syncBuffer
+		r := testRunner(NewStreamAt(&buf, 80, false, ColourNone, tc.ascii), &fakeClock{}, nil)
+		for how, err := range map[string]error{"Run": r.run(tasks), "a nested Run": r.runNested(tasks, nil, r)} {
+			var te *TaskError
+			if !errors.As(err, &te) {
+				t.Fatalf("%s returned %T %v; want a *TaskError", how, err, err)
+			}
+			if len(te.Tail) != 1 || !strings.HasPrefix(te.Tail[0], tc.marker+"z") || strings.Contains(te.Tail[0], tc.not) {
+				t.Errorf("%s, ascii %v: Tail = %.12q; want one line marked %q", how, tc.ascii, te.Tail, tc.marker)
+			}
+		}
+	}
+}
+
 // TestRunDrawsAFrameOnATerminal: on a terminal the runner draws the frame and
 // redraws it at each tick — the spinner, the title and the elapsed time, then
 // the log's last line under them once there is one — and replaces it with
@@ -535,7 +562,7 @@ func TestTaskErrorAsProblem(t *testing.T) {
 func TestLogKeepsTheLastLines(t *testing.T) {
 	newTestLog := func(t *testing.T, text string) *Log {
 		t.Helper()
-		l, err := newLog()
+		l, err := newLog(GlyphUTF8)
 		if err != nil {
 			t.Fatalf("newLog: %v", err)
 		}
@@ -605,7 +632,7 @@ func TestLogKeepsItsStateAcrossReads(t *testing.T) {
 		{"a line longer than one read", []string{strings.Repeat("x", 40000) + "\n"}, []string{strings.Repeat("x", lineCap)}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			l, err := newLog()
+			l, err := newLog(GlyphUTF8)
 			if err != nil {
 				t.Fatalf("newLog: %v", err)
 			}
@@ -632,7 +659,7 @@ func TestLogKeepsItsStateAcrossReads(t *testing.T) {
 // writes faster than the log is parsed would otherwise hold the ticker in
 // one read for good, and with it the result line and a signal's drain.
 func TestLogReadsWhatWasThereWhenAsked(t *testing.T) {
-	l, err := newLog()
+	l, err := newLog(GlyphUTF8)
 	if err != nil {
 		t.Fatalf("newLog: %v", err)
 	}
@@ -664,7 +691,7 @@ func TestLogReadsWhatWasThereWhenAsked(t *testing.T) {
 func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
 	newBacklog := func(t *testing.T, before string) *Log {
 		t.Helper()
-		l, err := newLog()
+		l, err := newLog(GlyphUTF8)
 		if err != nil {
 			t.Fatalf("newLog: %v", err)
 		}
@@ -784,7 +811,7 @@ func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
 // TestLogIsAnUnlinkedFile: the log is a regular file that no longer has a
 // name, and a child given File writes to it directly.
 func TestLogIsAnUnlinkedFile(t *testing.T) {
-	l, err := newLog()
+	l, err := newLog(GlyphUTF8)
 	if err != nil {
 		t.Fatalf("newLog: %v", err)
 	}
