@@ -653,8 +653,9 @@ func (f *frame) erase() string {
 
 // frameLines lays the frame out: the spinner glyph, the title and the elapsed
 // time on the first line and, once the log holds a line, that line under it,
-// cleaned by SanitiseInline — a child's output carries escapes that would
-// move the cursor under the frame. Both lines are laid out against budget −
+// both cleaned by SanitiseInline — a child's output carries escapes that
+// would move the cursor under the frame, and a title can come from argv or a
+// release's tag name. Both lines are laid out against budget −
 // 1: a line exactly as wide as the terminal leaves the cursor of some
 // terminals on the next row, and the redraw would then climb one row short.
 func frameLines(s *Stream, glyph, title, elapsed, live string) []string {
@@ -663,8 +664,12 @@ func frameLines(s *Stream, glyph, title, elapsed, live string) []string {
 		width = s.budget()
 	}
 	room := width - W(glyph) - 1 - 2 - W(elapsed)
+	cleanTitle := SanitiseInline(title)
+	if mutants.FrameTitleRaw {
+		cleanTitle = title
+	}
 	lines := []string{s.paint(RoleInfo, glyph) + " " +
-		clipTail(SanitiseInline(title), room, s.mode) + "  " + s.paint(RoleMuted, elapsed)}
+		clipTail(cleanTitle, room, s.mode) + "  " + s.paint(RoleMuted, elapsed)}
 	if live != "" {
 		clean := SanitiseInline(live)
 		if mutants.LiveLineRaw {

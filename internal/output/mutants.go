@@ -153,6 +153,7 @@ type mutantSwitches struct {
 	// ---------------------------------------------------- §4.7 step runner
 	FrameUncut         bool // the frame's lines are laid out against the whole budget, not budget − 1
 	LiveLineRaw        bool // the frame's second line is the log's line as the child wrote it, escapes and all
+	FrameTitleRaw      bool // the frame's title is drawn as the task gave it, escapes and all
 	FrameToStdout      bool // the frame is drawn on stdout, the answer's stream
 	FrameOffTerminal   bool // the frame is drawn whatever the stream, as huh/spinner drew into a pipe
 	NoMessageQueue     bool // a message is written while a task runs, under the frame

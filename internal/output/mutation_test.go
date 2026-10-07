@@ -338,6 +338,13 @@ func corpusMutants() []mutant {
 			apply: func(m *mutantSwitches) { m.LiveLineRaw = true },
 		},
 		{
+			name: "frame_title_uncleaned",
+			spec: "§4.7 the step runner / §6.7",
+			defect: "the frame's title is drawn as the task gave it, so escapes from argv or a release's tag " +
+				"name reach the terminal in the frame's first line",
+			apply: func(m *mutantSwitches) { m.FrameTitleRaw = true },
+		},
+		{
 			name: "chrome_off_by_one+lipgloss_width_pinning",
 			spec: "§6.1 paired assertion / §8",
 			defect: "the chrome defect WITH lipgloss pinning: the measured case where the bare width sweep sees " +

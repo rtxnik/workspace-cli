@@ -851,6 +851,10 @@ func fxRunnerFixtures() []fixture {
 			"工作区启动 " + fxCJKNote, logWith(fxCJKNote + "\n")},
 		{"runner/frame-emoji-presentation", "§4.1 the runner's frame: emoji-presentation sequences",
 			"⚠️ " + fxEmojiRun, logWith(fxEmojiCause + " " + fxEmojiRun)},
+		// A task's title comes from argv or from a release's tag name, so the
+		// frame cleans it as it cleans the live line.
+		{"runner/frame-esc-title", "§6.7 the runner's frame: a title carrying escapes",
+			fxEsc("Building proxy image"), logWith("info exporting layers\n")},
 	}
 	var out []fixture
 	for _, ff := range frames {
