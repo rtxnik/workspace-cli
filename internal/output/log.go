@@ -221,9 +221,16 @@ func trimIncompleteRune(b []byte) []byte {
 }
 
 // shown is a line as the log keeps it: one a read's window cut at its start
-// begins with "…", still within lineCap.
+// begins with "…", still within lineCap. The window may start inside a rune;
+// what is left of that rune goes with the cut.
 func (l *Log) shown(line string) string {
-	if !l.cut || blank(line) {
+	if !l.cut {
+		return line
+	}
+	for i := 0; i < utf8.UTFMax-1 && line != "" && !utf8.RuneStart(line[0]); i++ {
+		line = line[1:]
+	}
+	if blank(line) {
 		return line
 	}
 	line = "…" + line

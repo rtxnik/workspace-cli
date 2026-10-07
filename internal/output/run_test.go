@@ -746,6 +746,16 @@ func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
 			t.Errorf("Tail = %.24q; want %.24q", got, want)
 		}
 	})
+	t.Run("a window that starts inside a rune keeps the cut line valid UTF-8", func(t *testing.T) {
+		for k := 0; k < 3; k++ { // the read starts 2, 0 and 1 bytes into a "€"
+			l := newBacklog(t, "")
+			_, _ = fmt.Fprint(l, strings.Repeat("€", 100000)+strings.Repeat("x", k)+"\n")
+			tail := l.Tail()
+			if len(tail) != 1 || !utf8.ValidString(tail[0]) || !strings.HasPrefix(tail[0], "…€") {
+				t.Errorf("with %d bytes after the run, Tail = %.12q; want one valid line starting \"…€\"", k, tail)
+			}
+		}
+	})
 	t.Run("a read one byte longer than the window skips nothing and keeps what it had", func(t *testing.T) {
 		l := newBacklog(t, "keep me\nabc")
 		_, _ = fmt.Fprint(l, "def\n"+strings.Repeat("q", readWindow-4)+"\n")
