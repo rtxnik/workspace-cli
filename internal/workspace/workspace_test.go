@@ -64,6 +64,61 @@ func TestCreateRemovesWhatItCreated(t *testing.T) {
 	}
 }
 
+// TestCreateRefusesADirectoryItDidNotMake: a workspace directory that is
+// already there when Create makes it — another ws new made it a moment
+// earlier — is refused, written nothing into, and left as it is. Create's
+// cleanup removes only a directory this call made.
+func TestCreateRefusesADirectoryItDidNotMake(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		WorkspacesDir: filepath.Join(root, "workspaces"),
+		ProfilesDir:   filepath.Join(root, "profiles"),
+		SharedDir:     filepath.Join(root, "shared"),
+	}
+	for _, f := range []string{"devcontainer.json", "Dockerfile"} {
+		if err := os.MkdirAll(filepath.Join(cfg.ProfilesDir, "go"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(cfg.ProfilesDir, "go", f), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	theirs := filepath.Join(cfg.WorkspacesDir, "api", ".devcontainer", "devcontainer.json")
+	if err := os.MkdirAll(filepath.Dir(theirs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(theirs, []byte("theirs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Create(cfg, "api", "go", false)
+	if err == nil || !errors.Is(err, os.ErrExist) {
+		t.Fatalf("Create into a directory it did not make returned %v; want an error that is os.ErrExist", err)
+	}
+	if b, readErr := os.ReadFile(theirs); readErr != nil || string(b) != "theirs\n" {
+		t.Errorf("the other call's devcontainer.json is %q, %v; want it as it was", b, readErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(cfg.WorkspacesDir, "api", ".devcontainer", "Dockerfile")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("Create wrote into a directory it did not make: %v", statErr)
+	}
+}
+
+// TestExistsSeesAnEntryItCannotFollow: a workspace entry that is there but
+// does not resolve — a symlink to nothing — exists, so ws delete removes it
+// and ws new refuses it with the remedy that works.
+func TestExistsSeesAnEntryItCannotFollow(t *testing.T) {
+	cfg := config.Config{WorkspacesDir: t.TempDir()}
+	if err := os.Symlink(filepath.Join(cfg.WorkspacesDir, "nowhere"), filepath.Join(cfg.WorkspacesDir, "api")); err != nil {
+		t.Fatal(err)
+	}
+	if !Exists(cfg, "api") {
+		t.Error("Exists is false for a dangling symlink in the workspaces directory")
+	}
+	if Exists(cfg, "web") {
+		t.Error("Exists is true for a workspace that is not there")
+	}
+}
+
 func TestStripJSONCComments(t *testing.T) {
 	tests := []struct {
 		name     string

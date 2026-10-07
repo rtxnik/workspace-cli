@@ -23,32 +23,40 @@ type Info struct {
 	Proxy   bool
 }
 
-// Exists returns true if a workspace directory exists.
+// Exists reports whether the workspaces directory holds an entry of that
+// name — one that does not resolve, such as a dangling symlink, included, so
+// that ws delete removes it and ws new refuses it.
 func Exists(cfg config.Config, name string) bool {
-	_, err := os.Stat(filepath.Join(cfg.WorkspacesDir, name))
+	_, err := os.Lstat(filepath.Join(cfg.WorkspacesDir, name))
 	return err == nil
 }
 
 // Create sets up a new workspace directory with devcontainer config.
 //
-// A workspace directory this call creates is removed again when a later step
-// fails, so a failed ws new leaves nothing behind that the next ws new would
-// refuse as existing. A directory that was already there is left as it is.
-// The error returned does not change.
+// The workspace directory is made with Mkdir, so a directory that is already
+// there — another ws new made it since the caller checked — is refused with
+// an error that is os.ErrExist, and nothing is written into it. A directory
+// this call made is removed again when a later step fails, so a failed ws new
+// leaves nothing behind that the next ws new would refuse as existing. The
+// error returned does not change.
 func Create(cfg config.Config, name, profile string, withProxy bool) (err error) {
 	wsDir := filepath.Join(cfg.WorkspacesDir, name)
 	dcDir := filepath.Join(wsDir, ".devcontainer")
 	profileDir := filepath.Join(cfg.ProfilesDir, profile)
 
-	if _, statErr := os.Lstat(wsDir); errors.Is(statErr, os.ErrNotExist) {
-		defer func() {
-			if err != nil {
-				_ = os.RemoveAll(wsDir)
-			}
-		}()
+	if err := os.MkdirAll(filepath.Dir(wsDir), 0o755); err != nil {
+		return fmt.Errorf("create workspace dir: %w", err)
 	}
+	if err := os.Mkdir(wsDir, 0o755); err != nil {
+		return fmt.Errorf("create workspace dir: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(wsDir)
+		}
+	}()
 
-	if err := os.MkdirAll(dcDir, 0o755); err != nil {
+	if err := os.Mkdir(dcDir, 0o755); err != nil {
 		return fmt.Errorf("create workspace dir: %w", err)
 	}
 
