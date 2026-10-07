@@ -1891,7 +1891,7 @@ func TestAcceptanceGlobals(t *testing.T) {
 // reviewer must be told about rather than have absorbed silently. Record in
 // this comment what moved it and by how much, every time.
 //
-// Measured over 57 fixtures, 19 of them tables: 473 overflowing lines of 1243.
+// Measured over 59 fixtures, 19 of them tables: 543 overflowing lines of 1399.
 // The pair has moved with every fixture set the corpus gained, and each move
 // is that set's worth of geometry at the floor:
 //
@@ -1907,13 +1907,19 @@ func TestAcceptanceGlobals(t *testing.T) {
 //	+ the step runner's seven fixtures    473 of 1243 (the four step lines fill
 //	                                      the floor on 18 lines; the three
 //	                                      frames stop a cell short of it)
+//	+ runner/frame-esc-title              473 of 1247 (a frame: 4 lines, a
+//	                                      cell short of the floor)
+//	+ problem/task-tail-20                543 of 1399 (152 lines over the two
+//	                                      glyph modes, 70 of them over the
+//	                                      floor: the tail's lines under the
+//	                                      cause's indent)
 //
 // The sweep's own line count moved the other way across the tab fix, 111464 to
 // 111120, because expanded tabs are wider than the zero cells the layer used
 // to measure them at and the wraps land differently. It has grown with the
 // corpus since: 117,700 lines over 49 fixtures, 120,482 over 50, 125,452 over
 // 57.
-const control28Overflows = 473
+const control28Overflows = 543
 
 func TestControlBudget28(t *testing.T) {
 	if mutants != (mutantSwitches{}) {

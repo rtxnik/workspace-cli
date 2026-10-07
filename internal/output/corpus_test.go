@@ -1,12 +1,14 @@
 package output
 
-// Four imports, each with one job: x/ansi segments and measures for
-// fxExpandTabs, fmt formats the switch set in fxCorpusBuild's guard, io
-// writes the runner fixtures' task logs, strings builds the raw material. A
+// Five imports, each with one job: x/ansi segments and measures for
+// fxExpandTabs, fmt formats the switch set in fxCorpusBuild's guard and the
+// task tail's lines, errors makes that task's error, io writes the runner
+// fixtures' task logs, strings builds the raw material. A
 // helper landed ahead of its first caller is `func fxExpandTabs is unused` at
 // the acceptance gate, which runs golangci-lint over the _test.go files too,
 // so a helper and its callers land together.
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -101,6 +103,21 @@ const fxCJKNote = "拨号失败：连接超时（30 秒），代理配置文件 
 //	Check.Name           12, first checks/esc-surfaces @ 29
 //	Check.Note           12, first checks/esc-surfaces @ 29
 func fxEsc(text string) string { return "\x1b[2K" + text + "\x1b]0;pwned\x07" }
+
+// fxTaskTailProblem is the Problem of a failed devpod up whose log tail is
+// full: tailLines lines, the last one as long as lineCap keeps.
+func fxTaskTailProblem() Problem {
+	tail := make([]string, 0, tailLines)
+	for i := 1; i < tailLines; i++ {
+		tail = append(tail, fmt.Sprintf("[12:01:%02d] info up api: step %d of the build", i, i))
+	}
+	long := "[12:01:59] fatal up api: " + fxToken200 + " "
+	for len(long) < lineCap {
+		long += "denied "
+	}
+	tail = append(tail, long[:lineCap])
+	return (&TaskError{Title: "Starting container", Err: errors.New("devpod up: exit status 1"), Tail: tail}).AsProblem()
+}
 
 // ------------------------------------------------------------ fixture type
 //
@@ -608,6 +625,9 @@ func fxCorpusBuild() []fixture {
 			Facts: []Fact{{"stage", "buildkit export"}, {"markers", fxEmojiRun}},
 			Steps: []Remedy{{"Retry the build", "ws profile rebuild go"}},
 		}, nil},
+		// The Problem a failed task renders as, with the most its tail holds:
+		// 20 lines, one of them cut at 1 KiB.
+		{"problem/task-tail-20", "§4.1 a failed task's Problem with a 20-line tail", fxTaskTailProblem(), nil},
 		{"problem/esc-cause", "§6.7 Cause containing control sequences", Problem{
 			Title: "Could not pull the base image",
 			Cause: fxEscCause,
