@@ -31,7 +31,7 @@ type Log struct {
 	partial []byte   // the line being written, after its last carriage return
 	cr      bool     // the last byte read was a carriage return
 	full    bool     // the line being written reached lineCap; the rest is dropped
-	skip    bool     // a read skipped to its window inside a line; it is dropped up to its end
+	cut     bool     // a read's window began inside the line being written: it is shown after "…"
 	lines   []string // the last tailLines complete lines that are not blank
 
 	readHook func() // a test's: called after each read of the file
@@ -97,7 +97,7 @@ func (l *Log) Tail() []string {
 	l.readNew()
 	out := append([]string(nil), l.lines...)
 	if !blank(string(l.partial)) {
-		out = append(out, string(l.partial))
+		out = append(out, l.shown(string(l.partial)))
 	}
 	if len(out) > tailLines {
 		out = out[len(out)-tailLines:]
@@ -112,7 +112,7 @@ func (l *Log) liveLine() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.readNew()
-	line := string(l.partial)
+	line := l.shown(string(l.partial))
 	if blank(line) {
 		if len(l.lines) == 0 {
 			return ""
@@ -133,11 +133,15 @@ func (l *Log) readNew() {
 	}
 	end := fi.Size()
 	if end-l.off > readWindow {
-		if _, err := l.r.Seek(end-readWindow, io.SeekStart); err != nil {
+		// One byte before the window: when it ends a line, the window's
+		// first line is whole and nothing is marked cut. What was kept
+		// before goes, so the tail stays contiguous.
+		start := end - readWindow - 1
+		if _, err := l.r.Seek(start, io.SeekStart); err != nil {
 			return
 		}
-		l.off = end - readWindow
-		l.partial, l.cr, l.full, l.skip = l.partial[:0], false, false, true
+		l.off = start
+		l.lines, l.partial, l.cr, l.full, l.cut = l.lines[:0], l.partial[:0], false, false, true
 	}
 	buf := make([]byte, 32*1024)
 	for l.off < end {
@@ -157,13 +161,6 @@ func (l *Log) readNew() {
 // newline starts the line again, as a progress bar redrawing itself does; a
 // line is kept up to lineCap bytes and the rest of it is dropped.
 func (l *Log) consume(p []byte) {
-	if l.skip {
-		i := bytes.IndexByte(p, '\n')
-		if i < 0 {
-			return
-		}
-		p, l.skip = p[i+1:], false
-	}
 	for len(p) > 0 {
 		i := bytes.IndexAny(p, "\r\n")
 		if i < 0 {
@@ -189,7 +186,7 @@ func (l *Log) add(p []byte) {
 		return
 	}
 	if l.cr {
-		l.partial, l.full, l.cr = l.partial[:0], false, false
+		l.partial, l.full, l.cr, l.cut = l.partial[:0], false, false, false
 	}
 	if l.full {
 		return
@@ -216,10 +213,23 @@ func trimIncompleteRune(b []byte) []byte {
 	return b
 }
 
+// shown is a line as the log keeps it: one a read's window cut at its start
+// begins with "…", still within lineCap.
+func (l *Log) shown(line string) string {
+	if !l.cut || blank(line) {
+		return line
+	}
+	line = "…" + line
+	if len(line) > lineCap {
+		line = string(trimIncompleteRune([]byte(line[:lineCap])))
+	}
+	return line
+}
+
 // endLine keeps the finished line when it is not blank.
 func (l *Log) endLine() {
-	line := string(l.partial)
-	l.partial, l.full = l.partial[:0], false
+	line := l.shown(string(l.partial))
+	l.partial, l.full, l.cut = l.partial[:0], false, false
 	if blank(line) {
 		return
 	}

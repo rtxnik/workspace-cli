@@ -657,51 +657,91 @@ func TestLogReadsWhatWasThereWhenAsked(t *testing.T) {
 // TestLogSkipsToTheEndOfABacklog: a read parses no more than readWindow of
 // what is new, from the end — the tail and the live line are the log's last
 // lines — so the time a read takes does not grow with how long a fast child
-// has been writing. The line the window starts inside is not kept.
+// has been writing. The tail is what the window holds, contiguous; a line the
+// window starts inside is kept marked "…", a carriage return inside the
+// window starts a line of its own, and a line the window starts with exactly
+// is kept whole.
 func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
-	l, err := newLog()
-	if err != nil {
-		t.Fatalf("newLog: %v", err)
-	}
-	t.Cleanup(l.close)
-	_, _ = fmt.Fprint(l, strings.Repeat("x", 100)+"\n"+strings.Repeat("y\n", 1<<19)+"last\n")
-	reads := 0
-	l.readHook = func() { reads++ }
-	if line := l.liveLine(); line != "last" {
-		t.Errorf("liveLine = %q; want %q", line, "last")
-	}
-	if most := readWindow/(32*1024) + 1; reads > most {
-		t.Errorf("the read parsed %d chunks of a 1 MiB backlog; want at most %d, the window's", reads, most)
-	}
-	tail := l.Tail()
-	if len(tail) != tailLines || tail[len(tail)-1] != "last" || tail[0] != "y" {
-		t.Errorf("Tail = %q; want %d lines ending in %q", tail, tailLines, "last")
-	}
-	for _, line := range tail {
-		if line != "y" && line != "last" {
-			t.Errorf("a line cut by the window was kept: %q", line)
+	newBacklog := func(t *testing.T, before string) *Log {
+		t.Helper()
+		l, err := newLog()
+		if err != nil {
+			t.Fatalf("newLog: %v", err)
 		}
-	}
-
-	// Lines longer than the window holds twenty of: the line the window
-	// starts inside would be kept as its padding alone, without its number.
-	l2, err := newLog()
-	if err != nil {
-		t.Fatalf("newLog: %v", err)
-	}
-	t.Cleanup(l2.close)
-	for i := 0; i < 40; i++ {
-		_, _ = fmt.Fprintf(l2, "L%02d %s\n", i, strings.Repeat("p", 32*1024))
-	}
-	tail = l2.Tail()
-	if len(tail) == 0 || !strings.HasPrefix(tail[len(tail)-1], "L39 ") {
-		t.Fatalf("Tail ends %q; want the last line, L39", tail)
-	}
-	for _, line := range tail {
-		if !strings.HasPrefix(line, "L") {
-			t.Errorf("a line cut by the window was kept: %.20q…", line)
+		t.Cleanup(l.close)
+		if before != "" {
+			_, _ = fmt.Fprint(l, before)
+			_ = l.liveLine()
 		}
+		return l
 	}
+	t.Run("short lines: the last twenty, in order, in at most the window's chunks", func(t *testing.T) {
+		l := newBacklog(t, "")
+		var b strings.Builder
+		for i := 0; i < 100000; i++ { // 12-byte lines: the window starts inside one
+			fmt.Fprintf(&b, "line %06d\n", i)
+		}
+		_, _ = fmt.Fprint(l, b.String())
+		reads := 0
+		l.readHook = func() { reads++ }
+		if line := l.liveLine(); line != "line 099999" {
+			t.Errorf("liveLine = %q; want %q", line, "line 099999")
+		}
+		if most := readWindow/(32*1024) + 1; reads > most {
+			t.Errorf("the read parsed %d chunks of a 1.2 MB backlog; want at most %d, the window's", reads, most)
+		}
+		want := make([]string, 0, tailLines)
+		for i := 100000 - tailLines; i < 100000; i++ {
+			want = append(want, fmt.Sprintf("line %06d", i))
+		}
+		if got := l.Tail(); !reflect.DeepEqual(got, want) {
+			t.Errorf("Tail = %q; want %q", got, want)
+		}
+	})
+	t.Run("long lines: the cut one marked, the rest whole", func(t *testing.T) {
+		l := newBacklog(t, "before the burst\n")
+		for i := 0; i < 40; i++ {
+			_, _ = fmt.Fprintf(l, "L%02d %s\n", i, strings.Repeat("p", 32*1024))
+		}
+		tail := l.Tail()
+		if len(tail) < 2 || !strings.HasPrefix(tail[0], "…p") || !strings.HasPrefix(tail[len(tail)-1], "L39 ") {
+			t.Fatalf("Tail = %.40q…; want the cut line marked, then whole lines up to L39", tail)
+		}
+		for _, line := range tail[1:] {
+			if !strings.HasPrefix(line, "L") || len(line) > lineCap {
+				t.Errorf("a line after the cut one is not whole: %.20q…", line)
+			}
+		}
+		if len(tail[0]) > lineCap {
+			t.Errorf("the cut line is %d bytes; want at most %d", len(tail[0]), lineCap)
+		}
+	})
+	t.Run("a window that starts on a line keeps it whole", func(t *testing.T) {
+		l := newBacklog(t, "")
+		const lineLen = 32 * 1024 // the window holds exactly eight lines
+		for i := 0; i < 40; i++ {
+			_, _ = fmt.Fprintf(l, "L%02d %s\n", i, strings.Repeat("p", lineLen-5))
+		}
+		tail := l.Tail()
+		if len(tail) != readWindow/lineLen || !strings.HasPrefix(tail[0], "L32 ") {
+			t.Errorf("Tail holds %d lines from %.6q; want %d, from L32", len(tail), tail[0], readWindow/lineLen)
+		}
+	})
+	t.Run("a progress run longer than the window ends in its last redraw", func(t *testing.T) {
+		l := newBacklog(t, "")
+		_, _ = fmt.Fprint(l, "starting\n"+strings.Repeat("\r42%", 100000)+"\rError: pull failed\n")
+		if got, want := l.Tail(), []string{"Error: pull failed"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("Tail = %q; want %q", got, want)
+		}
+	})
+	t.Run("a last line longer than the window is kept, marked", func(t *testing.T) {
+		l := newBacklog(t, "")
+		_, _ = fmt.Fprint(l, "starting\n"+strings.Repeat("z", 300*1024)+"\n")
+		tail := l.Tail()
+		if len(tail) != 1 || tail[0] != "…"+strings.Repeat("z", lineCap-len("…")) {
+			t.Errorf("Tail = %.20q… (%d lines); want the line, cut and marked", tail, len(tail))
+		}
+	})
 }
 
 // TestLogIsAnUnlinkedFile: the log is a regular file that no longer has a
