@@ -395,4 +395,9 @@ func TestSwitchToBeforeTheSwapNamesNoActiveProfile(t *testing.T) {
 	if want := []output.Fact{{K: "Previous", V: "primary"}}; !reflect.DeepEqual(p.Facts, want) {
 		t.Errorf("facts %+v; want %+v", p.Facts, want)
 	}
+	// Nothing was swapped, so there is nothing to restore: the previous
+	// profile is still the active one.
+	if want := []output.Remedy{{Label: "Inspect logs", Cmd: "docker logs " + cfg.ProxyContainer + " --tail 50"}}; !reflect.DeepEqual(p.Steps, want) {
+		t.Errorf("steps %+v; want %+v", p.Steps, want)
+	}
 }

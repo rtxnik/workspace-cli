@@ -117,7 +117,8 @@ func SwitchTo(cfg config.Config, name string) error {
 // switchProblem is the Problem of a switch that failed after its pre-flight:
 // the failed step's error and last lines as the cause, the previous profile
 // and — once the swap is done — the active one, not rolled back, and the
-// steps that recover.
+// steps that recover. Restoring the previous profile is one of them only
+// after the swap: before it, the previous profile is still the active one.
 func switchProblem(cfg config.Config, name, previous string, swapped bool, err error) output.Problem {
 	cause := err.Error()
 	var te *output.TaskError
@@ -130,9 +131,9 @@ func switchProblem(cfg config.Config, name, previous string, swapped bool, err e
 	}
 	if swapped {
 		p.Facts = append(p.Facts, output.Fact{K: "Active", V: name + " (not rolled back)"})
-	}
-	if previous != "" {
-		p.Steps = append(p.Steps, output.Remedy{Label: "Restore previous", Cmd: "ws proxy profile use " + previous})
+		if previous != "" {
+			p.Steps = append(p.Steps, output.Remedy{Label: "Restore previous", Cmd: "ws proxy profile use " + previous})
+		}
 	}
 	p.Steps = append(p.Steps, output.Remedy{Label: "Inspect logs", Cmd: "docker logs " + cfg.ProxyContainer + " --tail 50"})
 	return p
