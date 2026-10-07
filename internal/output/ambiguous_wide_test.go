@@ -35,10 +35,10 @@ import (
 // mode is clean. The forced-UTF-8 run is the control that proves the clean
 // result is not vacuous.
 //
-// Measured on this tree, over fxCorpus()'s 50 fixtures at widths 29..200:
+// Measured on this tree, over fxCorpus()'s 57 fixtures at widths 29..200:
 //
-//	Ambiguous-wide, mode selected by §4.5: ascii, 0 of 60243 lines overflow
-//	Ambiguous-wide, glyph mode forced to utf8: 14711 of 60243 lines overflow
+//	Ambiguous-wide, mode selected by §4.5: ascii, 0 of 62728 lines overflow
+//	Ambiguous-wide, glyph mode forced to utf8: 14711 of 62728 lines overflow
 //
 // Only the SHAPE of that pair is asserted — zero for the selected mode, some
 // non-zero number for the forced control — because both counts move with the
@@ -143,6 +143,13 @@ func ambiguousWideChild(t *testing.T, role string) {
 			}
 		}
 	}
+	// So must every frame of the step runner's spinner: the braille patterns
+	// are East-Asian Neutral, not Ambiguous.
+	for _, g := range append(append([]string(nil), spinnerFrames...), spinnerFramesASCII...) {
+		if w := ansi.StringWidth(g); w != 1 {
+			t.Errorf("under the Ambiguous-wide convention the spinner frame %q is %d cells", g, w)
+		}
+	}
 
 	// §6.4's per-glyph census, in BOTH directions. glyph_test.go's
 	// TestGlyphWidths asserts the ASCII border set is one cell and one ASCII
@@ -205,7 +212,7 @@ func ambiguousWideChild(t *testing.T, role string) {
 			// assertAllocPolicy, which reads the allocator's input and
 			// nothing else. Measured on this tree: all 8 of
 			// allocFixtureCases() have a nil render, and 0 of fxCorpus()'s
-			// 49 do — the two sets are disjoint today. The corpus is
+			// 57 do — the two sets are disjoint today. The corpus is
 			// appended to by later phases, and a nil reaching the call below
 			// would panic rather than report.
 			if fx.render == nil {

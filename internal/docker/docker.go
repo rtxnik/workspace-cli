@@ -338,30 +338,6 @@ func ProxyLogs(cfg config.Config, n int) (string, error) {
 	return string(out), nil
 }
 
-// ProxyRebuild rebuilds the proxy image with minimal downtime.
-// Build happens first (while proxy may still be running), then the
-// container is recreated on the same bridge network. Workspace
-// containers are unaffected.
-func ProxyRebuild(cfg config.Config) error {
-	st, _ := ProxyStatus(cfg)
-	wasRunning := st.Running
-
-	if err := BuildProxyImage(cfg, "", false); err != nil {
-		return err
-	}
-
-	if wasRunning {
-		if err := proxyRecreate(cfg); err != nil {
-			return fmt.Errorf("restart after rebuild: %w", err)
-		}
-	}
-
-	// Clean up dangling old image (best-effort, bounded).
-	_ = PruneImages()
-
-	return nil
-}
-
 // RestartContainerNoVerify stops then starts the proxy container with no
 // post-start health gate -- today's ProxyRestart body, preserving the
 // missing/stopped idempotency. SwitchTo wires its restart step to this so it
@@ -440,10 +416,11 @@ func buildProxyArgs(cfg config.Config, version string, res proxyrecipe.Result, a
 // unless allowDrift is set (in which case the image is stamped "unverified").
 // If version is non-empty it is passed as the XRAY_VERSION build arg.
 //
-// The build streams progress to the terminal and can legitimately take minutes;
-// it is intentionally left unbounded (a deadline would kill a valid long build
-// mid-run). Ctrl-C interrupts it if it truly wedges.
-func BuildProxyImage(cfg config.Config, version string, allowDrift bool) error {
+// The build writes its progress to log, a step runner task's log — both of
+// docker's streams — or to the terminal when log is nil. It can legitimately
+// take minutes and is intentionally left unbounded (a deadline would kill a
+// valid long build mid-run). Ctrl-C interrupts it if it truly wedges.
+func BuildProxyImage(cfg config.Config, version string, allowDrift bool, log *output.Log) error {
 	res, err := proxyrecipe.Verify(cfg.ProfilesDir)
 	if err != nil {
 		return fmt.Errorf("verify proxy recipe: %w", err)
@@ -456,6 +433,9 @@ func BuildProxyImage(cfg config.Config, version string, allowDrift bool) error {
 	cmd := exec.Command("docker", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if log != nil {
+		cmd.Stdout, cmd.Stderr = log.File(), log.File()
+	}
 	return cmd.Run()
 }
 

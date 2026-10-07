@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -68,8 +69,9 @@ func (e *cliErrorWithExit) Error() string { return e.msg }
 
 // run is the root's error protocol. Given what the command tree returned, it
 // decides what the root prints and what the process exits with; msg is
-// printed through output.Fail, and an empty msg prints nothing. Four branches
-// and nothing else:
+// printed as a Problem's title unless err carries a Problem of its own
+// (rootProblem), and an empty msg prints nothing. Four branches and nothing
+// else:
 //
 //	nil                                     -> "", 0
 //	*cliErrorWithExit, err.Error() == ""    -> "", cerr.code
@@ -133,16 +135,17 @@ func usageTarget(cmd *cobra.Command, err error) (target *cobra.Command, suggesti
 }
 
 // Execute runs the command tree. An error that reaches it is printed at most
-// once, through output.Fail, and the process exits with the code run chose.
-// A usage error gets its usage lines under the ✗ line.
+// once, as the Problem rootProblem chooses, and the process exits with the
+// code run chose. A usage error gets its usage lines under the ✗ line.
 func Execute() {
 	// Built here rather than at package init, so that it is built for the
 	// stream --version writes to, once that stream has been resolved.
 	rootCmd.SetVersionTemplate(versionTemplate(output.Out()))
 	cmd, err := execute(rootCmd)
 	msg, code := run(err)
-	if msg != "" {
-		output.Fail(msg)
+	if p, ok := rootProblem(msg, err); ok {
+		s := output.Err()
+		_, _ = fmt.Fprintln(s, p.Render(s))
 		if target, suggestions, ok := usageTarget(cmd, err); ok {
 			printUsageLines(target, suggestions)
 		}
@@ -150,6 +153,21 @@ func Execute() {
 	if code != 0 {
 		os.Exit(code)
 	}
+}
+
+// rootProblem is what the root prints for err, whose message run returned as
+// msg: the Problem err's chain carries, when it carries one; otherwise, when
+// msg is not empty, a Problem with msg as its title, which renders byte for
+// byte as the ✗ line output.Fail prints; and otherwise nothing, which is a
+// *cliErrorWithExit whose command printed everything itself.
+func rootProblem(msg string, err error) (output.Problem, bool) {
+	if p, ok := output.ProblemOf(err); ok {
+		return p, true
+	}
+	if msg == "" {
+		return output.Problem{}, false
+	}
+	return output.Problem{Title: msg}, true
 }
 
 // execute runs root and returns the command that failed and the error the

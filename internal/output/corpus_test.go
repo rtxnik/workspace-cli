@@ -1,12 +1,16 @@
 package output
 
-// Three imports, each with one job: x/ansi segments and measures for
-// fxExpandTabs, fmt formats the switch set in fxCorpusBuild's guard, strings
-// builds the raw material. A helper landed ahead of its first caller is `func
-// fxExpandTabs is unused` at the acceptance gate, which runs golangci-lint
-// over the _test.go files too, so a helper and its callers land together.
+// Five imports, each with one job: x/ansi segments and measures for
+// fxExpandTabs, fmt formats the switch set in fxCorpusBuild's guard and the
+// task tail's lines, errors makes that task's error, io writes the runner
+// fixtures' task logs, strings builds the raw material. A
+// helper landed ahead of its first caller is `func fxExpandTabs is unused` at
+// the acceptance gate, which runs golangci-lint over the _test.go files too,
+// so a helper and its callers land together.
 import (
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -99,6 +103,21 @@ const fxCJKNote = "拨号失败：连接超时（30 秒），代理配置文件 
 //	Check.Name           12, first checks/esc-surfaces @ 29
 //	Check.Note           12, first checks/esc-surfaces @ 29
 func fxEsc(text string) string { return "\x1b[2K" + text + "\x1b]0;pwned\x07" }
+
+// fxTaskTailProblem is the Problem of a failed devpod up whose log tail is
+// full: tailLines lines, the last one as long as lineCap keeps.
+func fxTaskTailProblem() Problem {
+	tail := make([]string, 0, tailLines)
+	for i := 1; i < tailLines; i++ {
+		tail = append(tail, fmt.Sprintf("[12:01:%02d] info up api: step %d of the build", i, i))
+	}
+	long := "[12:01:59] fatal up api: " + fxToken200 + " "
+	for len(long) < lineCap {
+		long += "denied "
+	}
+	tail = append(tail, long[:lineCap])
+	return (&TaskError{Title: "Starting container", Err: errors.New("devpod up: exit status 1"), Tail: tail}).AsProblem()
+}
 
 // ------------------------------------------------------------ fixture type
 //
@@ -606,6 +625,9 @@ func fxCorpusBuild() []fixture {
 			Facts: []Fact{{"stage", "buildkit export"}, {"markers", fxEmojiRun}},
 			Steps: []Remedy{{"Retry the build", "ws profile rebuild go"}},
 		}, nil},
+		// The Problem a failed task renders as, with the most its tail holds:
+		// 20 lines, one of them cut at 1 KiB.
+		{"problem/task-tail-20", "§4.1 a failed task's Problem with a 20-line tail", fxTaskTailProblem(), nil},
 		{"problem/esc-cause", "§6.7 Cause containing control sequences", Problem{
 			Title: "Could not pull the base image",
 			Cause: fxEscCause,
@@ -618,8 +640,11 @@ func fxCorpusBuild() []fixture {
 		if fid == nil {
 			fid = fxProblemSources(p)
 		}
+		// A Problem's title is drawn as Fail draws a message, so its first
+		// line starts with the fail mark at every width.
 		out = append(out, fixture{
 			name: pf.name, kind: "problem", spec: pf.spec, fidelity: fid,
+			prefixState: StateFail, hasPrefixState: true,
 			render: func(s *Stream) string { return p.Render(s) },
 		})
 	}
@@ -765,9 +790,10 @@ func fxCorpusBuild() []fixture {
 	}
 	out = append(out, fixture{
 		name: "problem/esc-surfaces", kind: "problem",
-		spec:     "§6.7 / D-13: escapes in Title, a Fact key and value, and a Remedy label and command",
-		fidelity: []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go"},
-		render:   func(s *Stream) string { return escProblem.Render(s) },
+		spec:        "§6.7 / D-13: escapes in Title, a Fact key and value, and a Remedy label and command",
+		fidelity:    []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go"},
+		prefixState: StateFail, hasPrefixState: true,
+		render: func(s *Stream) string { return escProblem.Render(s) },
 	})
 
 	escEmpty := Empty{
@@ -816,5 +842,72 @@ func fxCorpusBuild() []fixture {
 		})
 	}
 
+	return append(out, fxRunnerFixtures()...)
+}
+
+// fxRunnerFixtures are the step runner's lines (run.go): its frame, held one
+// cell short of the budget (slack 1), and its step lines, held to the
+// budget. A frame's live line is read from a real task log, written once
+// here, so it is cleaned the way the frame cleans it: the long-title log's
+// last line is a progress redraw — a carriage return — followed by a line
+// full of escapes and a 200-character token.
+func fxRunnerFixtures() []fixture {
+	logWith := func(text string) *Log {
+		l, err := newLog()
+		if err != nil {
+			panic("the runner fixtures need a task log: " + err.Error())
+		}
+		_, _ = io.WriteString(l, text)
+		return l
+	}
+	title200 := "Building proxy image with xray-core " + fxToken200
+	frames := []struct {
+		name, spec, title string
+		log               *Log
+	}{
+		{"runner/frame-long-title", "§4.1 the runner's frame: a 200-character title, a live line full of escapes and \\r",
+			title200, logWith("step 1/3\r" + fxEsc("[12:01:31] info exporting layers ") + fxEscCause + " " + fxToken200 + "\n")},
+		{"runner/frame-cjk", "§4.1 the runner's frame: CJK title and live line",
+			"工作区启动 " + fxCJKNote, logWith(fxCJKNote + "\n")},
+		{"runner/frame-emoji-presentation", "§4.1 the runner's frame: emoji-presentation sequences",
+			"⚠️ " + fxEmojiRun, logWith(fxEmojiCause + " " + fxEmojiRun)},
+		// A task's title comes from argv or from a release's tag name, so the
+		// frame cleans it as it cleans the live line.
+		{"runner/frame-esc-title", "§6.7 the runner's frame: a title carrying escapes",
+			fxEsc("Building proxy image"), logWith("info exporting layers\n")},
+	}
+	var out []fixture
+	for _, ff := range frames {
+		title, log := ff.title, ff.log
+		out = append(out, fixture{
+			name: ff.name, kind: "runner", spec: ff.spec, slack: 1,
+			render: func(s *Stream) string {
+				return strings.Join(frameLines(s, spinnerGlyph(s.mode, 3), title, "1m12s", log.liveLine()), "\n")
+			},
+		})
+	}
+	steps := []struct {
+		name, spec    string
+		st            State
+		title, suffix string
+		fid           []string // nil: the title itself
+	}{
+		{"runner/result-ok", "§4.1 a result line with a 200-character title", StateOK, title200, "12.3s", nil},
+		{"runner/result-interrupted", "§4.1 the interrupted line, CJK", StateFail, "工作区启动 " + fxCJKNote, "interrupted after 1h04m", nil},
+		{"runner/start-line", "§4.1 a start line off a terminal, 64-character name", StateBusy, "Starting workspace \"" + fxName64 + "\"", "", nil},
+		{"runner/not-run-esc", "§6.7 a not-run line whose title carries escapes", StateIdle, fxEsc("Fixing workspace routes"), "",
+			[]string{"Fixing workspace routes"}},
+	}
+	for _, sf := range steps {
+		st, title, suffix, fid := sf.st, sf.title, sf.suffix, sf.fid
+		if fid == nil {
+			fid = []string{title}
+		}
+		out = append(out, fixture{
+			name: sf.name, kind: "runner", spec: sf.spec, fidelity: fid,
+			prefixState: st, hasPrefixState: true,
+			render: func(s *Stream) string { return stepLine(s, st, title, suffix) },
+		})
+	}
 	return out
 }

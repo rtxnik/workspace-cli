@@ -95,7 +95,9 @@ var proxyDoctorCmd = &cobra.Command{
 		res := runChecks(proxyDoctorChecks(cfg, proxyengine.Default()))
 
 		if jsonFlag {
-			output.JSON(res)
+			if err := output.WriteJSON(cmd.OutOrStdout(), res); err != nil {
+				return err
+			}
 		} else {
 			renderDoctor(res)
 		}

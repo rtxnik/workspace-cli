@@ -40,65 +40,61 @@ func renderWorkspaceStatus(out io.Writer, statuses []workspace.RepoStatus, jsonM
 	if jsonMode {
 		return output.WriteJSON(out, statuses)
 	}
+	t, err := statusTable(statuses)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, t.Render(output.Out()))
+	return err
+}
 
+// statusTable is ws status's table, REPO, BRANCH, STATUS and SYNC, with its
+// caption. A branch other than main and a sync that is not zero are painted
+// as warnings, and a probe's error as muted text; the words carry the same.
+func statusTable(statuses []workspace.RepoStatus) (output.Table, error) {
+	t, err := output.NewTableBlock([]output.Col{
+		{Title: "REPO", Prio: 1, Min: 8, Trunc: output.TruncMid},
+		{Title: "BRANCH", Prio: 2, Min: 6, Trunc: output.TruncMid},
+		{Title: "STATUS", Prio: 1, Min: 7, Atomic: true, Kind: output.ColState},
+		{Title: "SYNC", Prio: 3, Min: 6, Trunc: output.TruncTail},
+	}, nil)
+	if err != nil {
+		return output.Table{}, err
+	}
 	healthy := 0
-	rows := make([][]string, 0, len(statuses))
-
 	for _, s := range statuses {
-		if !s.Exists {
-			rows = append(rows, []string{
-				s.Name,
-				output.StyleError.Render("–"),
-				output.StyleError.Render("missing"),
-				"",
-			})
+		switch {
+		case !s.Exists:
+			t.Rows = append(t.Rows, []output.Cell{output.Text(s.Name), output.Text(""),
+				output.Mark(output.StateFail, "missing"), output.Text("")})
+			continue
+		case s.Error != "":
+			t.Rows = append(t.Rows, []output.Cell{output.Text(s.Name), output.Text(""),
+				output.Mark(output.StateFail, "error"), {Text: s.Error, Role: output.RoleMuted}})
 			continue
 		}
-
-		if s.Error != "" {
-			rows = append(rows, []string{
-				s.Name,
-				output.StyleWarning.Render("–"),
-				output.StyleWarning.Render("error"),
-				output.StyleDim.Render(s.Error),
-			})
-			continue
-		}
-
-		branchStr := output.StyleSuccess.Render(s.Branch)
+		branch := output.Text(s.Branch)
 		if s.Branch != "main" {
-			branchStr = output.StyleWarning.Render(s.Branch)
+			branch.Role = output.RoleWarn
 		}
-
-		cleanStr := output.StyleSuccess.Render("clean")
+		state := output.Mark(output.StateOK, "clean")
 		if !s.Clean {
-			cleanStr = output.StyleWarning.Render("dirty")
+			state = output.Mark(output.StateBusy, "dirty")
 		}
-
-		var syncStr string
+		sync := output.Text("in sync")
 		switch {
 		case s.NoRemote:
-			syncStr = output.StyleDim.Render("no remote")
-		case s.Ahead == 0 && s.Behind == 0:
-			syncStr = output.StyleDim.Render("±0")
-		default:
-			syncStr = output.StyleWarning.Render(fmt.Sprintf("+%d/-%d", s.Ahead, s.Behind))
+			sync = output.Text("no remote")
+		case s.Ahead != 0 || s.Behind != 0:
+			sync = output.Cell{Text: fmt.Sprintf("+%d -%d", s.Ahead, s.Behind), Role: output.RoleWarn}
 		}
-
 		if isRepoHealthy(s) {
 			healthy++
 		}
-
-		rows = append(rows, []string{s.Name, branchStr, cleanStr, syncStr})
+		t.Rows = append(t.Rows, []output.Cell{output.Text(s.Name), branch, state, sync})
 	}
-
-	t := output.NewTable([]string{"REPO", "BRANCH", "STATUS", "SYNC"}).Rows(rows...)
-	if _, err := fmt.Fprintln(out, t); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "\n%s\n",
-		output.StyleDim.Render(fmt.Sprintf("  %d/%d repos healthy", healthy, len(statuses))))
-	return nil
+	t.Caption = fmt.Sprintf("%d/%d repos healthy", healthy, len(statuses))
+	return t, nil
 }
 
 func newWorkspaceStatusCmd() *cobra.Command {

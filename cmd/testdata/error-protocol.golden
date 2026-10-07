@@ -140,11 +140,12 @@ exit 1
 |✗ migration required but --no-migrate is set; either run `ws proxy profile add
 |  primary <uri>` manually OR drop --no-migrate to auto-migrate
 |  home/.config/xray/config.json
-=== runtime/spinner-double
+=== runtime/spinner-failure
 exit 1
---- stdout (118 bytes)
-|Stopping workspace "wsx"✗ Stopping workspace "wsx": devpod stop: exec: "devpod": executable file not found in $PATH
---- stderr (68 bytes)
+--- stdout (0 bytes)
+--- stderr (129 bytes)
+|~ Stopping workspace "wsx"
+|✗ Stopping workspace "wsx"  <t>
 |✗ devpod stop: exec: "devpod": executable file not found in $PATH
 === cli-exit/code-1
 exit 1
@@ -161,17 +162,16 @@ exit 4
 |  ISO week; see ROADMAP §Phase 21c
 === silent/workspace-status
 exit 1
---- stdout (612 bytes)
-|╭───────────────┬────────┬─────────┬──────╮
-|│ REPO          │ BRANCH │ STATUS  │ SYNC │
-|├───────────────┼────────┼─────────┼──────┤
-|│ workspace-cli │ –      │ missing │      │
-|│ vault-ai      │ –      │ missing │      │
-|│ dotfiles      │ –      │ missing │      │
-|╰───────────────┴────────┴─────────┴──────╯
---- stderr (21 bytes)
-|
-|  0/3 repos healthy
+--- stdout (656 bytes)
+|╭───────────────┬────────┬───────────┬──────╮
+|│ REPO          │ BRANCH │ STATUS    │ SYNC │
+|├───────────────┼────────┼───────────┼──────┤
+|│ workspace-cli │        │ ✗ missing │      │
+|│ vault-ai      │        │ ✗ missing │      │
+|│ dotfiles      │        │ ✗ missing │      │
+|╰───────────────┴────────┴───────────┴──────╯
+|0/3 repos healthy
+--- stderr (0 bytes)
 === silent/vault-health-score
 exit 1
 --- stdout (3 bytes)
@@ -209,21 +209,18 @@ exit 0
 |Aborted
 === body-exit/proxy-up-unreachable
 exit 1
---- stdout (14 bytes)
-|Starting proxy
---- (no newline at end of stdout)
---- stderr (1128 bytes)
-|✗ Starting proxy: proxy image "devpod-proxy" not found, run 'ws proxy rebuild' first
-|  ○ Waiting for health check
-|  ○ Fixing workspace routes
-|╭─────────────────────────────────────────────────────────────────────────────╮
-|│ Failed to start proxy                                                       │
-|│   Error: proxy image "devpod-proxy" not found, run 'ws proxy rebuild' first │
-|│                                                                             │
-|│   1. Check config: ws proxy check                                           │
-|│   2. Initialize config: ws proxy init <vless-uri>                           │
-|│   3. Rebuild image: ws proxy rebuild                                        │
-|╰─────────────────────────────────────────────────────────────────────────────╯
+--- stdout (0 bytes)
+--- stderr (320 bytes)
+|~ Starting proxy
+|✗ Starting proxy  <t>
+|- Waiting for health check
+|- Fixing workspace routes
+|✗ Failed to start proxy
+|  proxy image "devpod-proxy" not found, run 'ws proxy rebuild' first
+|
+|  1. Check config       ws proxy check
+|  2. Initialize config  ws proxy init <proxy-uri>
+|  3. Rebuild image      ws proxy rebuild
 === body-exit/proxy-doctor-unreachable
 exit 1
 --- stdout (24 bytes)
@@ -260,20 +257,32 @@ exit 1
 === body-exit/start-not-found
 exit 1
 --- stdout (0 bytes)
---- stderr (352 bytes)
-|╭───────────────────────────────╮
-|│ Workspace "nope" not found    │
-|│                               │
-|│   1. List workspaces: ws list │
-|│   2. Create it: ws new nope   │
-|╰───────────────────────────────╯
+--- stderr (96 bytes)
+|✗ Workspace "nope" not found
+|
+|  1. List workspaces  ws list
+|  2. Create it        ws new nope
 === body-exit/new-exists
 exit 1
 --- stdout (0 bytes)
---- stderr (412 bytes)
-|╭─────────────────────────────────────╮
-|│ Workspace "wsx" already exists      │
-|│                                     │
-|│   1. Choose a different name        │
-|│   2. Delete existing: ws delete wsx │
-|╰─────────────────────────────────────╯
+--- stderr (102 bytes)
+|✗ Workspace "wsx" already exists
+|
+|  1. Delete it        ws delete wsx
+|  2. List workspaces  ws list
+=== runtime/delete-not-found
+exit 1
+--- stdout (0 bytes)
+--- stderr (119 bytes)
+|✗ Workspace "nosuch" not found
+|
+|  1. List workspaces        ws list
+|  2. Remove it from devpod  devpod delete nosuch
+=== runtime/delete-not-found-force
+exit 1
+--- stdout (0 bytes)
+--- stderr (119 bytes)
+|✗ Workspace "nosuch" not found
+|
+|  1. List workspaces        ws list
+|  2. Remove it from devpod  devpod delete nosuch

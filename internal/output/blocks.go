@@ -17,19 +17,12 @@ import (
 // (§4.1).
 
 // Fact is an ordered key/value pair. The blocks that carry Facts hold them in
-// a slice and not a map because RenderError in error.go ranges over a map
-// today and Go randomises map iteration, so the same failure prints its
-// context in a different order every run.
+// a slice and not a map: Go randomises map iteration, so a map would print
+// the same failure's context in a different order every run, as the error box
+// the Problem replaced did.
 type Fact struct{ K, V string }
 
 // Remedy is a next step: a short label and a copy-pasteable command.
-//
-// The type is named Remedy and not Step because steps.go already declares
-// `type Step struct{ Name string; Fn func() error }`, consumed by
-// NewStepRunner at five call sites. This package gains the block types while
-// StepRunner is still live, so a second Step would be an immediate compile
-// failure; the existing type keeps its name until the spinner migration
-// retires it.
 type Remedy struct {
 	Label string
 	Cmd   string
@@ -53,9 +46,7 @@ type Table struct {
 //
 // §4.3 rejects at construction a Col set whose forced chrome plus its
 // un-droppable Min widths cannot fit MinWidth, so that case is reachable only
-// through a programming error. The constructor is not named NewTable because
-// table.go already exports `NewTable(headers []string) *table.Table`, live at
-// six call sites under cmd/ until the table migration retires it.
+// through a programming error.
 func NewTableBlock(cols []Col, rows [][]Cell) (Table, error) {
 	if err := validateCols(cols); err != nil {
 		return Table{}, err
@@ -299,33 +290,30 @@ func (p Problem) Render(s *Stream) string {
 	budget := s.budget()
 	var b strings.Builder
 
-	// §4.4: title at column 0, continuation lines hanging-indented by 2.
+	// The title is drawn exactly as Fail draws a message: renderMessage with
+	// the fail shape — the mark, a space, the title wrapped at the budget with
+	// a hanging indent of 2, every line painted RoleFail. A Problem holding
+	// only a title is then byte for byte the line Fail prints, at every colour
+	// level and in both glyph modes, so the root can render every error it
+	// prints as a Problem without moving one byte of today's ✗ line. This
+	// departs from the parent's §4.4, which draws the title at column 0 with
+	// no mark; the phase-1 spec kept the ✗ on every error.
 	//
-	// The WHOLE title is wrapped at budget-hang, because that is the width
-	// every line after the first will actually occupy, and the first line is
-	// then rendered unindented at that same width. Clipping the continuation
-	// instead — which is what the committed reference module does — would lose
-	// characters to a wrapping decision rather than to an unbreakable run, and
-	// that is not what §4.4's truncate-over-hard-break precedence is about.
-	// Wrapping at budget and RE-wrapping the remainder would be one cell wider
-	// on line 1 and is rejected: rejoining wrapped lines inserts a space, which
-	// a hard-broken unbreakable token must not acquire.
-	//
-	// budget() clamps to MinWidth, so budget-hang is at least MinWidth-hang and
-	// Wrap is never handed a degenerate width. A single unbreakable token wider
-	// than budget-hang is still hard-broken by Wrap itself, which is §4.4's
-	// unconditional half and text.go's behaviour rather than this block's.
-	//
-	// The cost is one cell of the first line at every width; the gain is that
-	// no title loses a character at any width, so the title can carry a
-	// content-fidelity assertion.
-	const hang = 2
-	for i, line := range Wrap(Sanitise(p.Title), budget-hang) {
-		if i == 0 {
+	// The whole title is wrapped at budget-2, the width every line occupies
+	// once the mark or the hanging indent is in front of it, so no title loses
+	// a character at any width and the title can carry a content-fidelity
+	// assertion. A single unbreakable token wider than that is hard-broken by
+	// Wrap itself, which is §4.4's unconditional half and text.go's behaviour
+	// rather than this block's.
+	if mutants.ProblemTitleUnmarked {
+		for i, line := range Wrap(Sanitise(p.Title), budget-2) {
+			if i > 0 {
+				line = "  " + line
+			}
 			b.WriteString(s.paint(RoleFail, line) + "\n")
-			continue
 		}
-		b.WriteString(strings.Repeat(" ", hang) + s.paint(RoleFail, line) + "\n")
+	} else {
+		b.WriteString(renderMessage(s, shapeFail, p.Title) + "\n")
 	}
 
 	if p.Cause != "" {

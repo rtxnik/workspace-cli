@@ -3,7 +3,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -34,22 +33,22 @@ var proxyUpCmd = &cobra.Command{
 		cfg := config.Load()
 		noWait, _ := cmd.Flags().GetBool("no-wait")
 
-		steps := []output.Step{
-			{Name: "Starting proxy", Fn: func() error {
+		tasks := []output.Task{
+			{Title: "Starting proxy", Run: func(*output.Log) error {
 				return docker.ProxyUp(cfg)
 			}},
 		}
 		if !noWait {
-			steps = append(steps, output.Step{
-				Name: "Waiting for health check",
-				Fn: func() error {
+			tasks = append(tasks, output.Task{
+				Title: "Waiting for health check",
+				Run: func(*output.Log) error {
 					return docker.WaitForHealth(cfg, docker.ProxyHealthBudget)
 				},
 			})
 		}
-		steps = append(steps, output.Step{
-			Name: "Fixing workspace routes",
-			Fn: func() error {
+		tasks = append(tasks, output.Task{
+			Title: "Fixing workspace routes",
+			Run: func(*output.Log) error {
 				rep, err := docker.ProxyFixRoutes(cfg)
 				if err != nil {
 					return err
@@ -60,9 +59,8 @@ var proxyUpCmd = &cobra.Command{
 			},
 		})
 
-		if err := output.NewStepRunner(steps...).Run(); err != nil {
-			fmt.Fprintln(os.Stderr, output.RenderError(upFailureDetail(err)))
-			return &cliErrorWithExit{code: 1, msg: ""}
+		if err := output.Run(tasks...); err != nil {
+			return upProblem(err)
 		}
 		return nil
 	},
@@ -81,12 +79,9 @@ var proxyDownCmd = &cobra.Command{
 			}
 		}
 
-		if err := output.RunWithSpinner("Stopping proxy", func() error {
+		return output.Run(output.Task{Title: "Stopping proxy", Run: func(*output.Log) error {
 			return docker.ProxyDown(cfg)
-		}); err != nil {
-			return err
-		}
-		return nil
+		}})
 	},
 }
 
@@ -108,7 +103,7 @@ var proxyStatusCmd = &cobra.Command{
 			if perr != nil {
 				scanErr = perr.Error()
 			}
-			output.JSON(struct {
+			return output.WriteJSON(cmd.OutOrStdout(), struct {
 				Running             bool                      `json:"running"`
 				Health              string                    `json:"health"`
 				Uptime              string                    `json:"uptime"`
@@ -127,7 +122,6 @@ var proxyStatusCmd = &cobra.Command{
 				WorkspaceProtection: protectionJSON(prot),
 				ProtectionScanError: scanErr,
 			})
-			return nil
 		}
 
 		stateStatus := "stopped"
@@ -243,31 +237,27 @@ var proxyRebuildCmd = &cobra.Command{
 		}
 		allowDrift, _ := cmd.Flags().GetBool("allow-drift")
 
-		runner := output.NewStepRunner(
-			output.Step{Name: "Building proxy image", Fn: func() error {
-				return docker.BuildProxyImage(cfg, "", allowDrift)
+		return output.Run(
+			output.Task{Title: "Building proxy image", Run: func(log *output.Log) error {
+				return docker.BuildProxyImage(cfg, "", allowDrift, log)
 			}},
-			output.Step{Name: "Recreating container", Fn: func() error {
+			output.Task{Title: "Recreating container", Run: func(*output.Log) error {
 				st, _ := docker.ProxyStatus(cfg)
 				if st.Running {
 					return docker.ProxyRecreate(cfg)
 				}
 				return nil
 			}},
-			output.Step{Name: "Waiting for health check", Fn: func() error {
+			output.Task{Title: "Waiting for health check", Run: func(*output.Log) error {
 				// Redundant after the transactional ProxyRecreate (which verifies
 				// health internally) but benign; kept for the non-recreate cold
 				// path. Removing it is an optional follow-up (spec §10).
 				return docker.WaitForHealth(cfg, docker.ProxyHealthBudget)
 			}},
-			output.Step{Name: "Cleaning old images", Fn: func() error {
+			output.Task{Title: "Cleaning old images", Run: func(*output.Log) error {
 				return docker.PruneImages()
 			}},
 		)
-		if err := runner.Run(); err != nil {
-			return err
-		}
-		return nil
 	},
 }
 
@@ -301,14 +291,16 @@ var proxyTestCmd = &cobra.Command{
 				dnsExit = dnsRes.ExitIP
 			}
 			verdict, exitNonZero := testDNSVerdict(result, dnsExit)
-			output.JSON(testJSONResult{
+			if err := output.WriteJSON(cmd.OutOrStdout(), testJSONResult{
 				DirectIP:  result.DirectIP,
 				ProxiedIP: result.ProxiedIP,
 				Tunneled:  result.Tunneled,
 				LatencyMs: result.Latency.Milliseconds(),
 				DNS:       verdict,
 				DNSExitIP: dnsExit,
-			})
+			}); err != nil {
+				return err
+			}
 			if exitNonZero {
 				return &cliErrorWithExit{code: 1, msg: ""}
 			}
@@ -416,8 +408,9 @@ var proxyUpdateCmd = &cobra.Command{
 			output.Detail(fmt.Sprintf("Latest: %s", version))
 		}
 
-		if err := output.RunWithSpinner(fmt.Sprintf("Building proxy image with xray-core %s", version), func() error {
-			return docker.BuildProxyImage(cfg, version, false)
+		if err := output.Run(output.Task{
+			Title: fmt.Sprintf("Building proxy image with xray-core %s", version),
+			Run:   func(log *output.Log) error { return docker.BuildProxyImage(cfg, version, false, log) },
 		}); err != nil {
 			return err
 		}
@@ -614,28 +607,44 @@ func recreateUpdateOutcome(err error) (msg string, isWarn bool) {
 	return "Proxy restarted with new version", false
 }
 
-// upFailureDetail maps a proxy-up failure to its operator-facing rendering.
-// A partial route-fix failure means the proxy IS running but one or more
-// workspace containers kept a direct default route -- rendered as a degraded
-// outcome naming the failures, not as a start failure.
-func upFailureDetail(err error) output.ErrorDetail {
+// upProblem is the error a failed ws proxy up returns, carrying the Problem
+// the root prints. A partial route-fix failure means the proxy IS running
+// but one or more workspace containers kept a direct default route: a
+// degraded outcome with a fact for each failed container, not a start
+// failure. Any other failure is a start failure whose cause is the error and
+// the failed step's last lines.
+func upProblem(err error) error {
 	var rf *docker.RouteFixError
 	if errors.As(err, &rf) {
-		return output.ErrorDetail{
-			Title: fmt.Sprintf("Proxy is up, but workspace routes are DEGRADED (%d of %d failed)",
-				len(rf.Report.Failures), rf.Report.Attempted),
-			Context: map[string]string{"Failures": strings.Join(rf.Report.Failures, "; ")},
-			Suggestions: []string{
-				"Retry: ws proxy fix-routes",
-				"Diagnose: ws proxy doctor",
-			},
+		facts := make([]output.Fact, 0, len(rf.Report.Failures))
+		for _, f := range rf.Report.Failures {
+			name, why, _ := strings.Cut(f, ": ")
+			facts = append(facts, output.Fact{K: name, V: why})
 		}
+		return &output.ProblemError{Err: err, P: output.Problem{
+			Title: fmt.Sprintf("Proxy is up, but workspace routes are degraded (%d of %d failed)",
+				len(rf.Report.Failures), rf.Report.Attempted),
+			Facts: facts,
+			Steps: []output.Remedy{
+				{Label: "Retry", Cmd: "ws proxy fix-routes"},
+				{Label: "Diagnose", Cmd: "ws proxy doctor"},
+			},
+		}}
 	}
-	return output.ErrorDetail{
-		Title:       "Failed to start proxy",
-		Context:     map[string]string{"Error": err.Error()},
-		Suggestions: []string{"Check config: ws proxy check", "Initialize config: ws proxy init <vless-uri>", "Rebuild image: ws proxy rebuild"},
+	cause := err.Error()
+	var te *output.TaskError
+	if errors.As(err, &te) && len(te.Tail) > 0 {
+		cause += "\n" + strings.Join(te.Tail, "\n")
 	}
+	return &output.ProblemError{Err: err, P: output.Problem{
+		Title: "Failed to start proxy",
+		Cause: cause,
+		Steps: []output.Remedy{
+			{Label: "Check config", Cmd: "ws proxy check"},
+			{Label: "Initialize config", Cmd: "ws proxy init <proxy-uri>"},
+			{Label: "Rebuild image", Cmd: "ws proxy rebuild"},
+		},
+	}}
 }
 
 // workspaceProtectionJSON is the per-workspace route-protection entry in

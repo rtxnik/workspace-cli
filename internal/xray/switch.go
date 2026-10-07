@@ -1,9 +1,11 @@
 package xray
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
@@ -48,14 +50,18 @@ func realValidateProfile(cfg config.Config, name string) error {
 	return nil
 }
 
-// SwitchTo orchestrates Validate → AtomicSwap → Restart → WaitForHealth.
+// SwitchTo orchestrates Validate → AtomicSwap → Restart → WaitForHealth on
+// the step runner, and prints nothing itself.
 //
 // D-10 + memory feedback_no_auto_state_mutation enforcement: ANY step 2/3/4
-// failure surfaces output.RenderError and returns the wrapped error. NO
-// auto-rollback. NO retry. The symlink is left pointing at the new
-// (potentially broken) target so the operator decides next move with full
-// information. The tripwire test TestManualRecoveryOnFailedSwitch asserts
-// this contract — adding auto-rollback breaks CI.
+// failure returns an error that carries the switch's Problem — the previous
+// profile, the active one once the swap is done, and the steps that recover —
+// for the root to print. NO auto-rollback. NO retry. The symlink is left
+// pointing at the new (potentially broken) target so the operator decides
+// next move with full information. The tripwire test
+// TestManualRecoveryOnFailedSwitch asserts this contract — adding
+// auto-rollback breaks CI. The pre-swap errors — an invalid name, the legacy
+// bind, a missing file — are plain errors.
 func SwitchTo(cfg config.Config, name string) error {
 	if err := ValidateProfileName(name); err != nil {
 		return err
@@ -78,42 +84,59 @@ func SwitchTo(cfg config.Config, name string) error {
 		return fmt.Errorf("profile %q not found at %s: %w", name, target, err)
 	}
 
-	runner := output.NewStepRunner(
-		output.Step{Name: "Validate target profile (xray -test)", Fn: func() error {
+	swapped := false
+	if err := output.Run(
+		output.Task{Title: "Validate target profile (xray -test)", Run: func(*output.Log) error {
 			return ValidateProfile(cfg, name)
 		}},
-		output.Step{Name: "Atomic symlink swap", Fn: func() error {
+		output.Task{Title: "Atomic symlink swap", Run: func(*output.Log) error {
 			relativeTarget := filepath.Join("profiles", name+".json")
-			return fsutil.AtomicSymlink(relativeTarget, cfg.XrayConfig)
+			if err := fsutil.AtomicSymlink(relativeTarget, cfg.XrayConfig); err != nil {
+				return err
+			}
+			swapped = true
+			return nil
 		}},
-		output.Step{Name: "Restart dev-proxy", Fn: func() error {
+		output.Task{Title: "Restart dev-proxy", Run: func(*output.Log) error {
 			return restartProxyFn(cfg)
 		}},
-		output.Step{Name: fmt.Sprintf("Wait for liveness (<=%s)", xrayRestartLivenessTimeout), Fn: func() error {
+		output.Task{Title: fmt.Sprintf("Wait for liveness (<=%s)", xrayRestartLivenessTimeout), Run: func(*output.Log) error {
 			return waitForHealthFn(cfg, xrayRestartLivenessTimeout)
 		}},
-	)
-	if err := runner.Run(); err != nil {
-		ctx := map[string]string{"Error": err.Error()}
-		if previousActive != "" {
-			ctx["Previous profile"] = previousActive
-		}
-		suggestions := []string{}
-		if previousActive != "" {
-			suggestions = append(suggestions, fmt.Sprintf("Restore previous: ws proxy profile use %s", previousActive))
-		}
-		suggestions = append(suggestions, "Inspect logs: docker logs dev-proxy --tail 50")
-		fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
-			Title:       fmt.Sprintf("Switch to %q failed", name),
-			Context:     ctx,
-			Suggestions: suggestions,
-		}))
+	); err != nil {
 		// NO AUTO-ROLLBACK. NO RETRY. The symlink stays where it is.
 		// Operator decides next move with full information.
-		return fmt.Errorf("switch to %q failed (previous=%q): %w", name, previousActive, err)
+		return &output.ProblemError{
+			P:   switchProblem(cfg, name, previousActive, swapped, err),
+			Err: fmt.Errorf("switch to %q failed (previous=%q): %w", name, previousActive, err),
+		}
 	}
-	output.Success(fmt.Sprintf("Switched to %q", name))
 	return nil
+}
+
+// switchProblem is the Problem of a switch that failed after its pre-flight:
+// the failed step's error and last lines as the cause, the previous profile
+// and — once the swap is done — the active one, not rolled back, and the
+// steps that recover. Restoring the previous profile is one of them only
+// after the swap: before it, the previous profile is still the active one.
+func switchProblem(cfg config.Config, name, previous string, swapped bool, err error) output.Problem {
+	cause := err.Error()
+	var te *output.TaskError
+	if errors.As(err, &te) && len(te.Tail) > 0 {
+		cause += "\n" + strings.Join(te.Tail, "\n")
+	}
+	p := output.Problem{Title: fmt.Sprintf("Switch to %q failed", name), Cause: cause}
+	if previous != "" {
+		p.Facts = append(p.Facts, output.Fact{K: "Previous", V: previous})
+	}
+	if swapped {
+		p.Facts = append(p.Facts, output.Fact{K: "Active", V: name + " (not rolled back)"})
+		if previous != "" {
+			p.Steps = append(p.Steps, output.Remedy{Label: "Restore previous", Cmd: "ws proxy profile use " + previous})
+		}
+	}
+	p.Steps = append(p.Steps, output.Remedy{Label: "Inspect logs", Cmd: "docker logs " + cfg.ProxyContainer + " --tail 50"})
+	return p
 }
 
 // SwitchToSymlinkOnly performs Validate -> AtomicSwap and stops. NO

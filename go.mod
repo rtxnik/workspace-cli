@@ -4,7 +4,6 @@ go 1.26.6
 
 require (
 	github.com/charmbracelet/huh v1.0.0
-	github.com/charmbracelet/huh/spinner v0.0.0-20260223110133-9dc45e34a40b
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/charmbracelet/x/term v0.2.2

@@ -40,25 +40,11 @@ var (
 	StyleSection = lipgloss.NewStyle().Bold(true).Foreground(FG1)
 )
 
-// StatusIcon returns a colored icon for the given status.
-func StatusIcon(status string) string {
-	switch status {
-	case "running":
-		return StyleSuccess.Render("●")
-	case "stopped", "notcreated", "":
-		return StyleDim.Render("○")
-	case "busy", "starting":
-		return StyleWarning.Render("◉")
-	case "healthy":
-		return StyleSuccess.Render("●")
-	case "unhealthy":
-		return StyleError.Render("●")
-	default:
-		return StyleDim.Render("○")
-	}
-}
-
 // StatusText returns a colored "icon Status" string for the given status.
+//
+// It is what is left of the glyph vocabulary the tables gave up for state
+// words: ws proxy status is its one caller, not yet on the render layer, and
+// it goes with that caller.
 func StatusText(status string) string {
 	switch status {
 	case "running":

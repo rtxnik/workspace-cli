@@ -315,6 +315,36 @@ func corpusMutants() []mutant {
 			apply:  func(m *mutantSwitches) { m.TruncateInsteadOfWrap = true },
 		},
 		{
+			name: "problem_title_unmarked",
+			spec: "§4.4 as this batch amends it",
+			defect: "a Problem's title is drawn at column 0 with no mark, as the parent design's §4.4 drew it, so a " +
+				"Problem holding only a title no longer renders as the line Fail prints — the root's every error " +
+				"would lose its ✗",
+			apply: func(m *mutantSwitches) { m.ProblemTitleUnmarked = true },
+		},
+		{
+			name: "frame_line_uncut",
+			spec: "§4.7 the step runner",
+			defect: "the frame's lines are laid out against the whole budget rather than budget − 1, so a line as " +
+				"wide as the terminal leaves some terminals' cursor on the next row and the redraw climbs one " +
+				"row short",
+			apply: func(m *mutantSwitches) { m.FrameUncut = true },
+		},
+		{
+			name: "live_line_uncleaned",
+			spec: "§4.7 the step runner / §6.7",
+			defect: "the frame's second line is the child's line as it wrote it, so its cursor moves, line clears " +
+				"and title rewrites reach the terminal under the frame",
+			apply: func(m *mutantSwitches) { m.LiveLineRaw = true },
+		},
+		{
+			name: "frame_title_uncleaned",
+			spec: "§4.7 the step runner / §6.7",
+			defect: "the frame's title is drawn as the task gave it, so escapes from argv or a release's tag " +
+				"name reach the terminal in the frame's first line",
+			apply: func(m *mutantSwitches) { m.FrameTitleRaw = true },
+		},
+		{
 			name: "chrome_off_by_one+lipgloss_width_pinning",
 			spec: "§6.1 paired assertion / §8",
 			defect: "the chrome defect WITH lipgloss pinning: the measured case where the bare width sweep sees " +
@@ -642,11 +672,10 @@ func contractMutants() []contractMutant {
 		},
 		{
 			name: "fail_stops_wrapping",
-			spec: "§6.1 / §4.8",
-			defect: "Fail stops wrapping — and with it the root's error print, which renders through it; the " +
-				"four helpers the sweep reaches through renderMessage are untouched, and so are the fail " +
-				"shape's mark, role and sanitising: the switch moves the wrap and nothing else, so a kill " +
-				"cannot be attributed to a second change",
+			spec: "§6.1",
+			defect: "Fail stops wrapping; the four helpers the sweep reaches through renderMessage are " +
+				"untouched, and so are the fail shape's mark, role and sanitising: the switch moves the wrap " +
+				"and nothing else, so a kill cannot be attributed to a second change",
 			apply: func(m *mutantSwitches) { m.FailUnwrapped = true },
 			probe: probeFail,
 		},
@@ -664,6 +693,35 @@ func contractMutants() []contractMutant {
 			defect: "the width probe is pointed at fd 0 — stdin — rather than at the stream's own fd",
 			apply:  func(m *mutantSwitches) { m.ProbeWrongFd = true },
 			probe:  probeResolveWidth,
+		},
+		{
+			name:   "frame_on_stdout",
+			spec:   "§4.7 the step runner",
+			defect: "the frame is drawn on stdout, so `ws stop api > out` puts a spinner in the file",
+			apply:  func(m *mutantSwitches) { m.FrameToStdout = true },
+			probe:  probeRunnerStreams,
+		},
+		{
+			name: "frame_without_a_terminal",
+			spec: "§4.7 the step runner",
+			defect: "the frame is drawn whatever the stream, so a pipe or a CI log receives cursor moves and erases, " +
+				"as huh/spinner's output did",
+			apply: func(m *mutantSwitches) { m.FrameOffTerminal = true },
+			probe: probeRunnerTTYGate,
+		},
+		{
+			name:   "message_queue_off",
+			spec:   "§4.7 the step runner",
+			defect: "a message a task writes is written at once, under the live frame, which it tears",
+			apply:  func(m *mutantSwitches) { m.NoMessageQueue = true },
+			probe:  probeRunnerQueue,
+		},
+		{
+			name:   "result_line_carries_the_error",
+			spec:   "§4.7 / §4.8",
+			defect: "a failed task's result line carries the error, which the root then prints a second time",
+			apply:  func(m *mutantSwitches) { m.ResultCarriesError = true },
+			probe:  probeRunnerResultLine,
 		},
 		{
 			name: "cjk_locale_ignored",
@@ -692,7 +750,7 @@ func TestContractMutationHarness(t *testing.T) {
 	// their §4.7 behaviour when the first registry landed, so a probe over
 	// them would have been red at that point's own acceptance gate.
 	clean := map[string]string{}
-	for _, p := range append(contractProbes(), messageProbes()...) {
+	for _, p := range append(append(contractProbes(), messageProbes()...), runnerProbes()...) {
 		r := newResults()
 		clean[p.name] = p.run(t, r)
 		if r.any() {

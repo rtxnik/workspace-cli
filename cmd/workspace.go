@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/x/term"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/detect"
 	"github.com/rtxnik/workspace-cli/internal/output"
@@ -40,11 +39,7 @@ var newCmd = &cobra.Command{
 		}
 
 		if workspace.Exists(cfg, name) {
-			fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
-				Title:       fmt.Sprintf("Workspace %q already exists", name),
-				Suggestions: []string{"Choose a different name", fmt.Sprintf("Delete existing: ws delete %s", name)},
-			}))
-			return &cliErrorWithExit{code: 1, msg: ""}
+			return workspaceExists(name)
 		}
 
 		var profile string
@@ -82,11 +77,6 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if len(workspaces) == 0 {
-			output.Info("No workspaces found")
-			return nil
-		}
-
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 		if jsonFlag {
 			type wsJSON struct {
@@ -104,46 +94,116 @@ var listCmd = &cobra.Command{
 					Proxy:   ws.Proxy,
 				})
 			}
-			output.JSON(items)
-			return nil
+			return output.WriteJSON(cmd.OutOrStdout(), items)
 		}
 
-		termWidth := 100
-		if w, _, err := term.GetSize(0); err == nil {
-			termWidth = w
+		s := output.Out()
+		if len(workspaces) == 0 {
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), output.Empty{Subject: "workspaces", Steps: []output.Remedy{
+				{Label: "Create one", Cmd: "ws new <name>"},
+				{Label: "See profiles", Cmd: "ws profiles"},
+			}}.Render(s))
+			return err
 		}
-		narrow := termWidth < 80
-
-		running := 0
-		rows := make([][]string, 0, len(workspaces))
-		for _, ws := range workspaces {
-			st := strings.ToLower(ws.Status)
-			if st == "running" {
-				running++
-			}
-			proxy := output.StyleDim.Render("–")
-			if ws.Proxy {
-				proxy = output.StyleAccent.Render("⚡")
-			}
-			if narrow {
-				rows = append(rows, []string{ws.Name, output.StatusIcon(st), proxy})
-			} else {
-				rows = append(rows, []string{ws.Name, output.StatusText(st), ws.Profile, proxy})
-			}
+		t, err := listTable(workspaces)
+		if err != nil {
+			return err
 		}
-
-		var t fmt.Stringer
-		if narrow {
-			t = output.NewTable([]string{"NAME", "STATUS", "PROXY"}).Rows(rows...)
-		} else {
-			t = output.NewTable([]string{"NAME", "STATUS", "PROFILE", "PROXY"}).Rows(rows...)
-		}
-
-		fmt.Println(t)
-		fmt.Fprintf(os.Stderr, "\n%s\n",
-			output.StyleDim.Render(fmt.Sprintf("  %d workspace(s), %d running", len(workspaces), running)))
-		return nil
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), t.Render(s))
+		return err
 	},
+}
+
+// listTable is ws list's table, NAME, STATUS, PROFILE and PROXY, with its
+// caption. The allocator lays it out for the stream it is rendered on.
+func listTable(workspaces []workspace.Info) (output.Table, error) {
+	t, err := output.NewTableBlock([]output.Col{
+		{Title: "NAME", Prio: 1, Min: 8, Trunc: output.TruncMid},
+		{Title: "STATUS", Prio: 1, Min: 6, Atomic: true, Kind: output.ColState},
+		{Title: "PROFILE", Prio: 3, Min: 6, Trunc: output.TruncTail},
+		{Title: "PROXY", Prio: 2, Min: 3, Atomic: true},
+	}, nil)
+	if err != nil {
+		return output.Table{}, err
+	}
+	running := 0
+	for _, ws := range workspaces {
+		st, word := workspaceState(ws.Status)
+		if st == output.StateOK {
+			running++
+		}
+		proxy := "off"
+		if ws.Proxy {
+			proxy = "on"
+		}
+		t.Rows = append(t.Rows, []output.Cell{output.Text(ws.Name), output.Mark(st, word), output.Text(ws.Profile), output.Text(proxy)})
+	}
+	t.Caption = fmt.Sprintf("%s, %d running", countOf(len(workspaces), "workspace", "workspaces"), running)
+	return t, nil
+}
+
+// workspaceState is a workspace's state and its word, from devpod's status
+// lower-cased (§4.5). Anything devpod reports that is not below is shown as
+// an unknown state with devpod's own word.
+func workspaceState(status string) (output.State, string) {
+	switch status = strings.ToLower(status); status {
+	case "running":
+		return output.StateOK, "running"
+	case "stopped":
+		return output.StateIdle, "stopped"
+	case "notcreated", "":
+		return output.StateIdle, "not created"
+	case "busy", "starting":
+		return output.StateBusy, status
+	case "notfound":
+		return output.StateIdle, "not found"
+	default:
+		return output.StateUnknown, status
+	}
+}
+
+// workspaceNotFound is the error of a command on a workspace that is not
+// there, carrying its Problem: list the workspaces, or take next, the step
+// that fits the command.
+func workspaceNotFound(name string, next output.Remedy) error {
+	return &output.ProblemError{P: output.Problem{
+		Title: fmt.Sprintf("Workspace %q not found", name),
+		Steps: []output.Remedy{{Label: "List workspaces", Cmd: "ws list"}, next},
+	}}
+}
+
+// requireWorkspace refuses, before devpod is given a workspace's directory,
+// a workspace that is not there and one whose entry is there but does not
+// resolve, such as a dangling symlink.
+func requireWorkspace(cfg config.Config, name string) error {
+	if !workspace.Exists(cfg, name) {
+		return workspaceNotFound(name, output.Remedy{Label: "Create it", Cmd: "ws new " + name})
+	}
+	if err := workspace.Resolve(cfg, name); err != nil {
+		return &output.ProblemError{P: output.Problem{
+			Title: fmt.Sprintf("Workspace %q cannot be read", name),
+			Cause: err.Error(),
+			Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete " + name}},
+		}, Err: err}
+	}
+	return nil
+}
+
+// workspaceExists is the error of ws new for a name already taken, carrying
+// its Problem.
+func workspaceExists(name string) error {
+	return &output.ProblemError{P: output.Problem{
+		Title: fmt.Sprintf("Workspace %q already exists", name),
+		Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete " + name}, {Label: "List workspaces", Cmd: "ws list"}},
+	}}
+}
+
+// countOf is "1 workspace" or "5 workspaces".
+func countOf(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 var detectCmd = &cobra.Command{
@@ -179,29 +239,21 @@ var startCmd = &cobra.Command{
 		if err := workspace.ValidateName(name); err != nil {
 			return err
 		}
-		if !workspace.Exists(cfg, name) {
-			fmt.Fprintln(os.Stderr, output.RenderError(output.ErrorDetail{
-				Title:       fmt.Sprintf("Workspace %q not found", name),
-				Suggestions: []string{"List workspaces: ws list", fmt.Sprintf("Create it: ws new %s", name)},
-			}))
-			return &cliErrorWithExit{code: 1, msg: ""}
+		if err := requireWorkspace(cfg, name); err != nil {
+			return err
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
-		runner := output.NewStepRunner(
-			output.Step{Name: "Checking workspace", Fn: func() error {
-				if !workspace.Exists(cfg, name) {
+		return output.Run(
+			output.Task{Title: "Checking workspace", Run: func(*output.Log) error {
+				if workspace.Resolve(cfg, name) != nil {
 					return fmt.Errorf("workspace dir missing")
 				}
 				return nil
 			}},
-			output.Step{Name: "Starting container", Fn: func() error {
-				return workspace.DevpodUp(source)
+			output.Task{Title: "Starting container", Run: func(log *output.Log) error {
+				return workspace.DevpodUp(source, log)
 			}},
 		)
-		if err := runner.Run(); err != nil {
-			return err
-		}
-		return nil
 	},
 }
 
@@ -216,12 +268,10 @@ var stopCmd = &cobra.Command{
 		if err := workspace.ValidateName(name); err != nil {
 			return err
 		}
-		if err := output.RunWithSpinner(fmt.Sprintf("Stopping workspace %q", name), func() error {
-			return workspace.DevpodStop(name)
-		}); err != nil {
-			return err
-		}
-		return nil
+		return output.Run(output.Task{
+			Title: fmt.Sprintf("Stopping workspace %q", name),
+			Run:   func(log *output.Log) error { return workspace.DevpodStop(name, log) },
+		})
 	},
 }
 
@@ -236,8 +286,19 @@ var deleteCmd = &cobra.Command{
 		cfg := config.Load()
 		name := args[0]
 
+		// Errors are returned as they are: wrapped in a *cliErrorWithExit,
+		// which has no Unwrap, a failed step would hide from the root.
 		if err := workspace.ValidateName(name); err != nil {
-			return &cliErrorWithExit{code: 1, msg: err.Error()}
+			return err
+		}
+
+		// A workspace that is not there is refused before the confirmation,
+		// with or without --force. The devpod step is offered for every
+		// missing name: whether devpod still knows the workspace would take
+		// a devpod call of up to 10s on the refusal path, and devpod refuses
+		// a name it does not know.
+		if !workspace.Exists(cfg, name) {
+			return workspaceNotFound(name, output.Remedy{Label: "Remove it from devpod", Cmd: "devpod delete " + name})
 		}
 
 		force, _ := cmd.Flags().GetBool("force")
@@ -248,16 +309,31 @@ var deleteCmd = &cobra.Command{
 			return nil
 		}
 
-		if err := output.RunWithSpinner(fmt.Sprintf("Deleting workspace %q", name), func() error {
-			if err := workspace.DevpodDelete(name); err != nil {
-				output.Warn(fmt.Sprintf("devpod delete: %s", err))
-			}
-			wsDir := filepath.Join(cfg.WorkspacesDir, name)
-			return os.RemoveAll(wsDir)
-		}); err != nil {
-			return &cliErrorWithExit{code: 1, msg: err.Error()}
-		}
-		return nil
+		// devpod failing to delete its workspace is a warning, and the
+		// directory goes all the same; the warning carries devpod's last
+		// lines, which no longer reach the terminal. A directory that cannot
+		// be removed is a Problem of its own: the task's log holds devpod's
+		// lines, which are not its cause.
+		dir := filepath.Join(cfg.WorkspacesDir, name)
+		return output.Run(output.Task{
+			Title: fmt.Sprintf("Deleting workspace %q", name),
+			Run: func(log *output.Log) error {
+				if err := workspace.DevpodDelete(name, log); err != nil {
+					output.Warn(err.Error())
+					for _, line := range log.Tail() {
+						output.Detail(line)
+					}
+				}
+				if err := os.RemoveAll(dir); err != nil {
+					return &output.ProblemError{P: output.Problem{
+						Title: fmt.Sprintf("The directory of workspace %q could not be removed", name),
+						Cause: err.Error(),
+						Facts: []output.Fact{{K: "Directory", V: dir}},
+					}, Err: err}
+				}
+				return nil
+			},
+		})
 	},
 }
 
@@ -339,11 +415,14 @@ var restartCmd = &cobra.Command{
 		if err := workspace.ValidateName(name); err != nil {
 			return err
 		}
+		if err := requireWorkspace(cfg, name); err != nil {
+			return err
+		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 
-		steps := []output.Step{
-			{Name: "Starting container", Fn: func() error {
-				return workspace.DevpodUp(source)
+		tasks := []output.Task{
+			{Title: "Starting container", Run: func(log *output.Log) error {
+				return workspace.DevpodUp(source, log)
 			}},
 		}
 
@@ -351,19 +430,16 @@ var restartCmd = &cobra.Command{
 		workspaces, _ := workspace.List(cfg)
 		for _, ws := range workspaces {
 			if ws.Name == name && strings.EqualFold(ws.Status, "running") {
-				steps = append([]output.Step{
-					{Name: "Stopping workspace", Fn: func() error {
-						return workspace.DevpodStop(name)
+				tasks = append([]output.Task{
+					{Title: "Stopping workspace", Run: func(log *output.Log) error {
+						return workspace.DevpodStop(name, log)
 					}},
-				}, steps...)
+				}, tasks...)
 				break
 			}
 		}
 
-		if err := output.NewStepRunner(steps...).Run(); err != nil {
-			return err
-		}
-		return nil
+		return output.Run(tasks...)
 	},
 }
 
@@ -421,13 +497,18 @@ func selectWorkspace() (string, bool, error) {
 		return "", false, errors.New("no workspaces found")
 	}
 
+	// huh draws its forms on stderr, so the labels are rendered for it.
+	return output.Select("Select workspace:", workspaceOptions(output.Err(), workspaces))
+}
+
+// workspaceOptions labels each workspace "<name>  <mark> <word>" for s, with
+// ws list's state vocabulary.
+func workspaceOptions(s *output.Stream, workspaces []workspace.Info) []output.SelectOption {
 	opts := make([]output.SelectOption, 0, len(workspaces))
 	for _, ws := range workspaces {
-		label := output.StatusLabel(ws.Name, strings.ToLower(ws.Status))
-		opts = append(opts, output.SelectOption{Label: label, Value: ws.Name})
+		opts = append(opts, output.SelectOption{Label: ws.Name + "  " + s.StateText(workspaceState(ws.Status)), Value: ws.Name})
 	}
-
-	return output.Select("Select workspace:", opts)
+	return opts
 }
 
 func init() {

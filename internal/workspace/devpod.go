@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
 // Timeouts for devpod shell-outs. Probe/query commands get a short bound;
@@ -21,19 +23,21 @@ const (
 var devpodBin = "devpod"
 
 // DevpodUp starts a workspace using devpod. Provisioning streams progress and can
-// legitimately take minutes -- run unbounded.
-func DevpodUp(source string) error {
-	return devpodExec(0, "up", source)
+// legitimately take minutes -- run unbounded. The child writes to log, a step
+// runner task's log, or to the terminal when log is nil; so do DevpodStop's
+// and DevpodDelete's.
+func DevpodUp(source string, log *output.Log) error {
+	return devpodExec(0, log, "up", source)
 }
 
 // DevpodStop stops a running workspace.
-func DevpodStop(name string) error {
-	return devpodExec(timeoutLifecycle, "stop", name)
+func DevpodStop(name string, log *output.Log) error {
+	return devpodExec(timeoutLifecycle, log, "stop", name)
 }
 
 // DevpodDelete removes a workspace from devpod.
-func DevpodDelete(name string) error {
-	return devpodExec(timeoutLifecycle, "delete", name)
+func DevpodDelete(name string, log *output.Log) error {
+	return devpodExec(timeoutLifecycle, log, "delete", name)
 }
 
 // DevpodSSH opens an SSH session to a workspace.
@@ -49,18 +53,19 @@ func DevpodSSH(name string) error {
 
 // DevpodCode opens a workspace in VS Code. Provisions + streams -- run unbounded.
 func DevpodCode(name string) error {
-	return devpodExec(0, "up", name, "--ide", "vscode")
+	return devpodExec(0, nil, "up", name, "--ide", "vscode")
 }
 
 // DevpodLogs shows workspace logs from devpod. Streaming output -- run unbounded.
 func DevpodLogs(name string) error {
-	return devpodExec(0, "logs", name)
+	return devpodExec(0, nil, "logs", name)
 }
 
-// devpodExec runs `devpod <args...>`, wiring stdout/stderr. A positive timeout
-// bounds the command with a hard deadline; timeout <= 0 runs it unbounded (for
+// devpodExec runs `devpod <args...>`, its stdout and stderr both wired to log's
+// file, or to the terminal's when log is nil. A positive timeout bounds the
+// command with a hard deadline; timeout <= 0 runs it unbounded (for
 // streaming/provisioning commands whose progress is visible and Ctrl-C-able).
-func devpodExec(timeout time.Duration, args ...string) error {
+func devpodExec(timeout time.Duration, log *output.Log, args ...string) error {
 	var cmd *exec.Cmd
 	if timeout > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -71,6 +76,9 @@ func devpodExec(timeout time.Duration, args ...string) error {
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if log != nil {
+		cmd.Stdout, cmd.Stderr = log.File(), log.File()
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("devpod %s: %w", args[0], err)
 	}

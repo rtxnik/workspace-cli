@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,10 +77,6 @@ type errorCase struct {
 	// workspace, when set, is created under WORKSPACES_DIR before the run.
 	workspace string
 
-	// spinner marks a case whose stdout carries huh/spinner frames, which
-	// depend on how long the action ran; see normaliseSpinner.
-	spinner bool
-
 	// legacyXray runs the child in a fresh directory holding a legacy
 	// regular-file home/.config/xray/config.json, with HOME=home. HOME is
 	// relative on purpose: the refusal that state provokes names the file,
@@ -89,9 +86,9 @@ type errorCase struct {
 }
 
 // errorCases covers the four branches of the root protocol, the argument
-// and runtime halves of the usage distinction, the spinner's known second
-// print, and every helper and in-body exit that phase 1 moves onto a
-// returned value and a hermetic process can reach.
+// and runtime halves of the usage distinction, a failed step, whose error
+// the spinner used to print a second time, and every helper and in-body exit
+// that phase 1 moves onto a returned value and a hermetic process can reach.
 var errorCases = []errorCase{
 	// A successful command: no error text, exit 0.
 	{name: "success/detect", args: []string{"detect", emptyDirArg}},
@@ -142,9 +139,9 @@ var errorCases = []errorCase{
 	// profileCmd's hook refuses to migrate a legacy config under --no-migrate.
 	{name: "runtime/migration-refusal", args: []string{"proxy", "profile", "list", "--no-migrate"}, legacyXray: true},
 
-	// The spinner prints its own line on STDOUT and returns the error, which
-	// renders again on stderr: the known second print phase 3b removes.
-	{name: "runtime/spinner-double", args: []string{"stop", "wsx"}, spinner: true},
+	// A failed step: its start and result lines, then the root's line — the
+	// error printed once, all on stderr.
+	{name: "runtime/spinner-failure", args: []string{"stop", "wsx"}},
 
 	// A *cliErrorWithExit with text, at exit 1 and at a vault exit code.
 	{name: "cli-exit/code-1", args: []string{"profile-delete", "default"}},
@@ -165,15 +162,21 @@ var errorCases = []errorCase{
 	// The paths that reach the Docker SDK: every one of them fails on the
 	// unreachable DOCKER_HOST that runExecuteChild sets, which is what makes
 	// them hermetic.
-	{name: "body-exit/proxy-up-unreachable", args: []string{"proxy", "up"}, spinner: true},
+	{name: "body-exit/proxy-up-unreachable", args: []string{"proxy", "up"}},
 	{name: "body-exit/proxy-doctor-unreachable", args: []string{"proxy", "doctor"}},
 	{name: "body-exit/proxy-doctor-json-unreachable", args: []string{"proxy", "doctor", "--json"}},
 	{name: "runtime/proxy-test-not-running", args: []string{"proxy", "test"}},
 	{name: "runtime/proxy-fix-routes-not-running", args: []string{"proxy", "fix-routes"}},
 
-	// A body that renders its own error box, then leaves with exit 1.
+	// A body that refuses with the Problem it returns, exit 1; it rendered
+	// its own error box before phase 3.
 	{name: "body-exit/start-not-found", args: []string{"start", "nope"}},
 	{name: "body-exit/new-exists", args: []string{"new", "wsx"}, workspace: "wsx"},
+
+	// ws delete of a workspace that is not there: a Problem the command
+	// returns, refused before the confirmation, with --force or without.
+	{name: "runtime/delete-not-found", args: []string{"delete", "nosuch"}},
+	{name: "runtime/delete-not-found-force", args: []string{"delete", "--force", "nosuch"}},
 }
 
 // installExecuteStub assigns the seams a stub set names. It runs only in the
@@ -185,6 +188,8 @@ func installExecuteStub(name string) {
 		verifyProxyReadyFn = func(config.Config) error {
 			return errors.New("stub: proxy container not inspectable")
 		}
+	case "proxy-not-ready-problem":
+		verifyProxyReadyFn = func(config.Config) error { return carriedProblemError }
 	case "connected-enumeration-fails":
 		proxyConnectedContainersFn = func(config.Config) ([]string, error) {
 			return nil, errors.New("stub: proxy network not inspectable")
@@ -330,95 +335,7 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	default:
 		t.Fatalf("running case %s: %v\n%s", c.name, err, errBuf.String())
 	}
-	stdout = out.String()
-	if c.spinner {
-		stdout = normaliseSpinner(stdout)
-	}
-	return code, stdout, errBuf.String()
-}
-
-// spinnerFrames are the runes huh/spinner cycles through while it runs. Which
-// one is on screen when the action ends depends on how long it took, so they
-// are the only thing normaliseSpinner is allowed to drop.
-const spinnerFrames = "⣾⣽⣻⢿⡿⣟⣯⣷⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
-// normaliseSpinner collapses the spinner animation to the one line it leaves
-// on screen, independent of how many frames it rendered before the test's
-// action finished. Text after the spinner's last erase-line survives as it
-// is (ANSI stripped, \r removed). Text before it splits at the last
-// newline: complete lines that precede the spinner survive too, ANSI
-// stripped and \r-free, because an erase-line clears only one line and a
-// diagnostic printed earlier is still on the operator's screen; the
-// spinner's own line — redraws separated by \r — collapses to its last
-// non-empty redraw, with the frame rune and surrounding whitespace trimmed.
-// ansi.Strip runs over the whole stream, including the erase-line and the
-// cursor-restore sequences around it, so a regression that stopped
-// restoring the cursor would not show up in this comparison.
-func normaliseSpinner(s string) string {
-	const eraseLine = "\x1b[2K"
-	// The carriage returns the animation leaves behind are not escape
-	// sequences, so ansi.Strip keeps them; in the golden they would be
-	// invisible bytes inside a line.
-	clean := func(part string) string { return strings.ReplaceAll(ansi.Strip(part), "\r", "") }
-	i := strings.LastIndex(s, eraseLine)
-	if i < 0 {
-		return clean(s)
-	}
-	pre := ansi.Strip(s[:i])
-	prefix, spinnerLine := "", pre
-	if j := strings.LastIndex(pre, "\n"); j >= 0 {
-		prefix, spinnerLine = pre[:j+1], pre[j+1:]
-	}
-	prefix = strings.ReplaceAll(prefix, "\r", "")
-	last := ""
-	for _, redraw := range strings.Split(spinnerLine, "\r") {
-		if redraw != "" {
-			last = redraw
-		}
-	}
-	before := strings.Trim(last, spinnerFrames+" \t\n")
-	return prefix + before + clean(s[i+len(eraseLine):])
-}
-
-// TestNormaliseSpinner pins normaliseSpinner against synthetic input built
-// from the real shape huh/spinner writes (captured from `stop wsx`), with
-// one, two and three redraws before the erase-line — the review's finding
-// was that only the one-frame shape was ever exercised, so the two- and
-// three-frame cases here are the regression pin.
-func TestNormaliseSpinner(t *testing.T) {
-	const title = `Stopping workspace "wsx"`
-	const tail = `✗ Stopping workspace "wsx": boom` + "\n"
-	const wantSpinner = title + tail
-
-	frame := func(runes string) string {
-		var b strings.Builder
-		for _, r := range runes {
-			fmt.Fprintf(&b, "\r%c %s", r, title)
-		}
-		return "\x1b[?25l\x1b[?2004h" + b.String() +
-			"\r\x1b[2K\r\x1b[?2004l\x1b[?25h" + tail
-	}
-	one := frame("⣽")
-	two := frame("⣽⣻")
-	three := frame("⣽⣻⢿")
-
-	for _, c := range []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"one redraw", one, wantSpinner},
-		{"two redraws", two, wantSpinner},
-		{"three redraws", three, wantSpinner},
-		{"diagnostic line before the spinner starts", "⚠ something\n" + one, "⚠ something\n" + wantSpinner},
-		{"no erase-line at all", "\x1b[1msuccess\x1b[0m\n", "success\n"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := normaliseSpinner(c.in); got != c.want {
-				t.Errorf("normaliseSpinner(%q) = %q; want %q", c.in, got, c.want)
-			}
-		})
-	}
+	return code, normaliseStepTimes(out.String()), normaliseStepTimes(errBuf.String())
 }
 
 // renderErrorCase is one case's block of the golden file. Each stream is
@@ -627,6 +544,63 @@ func TestRootProtocolBranches(t *testing.T) {
 				t.Errorf("run(%v) = (%q, %d); want (%q, %d)", c.err, msg, code, c.wantMsg, c.wantCode)
 			}
 		})
+	}
+}
+
+// carriedProblemError is an error that carries a Problem, for the tests of
+// the root's print point below.
+var carriedProblemError = &output.ProblemError{
+	P: output.Problem{
+		Title: "Proxy is not ready",
+		Cause: "stub: the container is restarting",
+		Facts: []output.Fact{{K: "container", V: "dev-proxy"}},
+		Steps: []output.Remedy{{Label: "Check it", Cmd: "ws proxy status"}},
+	},
+	Err: errors.New("stub: proxy container not inspectable"),
+}
+
+// TestRootProblemSelects drives rootProblem directly: what the root prints
+// for each kind of error. The bytes are TestErrorOutputBaseline's and
+// TestExecutePrintsTheCarriedProblem's.
+func TestRootProblemSelects(t *testing.T) {
+	carried := carriedProblemError.P
+	for _, c := range []struct {
+		name  string
+		err   error
+		want  output.Problem
+		print bool
+	}{
+		{"nil", nil, output.Problem{}, false},
+		{"silent", &cliErrorWithExit{code: 2, msg: ""}, output.Problem{}, false},
+		{"cli-exit", &cliErrorWithExit{code: 4, msg: "backup-verify: no logs"}, output.Problem{Title: "backup-verify: no logs"}, true},
+		{"plain", errors.New("plain failure"), output.Problem{Title: "plain failure"}, true},
+		{"a carrier", carriedProblemError, carried, true},
+		{"a carrier wrapped with %w", fmt.Errorf("proxy not ready for reload: %w", carriedProblemError), carried, true},
+		{"a usage error", &usageError{cmd: rootCmd, err: errors.New(`unknown command "x" for "ws"`)},
+			output.Problem{Title: `unknown command "x" for "ws"`}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			msg, _ := run(c.err)
+			got, ok := rootProblem(msg, c.err)
+			if ok != c.print || !reflect.DeepEqual(got, c.want) {
+				t.Errorf("rootProblem = (%+v, %t); want (%+v, %t)", got, ok, c.want, c.print)
+			}
+		})
+	}
+}
+
+// TestExecutePrintsTheCarriedProblem runs the real Execute in a child whose
+// command returns, wrapped, an error that carries a Problem: stderr is that
+// Problem, rendered once, with nothing else, and the exit code is 1. The
+// stream the expectation is rendered on is the child's: 80 columns, no
+// colour, the UTF-8 glyph mode.
+func TestExecutePrintsTheCarriedProblem(t *testing.T) {
+	c := errorCase{name: "carried-problem", args: []string{"proxy", "profile", "use", "x", "--no-migrate"}, stub: "proxy-not-ready-problem"}
+	code, stdout, stderr := runExecuteChild(t, c)
+	s := output.NewStreamAt(io.Discard, 80, false, output.ColourNone, false)
+	want := carriedProblemError.P.Render(s) + "\n"
+	if code != 1 || stdout != "" || stderr != want {
+		t.Errorf("exit %d, stdout %q, stderr\n%s\nwant exit 1, no stdout, stderr\n%s", code, stdout, stderr, want)
 	}
 }
 

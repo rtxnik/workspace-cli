@@ -45,9 +45,10 @@ func Warn(msg string) { emit(Err(), shapeWarn, msg) }
 // Detail is continuation prose under another message. stderr.
 func Detail(msg string) { emit(Err(), shapeDetail, msg) }
 
-// Fail reports a fatal problem on stderr and returns. It does not exit: the
-// root's error protocol in cmd/root.go prints through Fail every error that
-// reaches it with a message, and chooses the exit code itself.
+// Fail reports a fatal problem on stderr and returns. It does not exit. The
+// root prints every error as a Problem, whose title is drawn as Fail draws a
+// message — renderMessage with the fail shape (blocks.go) — so a Problem
+// holding only a title is byte for byte the line Fail prints.
 func Fail(msg string) {
 	if mutants.FailUnwrapped {
 		// The defect §6.1 cannot otherwise see: the fail shape is swept only
@@ -70,7 +71,10 @@ func Fail(msg string) {
 	emit(Err(), shapeFail, msg)
 }
 
-// emit writes one message to a stream.
+// emit writes one message to a stream — or, while a task of the step runner
+// runs, queues it, and the runner writes it after the task's result line on
+// its own stream, which is Err() (run.go). The queue is what keeps the
+// frame whole: a message written under a live frame would tear it.
 //
 // The write error is discarded deliberately and only here. §4.7's rule that a
 // failed write is an error, not a shrug, is about stdout — the artifact a
@@ -81,6 +85,9 @@ func Fail(msg string) {
 func emit(s *Stream, shape messageShape, msg string) {
 	if mutants.MessagesToStdout {
 		s = Out() // §4.7 inverted: chatter written onto the answer's stream
+	}
+	if enqueue(func(q *Stream) string { return renderMessage(q, shape, msg) }) {
+		return
 	}
 	_, _ = fmt.Fprintln(s, renderMessage(s, shape, msg))
 }

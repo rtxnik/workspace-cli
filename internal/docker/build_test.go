@@ -3,9 +3,11 @@ package docker
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyrecipe"
 )
 
@@ -93,11 +95,51 @@ func TestBuildProxyImage_DriftBlocksBeforeDocker(t *testing.T) {
 	cfg := testCfg()
 	cfg.ProfilesDir = dir
 
-	err := BuildProxyImage(cfg, "", false)
+	err := BuildProxyImage(cfg, "", false, nil)
 	if err == nil {
 		t.Fatal("expected drift error")
 	}
 	if !strings.Contains(err.Error(), "drift") {
 		t.Errorf("expected a drift error, got %v", err)
+	}
+}
+
+// TestBuildProxyImageWritesDockerToTheLog: under a step runner task both of
+// docker's streams go to the task's log. A docker on PATH stands in for the
+// real one, and the drifted recipe is built with allowDrift, so the build
+// reaches it without a daemon.
+func TestBuildProxyImageWritesDockerToTheLog(t *testing.T) {
+	bin := t.TempDir()
+	fake := "#!/bin/sh\necho '#1 [internal] load build definition'\necho '#2 WARN: FromAsCasing' >&2\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir := t.TempDir()
+	proxy := filepath.Join(dir, "proxy")
+	if err := os.MkdirAll(proxy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"Dockerfile", "entrypoint.sh"} {
+		if err := os.WriteFile(filepath.Join(proxy, f), []byte("drifted\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := testCfg()
+	cfg.ProfilesDir = dir
+
+	var tail []string
+	err := output.Run(output.Task{Title: "Building proxy image", Run: func(log *output.Log) error {
+		if err := BuildProxyImage(cfg, "", true, log); err != nil {
+			return err
+		}
+		tail = log.Tail()
+		return nil
+	}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if want := []string{"#1 [internal] load build definition", "#2 WARN: FromAsCasing"}; !reflect.DeepEqual(tail, want) {
+		t.Errorf("the log holds %q; want %q", tail, want)
 	}
 }
