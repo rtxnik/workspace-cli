@@ -498,6 +498,35 @@ func TestStatusIgnoresTheSystemGitConfig(t *testing.T) {
 	}
 }
 
+// TestStartRefusesAnEntryThatDoesNotResolve: a workspace entry that is
+// there but does not resolve — a dangling symlink — is refused before devpod
+// is asked, with the reason and the remedy that removes it.
+func TestStartRefusesAnEntryThatDoesNotResolve(t *testing.T) {
+	fx := newStreamsFixture(t)
+	entry := filepath.Join(fx.home, "workspaces", "broken")
+	if err := os.Symlink(filepath.Join(fx.home, "nowhere"), entry); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fx.bin)
+	t.Setenv("HOME", fx.home)
+	t.Setenv("WORKSPACES_DIR", filepath.Join(fx.home, "workspaces"))
+	var err error
+	stderr := captureStderr(t, func() { err = startCmd.RunE(startCmd, []string{"broken"}) })
+	_, statErr := os.Stat(entry)
+	p, carried := output.ProblemOf(err)
+	want := output.Problem{
+		Title: `Workspace "broken" cannot be read`,
+		Cause: statErr.Error(),
+		Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete broken"}},
+	}
+	if !carried || !reflect.DeepEqual(p, want) || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ws start broken returned %v, a Problem %+v (%t); want %+v, an error that is os.ErrNotExist", err, p, carried, want)
+	}
+	if stderr != "" {
+		t.Errorf("ws start broken wrote %q; want nothing before the root prints the Problem", stderr)
+	}
+}
+
 // TestDeleteKeepsDevpodsLinesOutOfARemovalFailure: when devpod has deleted
 // its workspace and the directory then cannot be removed, the Problem the
 // root prints names the directory and has the removal's error as its cause —

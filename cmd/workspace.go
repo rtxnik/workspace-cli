@@ -225,10 +225,19 @@ var startCmd = &cobra.Command{
 		if !workspace.Exists(cfg, name) {
 			return workspaceNotFound(name, output.Remedy{Label: "Create it", Cmd: "ws new " + name})
 		}
+		// An entry that is there but does not resolve is refused before
+		// devpod is given a source that is not there.
+		if err := workspace.Resolve(cfg, name); err != nil {
+			return &output.ProblemError{P: output.Problem{
+				Title: fmt.Sprintf("Workspace %q cannot be read", name),
+				Cause: err.Error(),
+				Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete " + name}},
+			}, Err: err}
+		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 		return output.Run(
 			output.Task{Title: "Checking workspace", Run: func(*output.Log) error {
-				if !workspace.Exists(cfg, name) {
+				if workspace.Resolve(cfg, name) != nil {
 					return fmt.Errorf("workspace dir missing")
 				}
 				return nil

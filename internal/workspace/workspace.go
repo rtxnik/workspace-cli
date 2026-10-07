@@ -31,6 +31,14 @@ func Exists(cfg config.Config, name string) bool {
 	return err == nil
 }
 
+// Resolve is the error of following a workspace's entry: nil when it leads
+// to something, the os.Stat error when it does not — a dangling symlink, an
+// entry that cannot be read.
+func Resolve(cfg config.Config, name string) error {
+	_, err := os.Stat(filepath.Join(cfg.WorkspacesDir, name))
+	return err
+}
+
 // Create sets up a new workspace directory with devcontainer config.
 //
 // The workspace directory is made with Mkdir, so a directory that is already
