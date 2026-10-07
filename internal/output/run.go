@@ -72,8 +72,14 @@ type TaskError struct {
 	Tail  []string // the last lines of its log, raw
 }
 
-// Error is Err's message: no message changes.
-func (e *TaskError) Error() string { return e.Err.Error() }
+// Error is Err's message: no message changes. A TaskError with no Err reads
+// as its task failing.
+func (e *TaskError) Error() string {
+	if e.Err == nil {
+		return e.Title + " failed"
+	}
+	return e.Err.Error()
+}
 
 // Unwrap is Err, so errors.Is and errors.As see through a TaskError.
 func (e *TaskError) Unwrap() error { return e.Err }
@@ -93,7 +99,7 @@ func (e *TaskError) AsProblem() Problem {
 		}
 		return p
 	}
-	return Problem{Title: e.Err.Error(), Cause: cause}
+	return Problem{Title: e.Error(), Cause: cause}
 }
 
 // Run runs tasks in order on Err() and stops at the first failure, which it
@@ -242,7 +248,8 @@ func (r *runner) run(tasks []Task) error {
 	log := owner.log
 	owner.mu.Unlock()
 	if outer != nil {
-		r.now = outer.now
+		// A nested Run's lines are the owner's: its clock and its stream.
+		r.now, r.s = outer.now, outer.s
 		return r.runNested(tasks, log)
 	}
 	defer func() {
@@ -492,18 +499,38 @@ func (r *runner) drain(f *frame, result string) {
 }
 
 // runNested runs the tasks of a Run called inside a task. It draws no frame
-// and writes nothing itself: its lines join the owner's queue, and its tasks
-// write to the running task's log.
+// and writes nothing itself: its lines join the owner's queue in the order
+// the owner writes its own — off a terminal a start line, then each task's
+// result line ahead of the messages the task queued — and its tasks write
+// to the running task's log. A Run that finds no task running — started on
+// a goroutine of its own, or inside a task a signal has drained — gets a log
+// of its own.
 func (r *runner) runNested(tasks []Task, log *Log) error {
+	if log == nil {
+		own, err := newLog()
+		if err != nil {
+			if own, err = nullLog(); err != nil {
+				return err
+			}
+		}
+		defer own.close()
+		log = own
+	}
+	tty := r.s.IsTTY() || mutants.FrameOffTerminal
 	for i, t := range tasks {
 		start := r.now()
+		title := t.Title
+		if !tty {
+			r.queueLine(func(s *Stream) string { return stepLine(s, StateBusy, title, "") })
+		}
+		at := queueLen()
 		err := t.Run(log)
-		st, title := StateOK, t.Title
+		st := StateOK
 		if err != nil {
 			st = StateFail
 		}
 		elapsed := elapsedText(r.now().Sub(start))
-		r.queueLine(func(s *Stream) string { return stepLine(s, st, title, elapsed) })
+		r.queueLineAt(at, func(s *Stream) string { return stepLine(s, st, title, elapsed) })
 		if err == nil {
 			continue
 		}
@@ -522,6 +549,27 @@ func (r *runner) queueLine(line func(s *Stream) string) {
 	if !enqueue(line) {
 		r.writeLine(line(r.s))
 	}
+}
+
+// queueLen is how many lines the owner's queue holds.
+func queueLen() int {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return len(owner.queue)
+}
+
+// queueLineAt queues a nested Run's line at position at — ahead of what was
+// queued after it — or writes it when the gate has closed under it.
+func (r *runner) queueLineAt(at int, line func(s *Stream) string) {
+	owner.mu.Lock()
+	if !owner.open || mutants.NoMessageQueue {
+		owner.mu.Unlock()
+		r.writeLine(line(r.s))
+		return
+	}
+	at = min(at, len(owner.queue))
+	owner.queue = append(owner.queue[:at], append([]func(s *Stream) string{line}, owner.queue[at:]...)...)
+	owner.mu.Unlock()
 }
 
 func (r *runner) writeLine(line string) { _, _ = fmt.Fprintln(r.s, line) }

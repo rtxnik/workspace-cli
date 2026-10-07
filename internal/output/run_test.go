@@ -293,6 +293,69 @@ func TestNestedRunJoinsTheQueue(t *testing.T) {
 	}
 }
 
+// TestNestedRunOrdersItsLinesAsTheOwner: a nested Run's lines come out in
+// the owner's order — on a terminal each task's result line and then its
+// messages, off one its start line first — so a warning stays under the step
+// it belongs to.
+func TestNestedRunOrdersItsLinesAsTheOwner(t *testing.T) {
+	for _, c := range []struct {
+		tty  bool
+		want string
+	}{
+		{false, "~ Switching profile\n✓ Switching profile  0.0s\n" +
+			"~ Validate target profile\n✓ Validate target profile  0.0s\n⚠ checked\n" +
+			"~ Restart dev-proxy\n✓ Restart dev-proxy  0.0s\n⚠ restarted\n"},
+		{true, "⠋ Switching profile  0.0s\r\x1b[J✓ Switching profile  0.0s\n" +
+			"✓ Validate target profile  0.0s\n⚠ checked\n" +
+			"✓ Restart dev-proxy  0.0s\n⚠ restarted\n"},
+	} {
+		var buf syncBuffer
+		r := testRunner(NewStreamAt(&buf, 60, c.tty, ColourNone, false), &fakeClock{}, make(chan time.Time))
+		err := r.run([]Task{{Title: "Switching profile", Run: func(*Log) error {
+			return Run(
+				Task{Title: "Validate target profile", Run: func(*Log) error { Warn("checked"); return nil }},
+				Task{Title: "Restart dev-proxy", Run: func(*Log) error { Warn("restarted"); return nil }},
+			)
+		}}})
+		if err != nil {
+			t.Fatalf("tty %t: run: %v", c.tty, err)
+		}
+		if got := buf.String(); got != c.want {
+			t.Errorf("tty %t: got\n%q\nwant\n%q", c.tty, got, c.want)
+		}
+	}
+}
+
+// TestANestedRunWithoutARunningTaskGetsALog: a Run that finds an owner with
+// no task running — started on a goroutine of its own between two tasks, or
+// inside a task a signal has drained — is given a log of its own rather
+// than none.
+func TestANestedRunWithoutARunningTaskGetsALog(t *testing.T) {
+	var buf syncBuffer
+	r := testRunner(NewStreamAt(&buf, 60, false, ColourNone, false), &fakeClock{}, nil)
+	err := r.runNested([]Task{{Title: "Restart dev-proxy", Run: func(log *Log) error {
+		_, _ = fmt.Fprintln(log, "Error response from daemon")
+		return errors.New("restart: exit status 1")
+	}}}, nil)
+	var te *TaskError
+	if !errors.As(err, &te) || !reflect.DeepEqual(te.Tail, []string{"Error response from daemon"}) {
+		t.Errorf("runNested returned %#v; want the task's TaskError with its own tail", err)
+	}
+}
+
+// TestATaskErrorWithoutAnError: a TaskError built with no Err — by hand, in
+// a test double — reads as its task failing rather than panicking in the
+// root.
+func TestATaskErrorWithoutAnError(t *testing.T) {
+	te := &TaskError{Title: "Starting container"}
+	if got := te.Error(); got != "Starting container failed" {
+		t.Errorf("Error() = %q; want %q", got, "Starting container failed")
+	}
+	if got := te.AsProblem(); got.Title != "Starting container failed" {
+		t.Errorf("AsProblem() = %+v; want the same title", got)
+	}
+}
+
 // TestTaskErrorAsProblem: the Problem a failed task renders as.
 func TestTaskErrorAsProblem(t *testing.T) {
 	tail := []string{"step two", "fatal: denied"}

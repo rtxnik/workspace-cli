@@ -41,6 +41,10 @@ var (
 )
 
 // StatusText returns a colored "icon Status" string for the given status.
+//
+// It is what is left of the glyph vocabulary the tables gave up for state
+// words: ws proxy status is its one caller, not yet on the render layer, and
+// it goes with that caller.
 func StatusText(status string) string {
 	switch status {
 	case "running":
