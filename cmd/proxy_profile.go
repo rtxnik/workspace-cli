@@ -303,8 +303,7 @@ var profileShowCmd = &cobra.Command{
 		}
 
 		if jsonFlag {
-			_ = output.WriteJSON(cmd.OutOrStdout(), dp)
-			return nil
+			return output.WriteJSON(cmd.OutOrStdout(), dp)
 		}
 		w := cmd.OutOrStdout()
 		_, _ = fmt.Fprintf(w, "Name:       %s\n", dp.Name)

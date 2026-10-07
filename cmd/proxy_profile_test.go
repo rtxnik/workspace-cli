@@ -344,7 +344,13 @@ func TestProfileUseRendersPartialFailureWithoutRollback(t *testing.T) {
 			name, "primary", errors.New("simulated post-swap restart failure"))}
 	}
 
-	out, errOut, err := execCapture(t, "proxy", "profile", "use", "broken", "--no-migrate")
+	// The output layer writes to the process's stderr, not to cobra's: the
+	// "nothing written" check below reads both.
+	var out, errOut *bytes.Buffer
+	var err error
+	stderr := captureStderr(t, func() {
+		out, errOut, err = execCapture(t, "proxy", "profile", "use", "broken", "--no-migrate")
+	})
 	if err == nil {
 		t.Fatal("expected non-nil error after simulated post-swap failure")
 	}
@@ -372,8 +378,9 @@ func TestProfileUseRendersPartialFailureWithoutRollback(t *testing.T) {
 	}
 	// The cmd layer prints nothing of the failure and hides nothing of it:
 	// the root prints the switch's Problem, once.
-	if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, switchProblem) || errOut.Len() != 0 {
-		t.Errorf("the cmd layer wrote %q and returned a Problem %+v (%t); want nothing written and the switch's Problem", errOut.String(), p, ok)
+	if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, switchProblem) || errOut.Len() != 0 || stderr != "" {
+		t.Errorf("the cmd layer wrote %q to stderr and %q to cobra's stream and returned a Problem %+v (%t); want nothing written and the switch's Problem",
+			stderr, errOut.String(), p, ok)
 	}
 }
 
@@ -498,5 +505,19 @@ func TestProfileShowHysteria2JSONNoUUID(t *testing.T) {
 	}
 	if uuid, ok := dp["uuid"]; ok && uuid != "" {
 		t.Errorf("expected no uuid key (or empty) in hysteria2 JSON output, got %q", uuid)
+	}
+
+	// A --json answer that cannot be written is the error the root prints,
+	// as for every other --json answer, where it used to be dropped with rc 0.
+	rootCmd.SetOut(failingWriter{})
+	rootCmd.SetArgs([]string{"proxy", "profile", "show", "hy2", "--json", "--no-migrate"})
+	t.Cleanup(func() {
+		rootCmd.SetOut(nil)
+		rootCmd.SetArgs(nil)
+		_ = profileShowCmd.Flags().Set("json", "false")
+		resetProfileUseFlags(t)
+	})
+	if err := rootCmd.Execute(); err == nil || !strings.Contains(err.Error(), "write refused") {
+		t.Errorf("ws proxy profile show --json into a failing writer returned %v; want the write error", err)
 	}
 }
