@@ -853,7 +853,7 @@ func fxCorpusBuild() []fixture {
 // full of escapes and a 200-character token.
 func fxRunnerFixtures() []fixture {
 	logWith := func(text string) *Log {
-		l, err := newLog()
+		l, err := newLog(GlyphUTF8)
 		if err != nil {
 			panic("the runner fixtures need a task log: " + err.Error())
 		}

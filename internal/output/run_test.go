@@ -130,6 +130,33 @@ func TestRunStopsAtTheFirstFailure(t *testing.T) {
 	}
 }
 
+// TestACutTailIsMarkedInTheStreamsGlyphMode: the marker before a line the
+// log's read window cut is one of the glyphs the layer emits, so it follows
+// the stream's glyph mode as every other truncation marker does — in a
+// task's log and in the log a nested Run with no running task is given.
+func TestACutTailIsMarkedInTheStreamsGlyphMode(t *testing.T) {
+	tasks := []Task{{Title: "Pulling image", Run: func(log *Log) error {
+		_, _ = fmt.Fprint(log, strings.Repeat("z", 300*1024)+"\n")
+		return errors.New("pull failed")
+	}}}
+	for _, tc := range []struct {
+		ascii       bool
+		marker, not string
+	}{{true, "...", "…"}, {false, "…", "..."}} {
+		var buf syncBuffer
+		r := testRunner(NewStreamAt(&buf, 80, false, ColourNone, tc.ascii), &fakeClock{}, nil)
+		for how, err := range map[string]error{"Run": r.run(tasks), "a nested Run": r.runNested(tasks, nil, r)} {
+			var te *TaskError
+			if !errors.As(err, &te) {
+				t.Fatalf("%s returned %T %v; want a *TaskError", how, err, err)
+			}
+			if len(te.Tail) != 1 || !strings.HasPrefix(te.Tail[0], tc.marker+"z") || strings.Contains(te.Tail[0], tc.not) {
+				t.Errorf("%s, ascii %v: Tail = %.12q; want one line marked %q", how, tc.ascii, te.Tail, tc.marker)
+			}
+		}
+	}
+}
+
 // TestRunDrawsAFrameOnATerminal: on a terminal the runner draws the frame and
 // redraws it at each tick — the spinner, the title and the elapsed time, then
 // the log's last line under them once there is one — and replaces it with
@@ -535,7 +562,7 @@ func TestTaskErrorAsProblem(t *testing.T) {
 func TestLogKeepsTheLastLines(t *testing.T) {
 	newTestLog := func(t *testing.T, text string) *Log {
 		t.Helper()
-		l, err := newLog()
+		l, err := newLog(GlyphUTF8)
 		if err != nil {
 			t.Fatalf("newLog: %v", err)
 		}
@@ -605,7 +632,7 @@ func TestLogKeepsItsStateAcrossReads(t *testing.T) {
 		{"a line longer than one read", []string{strings.Repeat("x", 40000) + "\n"}, []string{strings.Repeat("x", lineCap)}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			l, err := newLog()
+			l, err := newLog(GlyphUTF8)
 			if err != nil {
 				t.Fatalf("newLog: %v", err)
 			}
@@ -632,7 +659,7 @@ func TestLogKeepsItsStateAcrossReads(t *testing.T) {
 // writes faster than the log is parsed would otherwise hold the ticker in
 // one read for good, and with it the result line and a signal's drain.
 func TestLogReadsWhatWasThereWhenAsked(t *testing.T) {
-	l, err := newLog()
+	l, err := newLog(GlyphUTF8)
 	if err != nil {
 		t.Fatalf("newLog: %v", err)
 	}
@@ -664,7 +691,7 @@ func TestLogReadsWhatWasThereWhenAsked(t *testing.T) {
 func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
 	newBacklog := func(t *testing.T, before string) *Log {
 		t.Helper()
-		l, err := newLog()
+		l, err := newLog(GlyphUTF8)
 		if err != nil {
 			t.Fatalf("newLog: %v", err)
 		}
@@ -727,6 +754,59 @@ func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
 			t.Errorf("Tail holds %d lines from %.6q; want %d, from L32", len(tail), tail[0], readWindow/lineLen)
 		}
 	})
+	t.Run("a line that starts on the byte before the window is kept whole and unmarked", func(t *testing.T) {
+		l := newBacklog(t, "")
+		const lineLen = 32 * 1024
+		for i := 0; i < 40; i++ {
+			_, _ = fmt.Fprintf(l, "L%02d %s\n", i, strings.Repeat("p", lineLen-5))
+		}
+		_, _ = fmt.Fprint(l, "z") // the window now starts one byte into L32
+		tail := l.Tail()
+		if len(tail) != 9 || !strings.HasPrefix(tail[0], "L32 ") || tail[8] != "z" {
+			t.Errorf("Tail holds %d lines from %.6q; want 9, from L32 unmarked to z", len(tail), tail[0])
+		}
+	})
+	t.Run("a window that starts after a carriage return starts a redraw, unmarked", func(t *testing.T) {
+		l := newBacklog(t, "")
+		_, _ = fmt.Fprint(l, strings.Repeat("a", 300*1024)+"\r"+strings.Repeat("b", readWindow)+"\n")
+		if got, want := l.Tail(), []string{strings.Repeat("b", lineCap)}; !reflect.DeepEqual(got, want) {
+			t.Errorf("Tail = %.24q; want %.24q", got, want)
+		}
+	})
+	t.Run("a window that starts inside a rune keeps the cut line valid UTF-8", func(t *testing.T) {
+		for k := 0; k < 3; k++ { // the read starts 2, 0 and 1 bytes into a "€"
+			l := newBacklog(t, "")
+			_, _ = fmt.Fprint(l, strings.Repeat("€", 100000)+strings.Repeat("x", k)+"\n")
+			tail := l.Tail()
+			if len(tail) != 1 || !utf8.ValidString(tail[0]) || !strings.HasPrefix(tail[0], "…€") {
+				t.Errorf("with %d bytes after the run, Tail = %.12q; want one valid line starting \"…€\"", k, tail)
+			}
+		}
+	})
+	t.Run("Tail and liveLine agree on a cut line still being written", func(t *testing.T) {
+		for _, c := range []struct {
+			name, start, rest string // the window starts on start's second byte
+			want              []string
+		}{
+			{"a stray OSC byte", "\xd0\x9d", strings.Repeat("x", readWindow), []string{"…" + strings.Repeat("x", lineCap-len("…"))}},
+			{"a stray byte before blanks", "\xc3\x80", strings.Repeat(" ", readWindow), nil},
+		} {
+			l := newBacklog(t, "")
+			_, _ = fmt.Fprint(l, strings.Repeat("a", 300*1024)+c.start+c.rest)
+			live := l.liveLine()
+			if got := l.Tail(); !reflect.DeepEqual(got, c.want) || (live != "") != (len(got) > 0) || (live != "" && live != got[len(got)-1]) {
+				t.Errorf("%s: Tail = %.12q, liveLine = %.12q; want Tail %.12q and liveLine its last line", c.name, got, live, c.want)
+			}
+		}
+	})
+	t.Run("a read one byte longer than the window skips nothing and keeps what it had", func(t *testing.T) {
+		l := newBacklog(t, "keep me\nabc")
+		_, _ = fmt.Fprint(l, "def\n"+strings.Repeat("q", readWindow-4)+"\n")
+		want := []string{"keep me", "abcdef", strings.Repeat("q", lineCap)}
+		if got := l.Tail(); !reflect.DeepEqual(got, want) {
+			t.Errorf("Tail = %.24q; want %.24q", got, want)
+		}
+	})
 	t.Run("a progress run longer than the window ends in its last redraw", func(t *testing.T) {
 		l := newBacklog(t, "")
 		_, _ = fmt.Fprint(l, "starting\n"+strings.Repeat("\r42%", 100000)+"\rError: pull failed\n")
@@ -747,7 +827,7 @@ func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
 // TestLogIsAnUnlinkedFile: the log is a regular file that no longer has a
 // name, and a child given File writes to it directly.
 func TestLogIsAnUnlinkedFile(t *testing.T) {
-	l, err := newLog()
+	l, err := newLog(GlyphUTF8)
 	if err != nil {
 		t.Fatalf("newLog: %v", err)
 	}

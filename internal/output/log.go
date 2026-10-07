@@ -31,8 +31,9 @@ type Log struct {
 	partial []byte   // the line being written, after its last carriage return
 	cr      bool     // the last byte read was a carriage return
 	full    bool     // the line being written reached lineCap; the rest is dropped
-	cut     bool     // a read's window began inside the line being written: it is shown after "…"
+	cut     bool     // a read's window began inside the line being written: it is shown after marker
 	lines   []string // the last tailLines complete lines that are not blank
+	marker  string   // the truncation marker of the glyph mode the log is shown in
 
 	readHook func() // a test's: called after each read of the file
 }
@@ -42,14 +43,15 @@ const (
 	tailLines = 20
 	// lineCap is where each kept line is cut, in bytes.
 	lineCap = 1024
-	// readWindow is the most of what is new that one read parses, counted
-	// back from the file's end: further back, what a child wrote is
-	// skipped, as the tail and the live line are the log's last lines.
+	// readWindow is how much of what is new one read parses, counted back
+	// from the file's end, with the byte before it: further back, what a
+	// child wrote is skipped, as the tail and the live line are the log's
+	// last lines.
 	readWindow = 256 << 10
 )
 
-// newLog creates a task's log.
-func newLog() (*Log, error) {
+// newLog creates a task's log, to be shown in the glyph mode given.
+func newLog(mode GlyphMode) (*Log, error) {
 	w, err := os.CreateTemp("", "ws-task-*.log")
 	if err != nil {
 		return nil, fmt.Errorf("create the task log: %w", err)
@@ -63,7 +65,7 @@ func newLog() (*Log, error) {
 		}
 		return nil, fmt.Errorf("open the task log: %w", errors.Join(oerr, rerr))
 	}
-	return &Log{w: w, r: r}, nil
+	return &Log{w: w, r: r, marker: marker(mode)}, nil
 }
 
 // nullLog is the log of a task whose log file cannot be made: what is
@@ -96,8 +98,8 @@ func (l *Log) Tail() []string {
 	defer l.mu.Unlock()
 	l.readNew()
 	out := append([]string(nil), l.lines...)
-	if !blank(string(l.partial)) {
-		out = append(out, l.shown(string(l.partial)))
+	if line := l.shown(string(l.partial)); !blank(line) {
+		out = append(out, line)
 	}
 	if len(out) > tailLines {
 		out = out[len(out)-tailLines:]
@@ -123,25 +125,32 @@ func (l *Log) liveLine() string {
 }
 
 // readNew reads what was written since the last read, up to what the file
-// held when it began, and of that no more than readWindow from its end: a
-// child that writes faster than the log is parsed must not keep one read
-// going, nor make each read longer than the one before. Called with mu held.
+// held when it began, and of that no more than the last readWindow bytes
+// and the one before them: a child that writes faster than the log is parsed
+// must not keep one read going, nor make each read longer than the one
+// before. Called with mu held.
 func (l *Log) readNew() {
 	fi, err := l.r.Stat()
 	if err != nil {
 		return
 	}
 	end := fi.Size()
-	if end-l.off > readWindow {
-		// One byte before the window: when it ends a line, the window's
-		// first line is whole and nothing is marked cut. What was kept
-		// before goes, so the tail stays contiguous.
+	if end-l.off > readWindow+1 {
+		// Bytes are skipped. The read starts one byte before the window, so
+		// a line that starts there is kept whole; the line it starts inside
+		// is cut — shown after the marker — unless the byte before it ends
+		// a line. What was kept before goes, so the tail stays contiguous.
 		start := end - readWindow - 1
+		var before [1]byte
+		if _, err := l.r.ReadAt(before[:], start-1); err != nil {
+			return
+		}
 		if _, err := l.r.Seek(start, io.SeekStart); err != nil {
 			return
 		}
 		l.off = start
-		l.lines, l.partial, l.cr, l.full, l.cut = l.lines[:0], l.partial[:0], false, false, true
+		l.lines, l.partial, l.cr, l.full = l.lines[:0], l.partial[:0], false, false
+		l.cut = before[0] != '\n' && before[0] != '\r'
 	}
 	buf := make([]byte, 32*1024)
 	for l.off < end {
@@ -214,12 +223,20 @@ func trimIncompleteRune(b []byte) []byte {
 }
 
 // shown is a line as the log keeps it: one a read's window cut at its start
-// begins with "…", still within lineCap.
+// begins with the truncation marker of the log's glyph mode, still within
+// lineCap. The window may start inside a rune;
+// what is left of that rune goes with the cut.
 func (l *Log) shown(line string) string {
-	if !l.cut || blank(line) {
+	if !l.cut {
 		return line
 	}
-	line = "…" + line
+	for i := 0; i < utf8.UTFMax-1 && line != "" && !utf8.RuneStart(line[0]); i++ {
+		line = line[1:]
+	}
+	if blank(line) {
+		return line
+	}
+	line = l.marker + line
 	if len(line) > lineCap {
 		line = string(trimIncompleteRune([]byte(line[:lineCap])))
 	}

@@ -335,7 +335,7 @@ func (r *runner) run(tasks []Task) error {
 func (r *runner) runTask(t Task) error {
 	// A task whose log cannot be made runs with its output discarded: most
 	// tasks never read their log, and none is worth not running for.
-	log, logErr := newLog()
+	log, logErr := newLog(r.s.mode)
 	if logErr != nil {
 		var err error
 		if log, err = nullLog(); err != nil {
@@ -566,7 +566,7 @@ func (r *runner) drain(f *frame, result string) {
 // fork a child the terminal's signal never reached.
 func (r *runner) runNested(tasks []Task, log *Log, outer *runner) error {
 	if log == nil {
-		own, err := newLog()
+		own, err := newLog(r.s.mode)
 		if err != nil {
 			if own, err = nullLog(); err != nil {
 				return err
