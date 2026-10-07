@@ -51,9 +51,15 @@ import (
 // the shell for SIGINT. A child received a terminal's SIGINT too, and keeps
 // writing to its log, which is a file and not a pipe. A task is claimed
 // before anything of it is written, so a signal between two tasks leaves no
-// frame behind and starts no further task; a second signal while the drain
-// is written ends the process at once, as a stream that does not drain — a
-// terminal stopped with Ctrl-S — would otherwise hold the first one back.
+// frame behind and starts no further task. A second signal while the drain
+// is written waits up to a second for it — one event can send two — and
+// then ends the process, as a stream that does not drain, a terminal
+// stopped with Ctrl-S, would otherwise hold the first one back. While the
+// signals are caught, a write to a stream whose reader is gone fails with
+// EPIPE instead of killing the process with SIGPIPE: off a terminal a
+// Ctrl-C reaches the pipeline's reader too, and the process must die of the
+// signal it caught, not of the write the drain made after it. A step's lines
+// written into a pipe nobody reads are lost, and the steps go on.
 //
 // The message helpers are called from the goroutine that called Run or from
 // a task, not from a goroutine of their own that outlives one: a message is
@@ -123,11 +129,6 @@ type runner struct {
 	// sends it to the process.
 	signals func() (sigs <-chan os.Signal, stop func())
 	die     func(sig os.Signal)
-	// quietPipe makes a write to a stream whose reader is gone fail with
-	// EPIPE instead of killing the process with SIGPIPE, for a signal's
-	// drain: off a terminal the pipeline's reader may have died of the
-	// same signal, and the process must die of the one it caught.
-	quietPipe func()
 	// grace is how long a second signal waits for the first one's drain
 	// before it ends the process.
 	grace time.Duration
@@ -206,10 +207,14 @@ func newRunner(s *Stream) *runner {
 			}
 			c := make(chan os.Signal, len(caught))
 			signal.Notify(c, caught...)
-			return c, func() { signal.Stop(c) }
+			// SIGPIPE is caught and discarded for as long: a write whose
+			// reader is gone then fails with EPIPE, whichever drain makes
+			// it — the owner's or a signal's.
+			pipe := make(chan os.Signal, 1)
+			signal.Notify(pipe, syscall.SIGPIPE)
+			return c, func() { signal.Stop(c); signal.Stop(pipe) }
 		},
-		quietPipe: func() { signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE) },
-		grace:     time.Second,
+		grace: time.Second,
 		die: func(sig os.Signal) {
 			signal.Reset(sig)
 			num, _ := sig.(syscall.Signal)
@@ -494,9 +499,6 @@ func (r *runner) watch(sigs <-chan os.Signal, quit <-chan struct{}) {
 // or a drain the owner has begun, drains a task still running with the
 // interrupted line, and dies of sig.
 func (r *runner) interrupt(sig os.Signal) {
-	if r.quietPipe != nil {
-		r.quietPipe()
-	}
 	r.mu.Lock()
 	r.pending = true
 	for r.state == taskStarting || r.state == taskDraining {

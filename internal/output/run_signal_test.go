@@ -436,6 +436,19 @@ func TestRunSIGINTChild(t *testing.T) {
 	if mode == "" {
 		t.Skip("child half of TestSIGINT; runs only in the subprocess")
 	}
+	if mode == "after-pipe" {
+		r := newRunner(NewStreamAt(stdWriter{err: true}, 80, false, ColourNone, false))
+		if err := r.run([]Task{{Title: "Checking workspace", Run: ok}}); err != nil {
+			fmt.Fprintf(os.Stderr, "RUN-ERROR %v\n", err)
+			os.Exit(3)
+		}
+		fmt.Println("READY")
+		for i := 0; i < 500; i++ {
+			fmt.Println("still writing")
+			time.Sleep(10 * time.Millisecond)
+		}
+		os.Exit(0)
+	}
 	if mode == "after" {
 		r := newRunner(NewStreamAt(stdWriter{err: true}, 80, true, ColourNone, false))
 		if err := r.run([]Task{{Title: "Checking workspace", Run: ok}}); err != nil {
@@ -446,7 +459,7 @@ func TestRunSIGINTChild(t *testing.T) {
 		time.Sleep(5 * time.Second)
 		os.Exit(0)
 	}
-	r := newRunner(NewStreamAt(stdWriter{err: true}, 80, mode != "plain", ColourNone, false))
+	r := newRunner(NewStreamAt(stdWriter{err: true}, 80, mode != "plain" && mode != "plain-dies", ColourNone, false))
 	err := r.run([]Task{{Title: "Starting container", Run: func(log *Log) error {
 		child := exec.Command("sh", "-c", `trap 'echo cleaning up' INT
 i=0
@@ -459,6 +472,12 @@ echo done > "$WS_TEST_RUN_SIGINT_MARKER"`)
 			for len(log.Tail()) == 0 {
 				time.Sleep(10 * time.Millisecond)
 			}
+		}
+		if mode == "plain-dies" {
+			// A child with no trap: it dies of the Ctrl-C at once, the step
+			// fails, and the owner's own drain races the signal's.
+			child = exec.Command("sh", "-c", "echo started; exec sleep 5")
+			child.Stdout, child.Stderr = log.File(), log.File()
 		}
 		if mode == "pipe" {
 			pr, pw, err := os.Pipe()
@@ -572,6 +591,37 @@ func runSignalChild(t *testing.T, mode string, ignored bool, sig syscall.Signal,
 	return status, errBuf.String(), false
 }
 
+// TestSIGPIPEIsFatalAgainAfterRun: Run catches SIGPIPE only while it catches
+// the signals it drains for; once it returns, a write to stdout whose reader
+// is gone kills the process with SIGPIPE, as it did before Run.
+func TestSIGPIPEIsFatalAgainAfterRun(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunSIGINTChild$")
+	cmd.Env = append(os.Environ(), sigintChildEnv+"=after-pipe")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "READY\n" {
+		t.Fatalf("the child wrote %q, %v; want READY", line, err)
+	}
+	_ = out.Close()
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+	select {
+	case <-waited:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("the child did not end after its stdout's reader went")
+	}
+	status := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !status.Signaled() || status.Signal() != syscall.SIGPIPE {
+		t.Errorf("the child ended with %v; want death by SIGPIPE", status)
+	}
+}
+
 // interruptedTail is how the runner's stderr ends after SIGINT: the result
 // line and the queue, after the last frame.
 var interruptedTail = regexp.MustCompile(`\r\x1b\[(1A\x1b\[)?J✗ Starting container  interrupted after \d+\.\ds\n` +
@@ -635,6 +685,12 @@ func TestSIGINT(t *testing.T) {
 		// The drain's writes fail with EPIPE rather than kill the process
 		// with SIGPIPE: it dies of the signal it caught.
 		status, _, _ := runSignalChild(t, "plain", false, syscall.SIGINT, true, true)
+		if !status.Signaled() || status.Signal() != syscall.SIGINT {
+			t.Errorf("the process ended with %v; want death by SIGINT", status)
+		}
+	})
+	t.Run("off a terminal, the pipe's reader gone, the child dead at once", func(t *testing.T) {
+		status, _, _ := runSignalChild(t, "plain-dies", false, syscall.SIGINT, true, true)
 		if !status.Signaled() || status.Signal() != syscall.SIGINT {
 			t.Errorf("the process ended with %v; want death by SIGINT", status)
 		}
