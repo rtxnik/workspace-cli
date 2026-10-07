@@ -240,6 +240,70 @@ func TestASignalWhileATaskStartsWaitsForItsFrame(t *testing.T) {
 	}
 }
 
+// TestANestedRunStartsNothingAfterASignal: a task the interrupt drained
+// goes on running until the process dies; a Run it calls then starts none
+// of its steps — a step started after the signal could fork a child the
+// terminal's signal never reached.
+func TestANestedRunStartsNothingAfterASignal(t *testing.T) {
+	var buf syncBuffer
+	r, sigint, died := interruptibleRunner(&buf)
+	started, signalled, done := make(chan struct{}), make(chan struct{}), make(chan error)
+	var nested error
+	go func() {
+		done <- r.run([]Task{{Title: "Switching profile", Run: func(*Log) error {
+			close(started)
+			<-signalled
+			nested = Run(Task{Title: "Restart dev-proxy", Run: func(*Log) error {
+				t.Error("a nested step started after the signal")
+				return nil
+			}})
+			return nested
+		}}})
+	}()
+	waitOrFail(t, started, "the task to start")
+	sigint <- os.Interrupt
+	waitForDeath(t, died, "die")
+	close(signalled)
+	if err := <-done; !errors.Is(err, errInterrupted) {
+		t.Errorf("run returned %v; want the interrupt", err)
+	}
+	if !errors.Is(nested, errInterrupted) {
+		t.Errorf("the nested Run returned %v; want the interrupt", nested)
+	}
+}
+
+// TestAnInterruptDrainsAroundANestedTaskStillRunning: a signal while a
+// nested task runs drains the queue with that task's place not filled yet:
+// the place writes nothing, the task's messages come out, and its result
+// line, once the task returns, is written after them — once.
+func TestAnInterruptDrainsAroundANestedTaskStillRunning(t *testing.T) {
+	var buf syncBuffer
+	r, sigint, died := interruptibleRunner(&buf)
+	innerIn, innerGo, done := make(chan struct{}), make(chan struct{}), make(chan error)
+	go func() {
+		done <- r.run([]Task{{Title: "Switching profile", Run: func(*Log) error {
+			return Run(Task{Title: "Restart dev-proxy", Run: func(*Log) error {
+				Warn("restarting")
+				close(innerIn)
+				<-innerGo
+				return nil
+			}})
+		}}})
+	}()
+	waitOrFail(t, innerIn, "the nested task to start")
+	sigint <- os.Interrupt
+	waitForDeath(t, died, "die")
+	close(innerGo)
+	if err := <-done; !errors.Is(err, errInterrupted) {
+		t.Errorf("run returned %v; want the interrupt", err)
+	}
+	want := "⠋ Switching profile  0.0s\r\x1b[J✗ Switching profile  interrupted after 0.0s\n" +
+		"⚠ restarting\n✓ Restart dev-proxy  0.0s\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
 // TestASecondSignalEndsAStuckDrain: while the first signal's drain is stuck
 // behind a stream that does not take it, a second signal ends the process
 // once the grace is out.

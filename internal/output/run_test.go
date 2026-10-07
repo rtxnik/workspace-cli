@@ -430,6 +430,46 @@ func TestNestedRunOrdersItsLinesAsTheOwner(t *testing.T) {
 	}
 }
 
+// TestConcurrentNestedRunsKeepTheirOrder: two nested Runs inside one task,
+// off a terminal, both started before either finishes: each result line
+// comes after its own start line and before its own messages. A result line
+// holds the place its task reserved when it started, not a position counted
+// in a queue the other Run has grown since.
+func TestConcurrentNestedRunsKeepTheirOrder(t *testing.T) {
+	var buf syncBuffer
+	r := testRunner(NewStreamAt(&buf, 60, false, ColourNone, false), &fakeClock{}, nil)
+	err := r.run([]Task{{Title: "Switching profile", Run: func(*Log) error {
+		aIn, bIn, aDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		go func() {
+			aDone <- Run(Task{Title: "Validate target profile", Run: func(*Log) error {
+				close(aIn)
+				<-bIn
+				Warn("checked")
+				return nil
+			}})
+		}()
+		<-aIn
+		var errA error
+		errB := Run(Task{Title: "Restart dev-proxy", Run: func(*Log) error {
+			close(bIn)
+			errA = <-aDone // the first Run finishes while this one runs
+			Warn("restarted")
+			return nil
+		}})
+		return errors.Join(errA, errB)
+	}}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	want := "~ Switching profile\n✓ Switching profile  0.0s\n" +
+		"~ Validate target profile\n✓ Validate target profile  0.0s\n" +
+		"~ Restart dev-proxy\n✓ Restart dev-proxy  0.0s\n" +
+		"⚠ checked\n⚠ restarted\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
 // TestANestedRunWithoutARunningTaskGetsALog: a Run that finds an owner with
 // no task running — started on a goroutine of its own between two tasks, or
 // inside a task a signal has drained — is given a log of its own rather
@@ -440,7 +480,7 @@ func TestANestedRunWithoutARunningTaskGetsALog(t *testing.T) {
 	err := r.runNested([]Task{{Title: "Restart dev-proxy", Run: func(log *Log) error {
 		_, _ = fmt.Fprintln(log, "Error response from daemon")
 		return errors.New("restart: exit status 1")
-	}}}, nil)
+	}}}, nil, r)
 	var te *TaskError
 	if !errors.As(err, &te) || !reflect.DeepEqual(te.Tail, []string{"Error response from daemon"}) {
 		t.Errorf("runNested returned %#v; want the task's TaskError with its own tail", err)

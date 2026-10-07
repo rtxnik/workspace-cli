@@ -231,9 +231,17 @@ var drainedSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 var owner struct {
 	mu    sync.Mutex
 	r     *runner
-	open  bool                     // the gate: a line queues while a task runs
-	queue []func(s *Stream) string // each renders one line on the owner's stream
+	open  bool      // the gate: a line queues while a task runs
+	queue []*queued // each renders one line on the owner's stream
 	log   *Log
+}
+
+// queued is one entry of the owner's queue: a line, or a place a nested
+// Run's task reserved for its result line when it started. Both fields
+// change only under owner.mu.
+type queued struct {
+	line  func(s *Stream) string // nil while a reserved place is not filled
+	taken bool                   // a drain took the entry
 }
 
 // enqueue holds line for the owner's drain while a task runs, and reports
@@ -247,8 +255,24 @@ func enqueue(line func(s *Stream) string) bool {
 	if !owner.open {
 		return false
 	}
-	owner.queue = append(owner.queue, line)
+	owner.queue = append(owner.queue, &queued{line: line})
 	return true
+}
+
+// reserve holds a place in the queue for a line that is not known yet, and
+// returns it; nil when nothing queues.
+func reserve() *queued {
+	if mutants.NoMessageQueue {
+		return nil
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if !owner.open {
+		return nil
+	}
+	q := &queued{}
+	owner.queue = append(owner.queue, q)
+	return q
 }
 
 func (r *runner) run(tasks []Task) error {
@@ -262,7 +286,7 @@ func (r *runner) run(tasks []Task) error {
 	if outer != nil {
 		// A nested Run's lines are the owner's: its clock and its stream.
 		r.now, r.s = outer.now, outer.s
-		return r.runNested(tasks, log)
+		return r.runNested(tasks, log, outer)
 	}
 	defer func() {
 		owner.mu.Lock()
@@ -510,11 +534,20 @@ func (r *runner) drain(f *frame, result string) {
 			owner.mu.Unlock()
 			return
 		}
+		// A place reserved and not filled yet is taken empty: its line,
+		// once known, is queued or written after what was drained.
+		lines := make([]func(s *Stream) string, 0, len(batch))
+		for _, q := range batch {
+			q.taken = true
+			if q.line != nil {
+				lines = append(lines, q.line)
+			}
+		}
 		owner.mu.Unlock()
 		if r.hooks.drainTook != nil {
 			r.hooks.drainTook()
 		}
-		for _, line := range batch {
+		for _, line := range lines {
 			r.writeLine(line(r.s))
 		}
 	}
@@ -523,11 +556,13 @@ func (r *runner) drain(f *frame, result string) {
 // runNested runs the tasks of a Run called inside a task. It draws no frame
 // and writes nothing itself: its lines join the owner's queue in the order
 // the owner writes its own — off a terminal a start line, then each task's
-// result line ahead of the messages the task queued — and its tasks write
-// to the running task's log. A Run that finds no task running — started on
-// a goroutine of its own, or inside a task a signal has drained — gets a log
-// of its own.
-func (r *runner) runNested(tasks []Task, log *Log) error {
+// result line, in the place the task reserved when it started, ahead of the
+// messages the task queued — and its tasks write to the running task's log.
+// A Run that finds no task running — started on a goroutine of its own, or
+// inside a task a signal has drained — gets a log of its own. Once the owner
+// has caught a signal it starts none of its tasks: a task started then could
+// fork a child the terminal's signal never reached.
+func (r *runner) runNested(tasks []Task, log *Log, outer *runner) error {
 	if log == nil {
 		own, err := newLog()
 		if err != nil {
@@ -540,19 +575,22 @@ func (r *runner) runNested(tasks []Task, log *Log) error {
 	}
 	tty := r.s.framed() || mutants.FrameOffTerminal
 	for i, t := range tasks {
+		if outer.barred() {
+			return errInterrupted
+		}
 		start := r.now()
 		title := t.Title
 		if !tty {
 			r.queueLine(func(s *Stream) string { return stepLine(s, StateBusy, title, "") })
 		}
-		at := queueLen()
+		place := reserve()
 		err := t.Run(log)
 		st := StateOK
 		if err != nil {
 			st = StateFail
 		}
 		elapsed := elapsedText(r.now().Sub(start))
-		r.queueLineAt(at, func(s *Stream) string { return stepLine(s, st, title, elapsed) })
+		r.fill(place, func(s *Stream) string { return stepLine(s, st, title, elapsed) })
 		if err == nil {
 			continue
 		}
@@ -573,25 +611,27 @@ func (r *runner) queueLine(line func(s *Stream) string) {
 	}
 }
 
-// queueLen is how many lines the owner's queue holds.
-func queueLen() int {
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	return len(owner.queue)
+// fill puts line in the place reserve held for it; when there is no place,
+// or a drain took it empty, line is queued or written as queueLine does.
+func (r *runner) fill(place *queued, line func(s *Stream) string) {
+	if place != nil {
+		owner.mu.Lock()
+		if !place.taken {
+			place.line = line
+			owner.mu.Unlock()
+			return
+		}
+		owner.mu.Unlock()
+	}
+	r.queueLine(line)
 }
 
-// queueLineAt queues a nested Run's line at position at — ahead of what was
-// queued after it — or writes it when the gate has closed under it.
-func (r *runner) queueLineAt(at int, line func(s *Stream) string) {
-	owner.mu.Lock()
-	if !owner.open || mutants.NoMessageQueue {
-		owner.mu.Unlock()
-		r.writeLine(line(r.s))
-		return
-	}
-	at = min(at, len(owner.queue))
-	owner.queue = append(owner.queue[:at], append([]func(s *Stream) string{line}, owner.queue[at:]...)...)
-	owner.mu.Unlock()
+// barred reports whether a signal has been caught: no task is started after
+// it, a nested Run's included.
+func (r *runner) barred() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pending || r.state == taskInterrupted
 }
 
 func (r *runner) writeLine(line string) { _, _ = fmt.Fprintln(r.s, line) }
