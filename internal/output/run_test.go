@@ -167,6 +167,72 @@ func TestRunDrawsAFrameOnATerminal(t *testing.T) {
 	}
 }
 
+// TestRunDrawsNoFrameWhereItCannotRedraw: a terminal whose width is not
+// known — a pty reporting 0 columns — or is under MinWidth, and one that
+// says it does not move its cursor (TERM=dumb), get the plain lines: the
+// frame's redraw climbs one row, so a line that wraps or a cursor that does
+// not move leaves every frame behind.
+func TestRunDrawsNoFrameWhereItCannotRedraw(t *testing.T) {
+	dumb := NewStreamAt(nil, 80, true, ColourNone, false)
+	dumb.dumb = true
+	for _, c := range []struct {
+		name string
+		s    *Stream
+	}{
+		{"a width not known", NewStreamAt(nil, WidthUnbounded, true, ColourNone, false)},
+		{"a width under the minimum", NewStreamAt(nil, MinWidth-4, true, ColourNone, false)},
+		{"TERM=dumb", dumb},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var buf syncBuffer
+			c.s.w = &buf
+			r := testRunner(c.s, &fakeClock{}, make(chan time.Time))
+			if err := r.run([]Task{{Title: "Starting container", Run: ok}}); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if want := "~ Starting container\n✓ Starting container  0.0s\n"; buf.String() != want {
+				t.Errorf("got\n%q\nwant\n%q", buf.String(), want)
+			}
+		})
+	}
+}
+
+// TestAStreamKnowsADumbTerminal: TERM=dumb is read with the rest of the
+// stream's environment, and an ordinary TERM is not dumb.
+func TestAStreamKnowsADumbTerminal(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	probe := func(uintptr) (int, error) { return 80, nil }
+	for term, want := range map[string]bool{"dumb": true, "xterm-256color": false, "": false} {
+		getenv := func(k string) string {
+			if k == "TERM" {
+				return term
+			}
+			return ""
+		}
+		if got := newStream(f, getenv, probe).dumb; got != want {
+			t.Errorf("TERM=%q: dumb %t; want %t", term, got, want)
+		}
+	}
+}
+
+// TestStdStreamKeepsADumbTerminal: the process's streams, rebuilt over a
+// late-bound writer, keep what the probe read of TERM.
+func TestStdStreamKeepsADumbTerminal(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	t.Setenv("TERM", "dumb")
+	if !newStdStream(f, true).dumb {
+		t.Error("the process's stderr stream lost TERM=dumb")
+	}
+}
+
 // TestRunFrameFollowsTheGlyphMode: in the ASCII glyph mode the spinner and
 // the marks are ASCII.
 func TestRunFrameFollowsTheGlyphMode(t *testing.T) {

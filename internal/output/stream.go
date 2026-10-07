@@ -23,6 +23,7 @@ type Stream struct {
 	w        io.Writer
 	width    int
 	tty      bool
+	dumb     bool // TERM=dumb: a terminal that does not move its cursor
 	level    ColourLevel
 	mode     GlyphMode
 	renderer *lipgloss.Renderer
@@ -97,13 +98,15 @@ func newStream(f *os.File, getenv func(string) string, probe widthProbe) *Stream
 	if mutants.ColourProbedOnStdout {
 		colourFd, colourTTY = os.Stdout, term.IsTerminal(os.Stdout.Fd())
 	}
-	return NewStreamAt(
+	s := NewStreamAt(
 		f,
 		ResolveWidth(fd, getenv, probe),
 		tty,
 		probeColour(colourFd, colourTTY, getenv),
 		glyphModeFromEnv(getenv) == GlyphASCII,
 	)
+	s.dumb = getenv("TERM") == "dumb"
+	return s
 }
 
 var (
@@ -156,7 +159,9 @@ func (s stdWriter) Write(p []byte) (int, error) {
 // instead of letting the renderer probe its own writer.
 func newStdStream(f *os.File, err bool) *Stream {
 	probed := NewStream(f)
-	return NewStreamAt(stdWriter{err: err}, probed.width, probed.tty, probed.level, probed.mode == GlyphASCII)
+	s := NewStreamAt(stdWriter{err: err}, probed.width, probed.tty, probed.level, probed.mode == GlyphASCII)
+	s.dumb = probed.dumb
+	return s
 }
 
 // Out is stdout: the answer. Resolved once per process and memoised (§4.1);
@@ -194,6 +199,13 @@ func (s *Stream) Width() int { return s.width }
 // progress are gated on the TTY status of the fd they actually write to
 // (§4.7), which is why this is per-stream and not a process-wide flag.
 func (s *Stream) IsTTY() bool { return s.tty }
+
+// framed reports whether the step runner may draw its frame here: a terminal
+// whose width is known and at least MinWidth — the redraw climbs one row, so
+// each frame line has to fit on one — and that moves its cursor.
+func (s *Stream) framed() bool {
+	return s.tty && !s.dumb && s.width != WidthUnbounded && s.width >= MinWidth
+}
 
 // Mode reports this stream's glyph mode (§4.5).
 func (s *Stream) Mode() GlyphMode { return s.mode }

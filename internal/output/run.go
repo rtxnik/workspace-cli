@@ -15,7 +15,9 @@ import (
 // §4.7 The step runner.
 //
 // Run is the only progress display: a spinner and one live line on a
-// terminal, a start line and a result line anywhere else. While a task runs,
+// terminal — one whose width is known and at least MinWidth, and whose TERM
+// is not dumb, as the redraw needs — a start line and a result line anywhere
+// else. While a task runs,
 // the only bytes written to the process's streams are the runner's frame:
 // the message helpers queue, and a child under the runner writes to the
 // task's Log.
@@ -304,7 +306,7 @@ func (r *runner) runTask(t Task) error {
 	defer log.close()
 
 	start := r.now()
-	tty := r.s.IsTTY() || mutants.FrameOffTerminal
+	tty := r.s.framed() || mutants.FrameOffTerminal
 	// The task is claimed before anything of it is written: after a signal
 	// it is not started, and a signal while it starts waits for its frame.
 	if !r.claim() {
@@ -516,7 +518,7 @@ func (r *runner) runNested(tasks []Task, log *Log) error {
 		defer own.close()
 		log = own
 	}
-	tty := r.s.IsTTY() || mutants.FrameOffTerminal
+	tty := r.s.framed() || mutants.FrameOffTerminal
 	for i, t := range tasks {
 		start := r.now()
 		title := t.Title
