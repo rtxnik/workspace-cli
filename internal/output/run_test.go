@@ -171,16 +171,34 @@ func TestRunDrawsAFrameOnATerminal(t *testing.T) {
 // known — a pty reporting 0 columns — or is under MinWidth, and one that
 // says it does not move its cursor (TERM=dumb), get the plain lines: the
 // frame's redraw climbs one row, so a line that wraps or a cursor that does
-// not move leaves every frame behind.
+// not move leaves every frame behind. The narrow terminal is resolved the
+// way the process's streams are, through newStream, where its width is
+// clamped up to MinWidth.
 func TestRunDrawsNoFrameWhereItCannotRedraw(t *testing.T) {
 	dumb := NewStreamAt(nil, 80, true, ColourNone, false)
 	dumb.dumb = true
+	f, err := os.CreateTemp(t.TempDir(), "stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	utf8env := func(k string) string {
+		if k == "LANG" {
+			return "en_US.UTF-8"
+		}
+		return ""
+	}
+	narrow := newStream(f, utf8env, func(uintptr) (int, error) { return MinWidth - 4, nil })
+	narrow.tty = true // f is no terminal; the width is what is under test
+	if narrow.width != MinWidth {
+		t.Fatalf("the narrow stream resolved to width %d; want it clamped to %d", narrow.width, MinWidth)
+	}
 	for _, c := range []struct {
 		name string
 		s    *Stream
 	}{
 		{"a width not known", NewStreamAt(nil, WidthUnbounded, true, ColourNone, false)},
-		{"a width under the minimum", NewStreamAt(nil, MinWidth-4, true, ColourNone, false)},
+		{"a width under the minimum", narrow},
 		{"TERM=dumb", dumb},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -230,6 +248,26 @@ func TestStdStreamKeepsADumbTerminal(t *testing.T) {
 	t.Setenv("TERM", "dumb")
 	if !newStdStream(f, true).dumb {
 		t.Error("the process's stderr stream lost TERM=dumb")
+	}
+}
+
+// TestStdStreamKeepsANarrowTerminal: the process's streams keep that the
+// width they were resolved from — COLUMNS=20 here — is under MinWidth,
+// although the width itself is clamped up to it.
+func TestStdStreamKeepsANarrowTerminal(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	t.Setenv("COLUMNS", "20")
+	s := newStdStream(f, true)
+	if !s.narrow || s.width != MinWidth {
+		t.Errorf("COLUMNS=20: narrow %t, width %d; want narrow at width %d", s.narrow, s.width, MinWidth)
+	}
+	t.Setenv("COLUMNS", "80")
+	if newStdStream(f, true).narrow {
+		t.Error("COLUMNS=80 resolved as narrow")
 	}
 }
 

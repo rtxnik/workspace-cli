@@ -24,6 +24,7 @@ type Stream struct {
 	width    int
 	tty      bool
 	dumb     bool // TERM=dumb: a terminal that does not move its cursor
+	narrow   bool // the width it was resolved from is under MinWidth, which width is clamped up to
 	level    ColourLevel
 	mode     GlyphMode
 	renderer *lipgloss.Renderer
@@ -98,14 +99,15 @@ func newStream(f *os.File, getenv func(string) string, probe widthProbe) *Stream
 	if mutants.ColourProbedOnStdout {
 		colourFd, colourTTY = os.Stdout, term.IsTerminal(os.Stdout.Fd())
 	}
+	width, narrow := resolveWidth(fd, getenv, probe)
 	s := NewStreamAt(
 		f,
-		ResolveWidth(fd, getenv, probe),
+		width,
 		tty,
 		probeColour(colourFd, colourTTY, getenv),
 		glyphModeFromEnv(getenv) == GlyphASCII,
 	)
-	s.dumb = getenv("TERM") == "dumb"
+	s.dumb, s.narrow = getenv("TERM") == "dumb", narrow
 	return s
 }
 
@@ -160,7 +162,7 @@ func (s stdWriter) Write(p []byte) (int, error) {
 func newStdStream(f *os.File, err bool) *Stream {
 	probed := NewStream(f)
 	s := NewStreamAt(stdWriter{err: err}, probed.width, probed.tty, probed.level, probed.mode == GlyphASCII)
-	s.dumb = probed.dumb
+	s.dumb, s.narrow = probed.dumb, probed.narrow
 	return s
 }
 
@@ -202,9 +204,11 @@ func (s *Stream) IsTTY() bool { return s.tty }
 
 // framed reports whether the step runner may draw its frame here: a terminal
 // whose width is known and at least MinWidth — the redraw climbs one row, so
-// each frame line has to fit on one — and that moves its cursor.
+// each frame line has to fit on one — and that moves its cursor. A terminal
+// narrower than MinWidth resolves to MinWidth, so it is told by narrow, not
+// by its width.
 func (s *Stream) framed() bool {
-	return s.tty && !s.dumb && s.width != WidthUnbounded && s.width >= MinWidth
+	return s.tty && !s.dumb && !s.narrow && s.width != WidthUnbounded && s.width >= MinWidth
 }
 
 // Mode reports this stream's glyph mode (§4.5).
@@ -282,10 +286,17 @@ func terminalWidth(fd uintptr) (int, error) {
 //  2. term.GetSize(fd) on this stream's own fd, likewise clamped.
 //  3. WidthUnbounded.
 func ResolveWidth(fd uintptr, getenv func(string) string, probe widthProbe) int {
+	w, _ := resolveWidth(fd, getenv, probe)
+	return w
+}
+
+// resolveWidth is ResolveWidth, and whether the width it was resolved from
+// is under MinWidth and was clamped up to it.
+func resolveWidth(fd uintptr, getenv func(string) string, probe widthProbe) (width int, narrow bool) {
 	if v := strings.TrimSpace(getenv("COLUMNS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			if !mutants.ColumnsRejectBelowMin || n >= MinWidth {
-				return clampBudget(n)
+				return clampBudget(n), n < MinWidth
 			}
 			// The rejected behaviour of accepted finding #13, planted: a
 			// COLUMNS below MinWidth falls through to the probe, so COLUMNS=28
@@ -294,10 +305,10 @@ func ResolveWidth(fd uintptr, getenv func(string) string, probe widthProbe) int 
 	}
 	if probe != nil {
 		if w, err := probe(fd); err == nil && w > 0 {
-			return clampBudget(w)
+			return clampBudget(w), w < MinWidth
 		}
 	}
-	return WidthUnbounded
+	return WidthUnbounded, false
 }
 
 // probeColour resolves the colour level of one fd. NO_COLOR and a non-TTY
