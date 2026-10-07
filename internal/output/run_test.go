@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeClock is the runner's clock in these tests: it moves only when a test
@@ -375,6 +376,74 @@ func TestLogKeepsTheLastLines(t *testing.T) {
 				t.Errorf("the log holds %d finished lines; it keeps at most %d", len(l.lines), tailLines)
 			}
 		})
+	}
+}
+
+// TestLogKeepsItsStateAcrossReads: what Log carries from one read to the
+// next — a line still being written, a carriage return, a line already cut
+// at 1 KiB — gives the same lines as one read would, whatever falls between
+// two reads.
+func TestLogKeepsItsStateAcrossReads(t *testing.T) {
+	long := "a" + strings.Repeat("é", 600) // 1201 bytes: the cut at 1024 falls inside the 512th é
+	cut := "a" + strings.Repeat("é", 511)
+	for _, c := range []struct {
+		name   string
+		pieces []string // written one by one, the log read after each
+		tail   []string
+	}{
+		{"a rune split between two reads", []string{long[:700], long[700:] + "\n"}, []string{cut}},
+		{"a cut line goes on in the next read", []string{long[:1100], long[1100:] + "\nnext\n"}, []string{cut, "next"}},
+		{"a redraw split between two reads", []string{"10%\r", "20%\n"}, []string{"20%"}},
+		{"CRLF split between two reads", []string{"one\r", "\ntwo\n"}, []string{"one", "two"}},
+		{"a line longer than one read", []string{strings.Repeat("x", 40000) + "\n"}, []string{strings.Repeat("x", lineCap)}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			l, err := newLog()
+			if err != nil {
+				t.Fatalf("newLog: %v", err)
+			}
+			t.Cleanup(l.close)
+			for _, p := range c.pieces {
+				_, _ = fmt.Fprint(l, p)
+				_ = l.liveLine()
+			}
+			got := l.Tail()
+			if !reflect.DeepEqual(got, c.tail) {
+				t.Errorf("Tail = %q; want %q", got, c.tail)
+			}
+			for _, line := range got {
+				if !utf8.ValidString(line) {
+					t.Errorf("a kept line is not valid UTF-8: %q", line)
+				}
+			}
+		})
+	}
+}
+
+// TestLogReadsWhatWasThereWhenAsked: a read takes what the file held when it
+// began, not what a child keeps appending while it reads — a child that
+// writes faster than the log is parsed would otherwise hold the ticker in
+// one read for good, and with it the result line and a signal's drain.
+func TestLogReadsWhatWasThereWhenAsked(t *testing.T) {
+	l, err := newLog()
+	if err != nil {
+		t.Fatalf("newLog: %v", err)
+	}
+	t.Cleanup(l.close)
+	chunk := strings.Repeat("y\n", 2048)
+	_, _ = fmt.Fprint(l, chunk)
+	reads := 0
+	l.readHook = func() {
+		// The child writes another chunk each time the log has read one.
+		if reads++; reads < 100 {
+			_, _ = fmt.Fprint(l, chunk)
+		}
+	}
+	if line := l.liveLine(); line != "y" {
+		t.Errorf("liveLine = %q; want %q", line, "y")
+	}
+	if reads > 2 {
+		t.Errorf("one read of the log read %d times while the file grew; want it to stop at what was there", reads)
 	}
 }
 

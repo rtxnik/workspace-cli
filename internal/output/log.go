@@ -26,10 +26,13 @@ type Log struct {
 	r *os.File // the same file, opened a second time for reading
 
 	mu      sync.Mutex
+	off     int64    // how much of the file has been read
 	partial []byte   // the line being written, after its last carriage return
 	cr      bool     // the last byte read was a carriage return
 	full    bool     // the line being written reached lineCap; the rest is dropped
 	lines   []string // the last tailLines complete lines that are not blank
+
+	readHook func() // a test's: called after each read of the file
 }
 
 const (
@@ -98,12 +101,23 @@ func (l *Log) liveLine() string {
 	return line
 }
 
-// readNew reads what was written since the last read. Called with mu held.
+// readNew reads what was written since the last read, up to what the file
+// held when it began: a child that writes faster than the log is parsed
+// must not keep one read going. Called with mu held.
 func (l *Log) readNew() {
+	fi, err := l.r.Stat()
+	if err != nil {
+		return
+	}
+	end := fi.Size()
 	buf := make([]byte, 32*1024)
-	for {
-		n, err := l.r.Read(buf)
+	for l.off < end {
+		n, err := l.r.Read(buf[:min(int64(len(buf)), end-l.off)])
+		l.off += int64(n)
 		l.consume(buf[:n])
+		if l.readHook != nil {
+			l.readHook()
+		}
 		if err != nil || n == 0 {
 			return
 		}
