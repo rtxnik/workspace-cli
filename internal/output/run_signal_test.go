@@ -449,6 +449,19 @@ func TestRunSIGINTChild(t *testing.T) {
 		}
 		os.Exit(0)
 	}
+	if mode == "dead-pipe" {
+		// Off a terminal, a task that fails once stderr's reader is gone,
+		// with no signal sent: the owner's own drain writes into the pipe.
+		r := newRunner(NewStreamAt(stdWriter{err: true}, 80, false, ColourNone, false))
+		err := r.run([]Task{{Title: "Starting container", Run: func(*Log) error {
+			Warn("queued before the failure")
+			fmt.Println("READY")
+			_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+			return errors.New("devpod up: exit status 1")
+		}}})
+		fmt.Println("SURVIVED", err != nil)
+		os.Exit(0)
+	}
 	if mode == "after" {
 		r := newRunner(NewStreamAt(stdWriter{err: true}, 80, true, ColourNone, false))
 		if err := r.run([]Task{{Title: "Checking workspace", Run: ok}}); err != nil {
@@ -619,6 +632,55 @@ func TestSIGPIPEIsFatalAgainAfterRun(t *testing.T) {
 	status := cmd.ProcessState.Sys().(syscall.WaitStatus)
 	if !status.Signaled() || status.Signal() != syscall.SIGPIPE {
 		t.Errorf("the child ended with %v; want death by SIGPIPE", status)
+	}
+}
+
+// TestTheOwnersDrainIntoADeadPipeIsNotFatal: Run catches SIGPIPE from the
+// moment it catches signals, not from the first signal, so the owner's own
+// drain — a failed task's result line and its queue, written off a terminal
+// into a pipe whose reader is gone — fails with EPIPE and the process goes
+// on. No signal is sent: nothing here depends on which drain writes first.
+func TestTheOwnersDrainIntoADeadPipeIsNotFatal(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunSIGINTChild$")
+	cmd.Env = append(os.Environ(), sigintChildEnv+"=dead-pipe")
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	errPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	rd := bufio.NewReader(out)
+	if line, err := rd.ReadString('\n'); err != nil || line != "READY\n" {
+		_ = cmd.Process.Kill()
+		t.Fatalf("the child wrote %q, %v; want READY", line, err)
+	}
+	_ = errPipe.Close()
+	_, _ = io.WriteString(in, "fail now\n")
+	rest := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(rd)
+		rest <- string(b)
+	}()
+	var got string
+	select {
+	case got = <-rest:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("the child did not end after its task failed")
+	}
+	_ = cmd.Wait()
+	status := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if status.Signaled() || status.ExitStatus() != 0 || got != "SURVIVED true\n" {
+		t.Errorf("the child ended with %v and wrote %q; want exit 0 after %q", status, got, "SURVIVED true\n")
 	}
 }
 
