@@ -499,8 +499,10 @@ func TestStatusIgnoresTheSystemGitConfig(t *testing.T) {
 }
 
 // TestStartRefusesAnEntryThatDoesNotResolve: a workspace entry that is
-// there but does not resolve — a dangling symlink — is refused before devpod
-// is asked, with the reason and the remedy that removes it.
+// there but does not resolve — a dangling symlink — is refused by ws start
+// and ws restart before devpod is asked, with the reason and the remedy that
+// removes it; a name that is not there at all is refused by both as not
+// found.
 func TestStartRefusesAnEntryThatDoesNotResolve(t *testing.T) {
 	fx := newStreamsFixture(t)
 	entry := filepath.Join(fx.home, "workspaces", "broken")
@@ -510,20 +512,26 @@ func TestStartRefusesAnEntryThatDoesNotResolve(t *testing.T) {
 	t.Setenv("PATH", fx.bin)
 	t.Setenv("HOME", fx.home)
 	t.Setenv("WORKSPACES_DIR", filepath.Join(fx.home, "workspaces"))
-	var err error
-	stderr := captureStderr(t, func() { err = startCmd.RunE(startCmd, []string{"broken"}) })
 	_, statErr := os.Stat(entry)
-	p, carried := output.ProblemOf(err)
-	want := output.Problem{
-		Title: `Workspace "broken" cannot be read`,
-		Cause: statErr.Error(),
-		Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete broken"}},
-	}
-	if !carried || !reflect.DeepEqual(p, want) || !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("ws start broken returned %v, a Problem %+v (%t); want %+v, an error that is os.ErrNotExist", err, p, carried, want)
-	}
-	if stderr != "" {
-		t.Errorf("ws start broken wrote %q; want nothing before the root prints the Problem", stderr)
+	for _, c := range []*cobra.Command{startCmd, restartCmd} {
+		var err error
+		stderr := captureStderr(t, func() { err = c.RunE(c, []string{"broken"}) })
+		p, carried := output.ProblemOf(err)
+		want := output.Problem{
+			Title: `Workspace "broken" cannot be read`,
+			Cause: statErr.Error(),
+			Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete broken"}},
+		}
+		if !carried || !reflect.DeepEqual(p, want) || !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("ws %s broken returned %v, a Problem %+v (%t); want %+v, an error that is os.ErrNotExist", c.Name(), err, p, carried, want)
+		}
+		if stderr != "" {
+			t.Errorf("ws %s broken wrote %q; want nothing before the root prints the Problem", c.Name(), stderr)
+		}
+		stderr = captureStderr(t, func() { err = c.RunE(c, []string{"nosuch"}) })
+		if p, _ := output.ProblemOf(err); p.Title != `Workspace "nosuch" not found` || stderr != "" {
+			t.Errorf("ws %s nosuch wrote %q and returned a Problem %+v; want it refused as not found, nothing written", c.Name(), stderr, p)
+		}
 	}
 }
 

@@ -172,6 +172,23 @@ func workspaceNotFound(name string, next output.Remedy) error {
 	}}
 }
 
+// requireWorkspace refuses, before devpod is given a workspace's directory,
+// a workspace that is not there and one whose entry is there but does not
+// resolve, such as a dangling symlink.
+func requireWorkspace(cfg config.Config, name string) error {
+	if !workspace.Exists(cfg, name) {
+		return workspaceNotFound(name, output.Remedy{Label: "Create it", Cmd: "ws new " + name})
+	}
+	if err := workspace.Resolve(cfg, name); err != nil {
+		return &output.ProblemError{P: output.Problem{
+			Title: fmt.Sprintf("Workspace %q cannot be read", name),
+			Cause: err.Error(),
+			Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete " + name}},
+		}, Err: err}
+	}
+	return nil
+}
+
 // workspaceExists is the error of ws new for a name already taken, carrying
 // its Problem.
 func workspaceExists(name string) error {
@@ -222,17 +239,8 @@ var startCmd = &cobra.Command{
 		if err := workspace.ValidateName(name); err != nil {
 			return err
 		}
-		if !workspace.Exists(cfg, name) {
-			return workspaceNotFound(name, output.Remedy{Label: "Create it", Cmd: "ws new " + name})
-		}
-		// An entry that is there but does not resolve is refused before
-		// devpod is given a source that is not there.
-		if err := workspace.Resolve(cfg, name); err != nil {
-			return &output.ProblemError{P: output.Problem{
-				Title: fmt.Sprintf("Workspace %q cannot be read", name),
-				Cause: err.Error(),
-				Steps: []output.Remedy{{Label: "Delete it", Cmd: "ws delete " + name}},
-			}, Err: err}
+		if err := requireWorkspace(cfg, name); err != nil {
+			return err
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
 		return output.Run(
@@ -405,6 +413,9 @@ var restartCmd = &cobra.Command{
 		cfg := config.Load()
 		name := args[0]
 		if err := workspace.ValidateName(name); err != nil {
+			return err
+		}
+		if err := requireWorkspace(cfg, name); err != nil {
 			return err
 		}
 		source := filepath.Join(cfg.WorkspacesDir, name)
