@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ type Log struct {
 	partial []byte   // the line being written, after its last carriage return
 	cr      bool     // the last byte read was a carriage return
 	full    bool     // the line being written reached lineCap; the rest is dropped
+	skip    bool     // a read skipped to its window inside a line; it is dropped up to its end
 	lines   []string // the last tailLines complete lines that are not blank
 
 	readHook func() // a test's: called after each read of the file
@@ -40,6 +42,10 @@ const (
 	tailLines = 20
 	// lineCap is where each kept line is cut, in bytes.
 	lineCap = 1024
+	// readWindow is the most of what is new that one read parses, counted
+	// back from the file's end: further back, what a child wrote is
+	// skipped, as the tail and the live line are the log's last lines.
+	readWindow = 256 << 10
 )
 
 // newLog creates a task's log.
@@ -117,14 +123,22 @@ func (l *Log) liveLine() string {
 }
 
 // readNew reads what was written since the last read, up to what the file
-// held when it began: a child that writes faster than the log is parsed
-// must not keep one read going. Called with mu held.
+// held when it began, and of that no more than readWindow from its end: a
+// child that writes faster than the log is parsed must not keep one read
+// going, nor make each read longer than the one before. Called with mu held.
 func (l *Log) readNew() {
 	fi, err := l.r.Stat()
 	if err != nil {
 		return
 	}
 	end := fi.Size()
+	if end-l.off > readWindow {
+		if _, err := l.r.Seek(end-readWindow, io.SeekStart); err != nil {
+			return
+		}
+		l.off = end - readWindow
+		l.partial, l.cr, l.full, l.skip = l.partial[:0], false, false, true
+	}
 	buf := make([]byte, 32*1024)
 	for l.off < end {
 		n, err := l.r.Read(buf[:min(int64(len(buf)), end-l.off)])
@@ -143,6 +157,13 @@ func (l *Log) readNew() {
 // newline starts the line again, as a progress bar redrawing itself does; a
 // line is kept up to lineCap bytes and the rest of it is dropped.
 func (l *Log) consume(p []byte) {
+	if l.skip {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			return
+		}
+		p, l.skip = p[i+1:], false
+	}
 	for len(p) > 0 {
 		i := bytes.IndexAny(p, "\r\n")
 		if i < 0 {

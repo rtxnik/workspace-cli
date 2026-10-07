@@ -614,6 +614,56 @@ func TestLogReadsWhatWasThereWhenAsked(t *testing.T) {
 	}
 }
 
+// TestLogSkipsToTheEndOfABacklog: a read parses no more than readWindow of
+// what is new, from the end — the tail and the live line are the log's last
+// lines — so the time a read takes does not grow with how long a fast child
+// has been writing. The line the window starts inside is not kept.
+func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
+	l, err := newLog()
+	if err != nil {
+		t.Fatalf("newLog: %v", err)
+	}
+	t.Cleanup(l.close)
+	_, _ = fmt.Fprint(l, strings.Repeat("x", 100)+"\n"+strings.Repeat("y\n", 1<<19)+"last\n")
+	reads := 0
+	l.readHook = func() { reads++ }
+	if line := l.liveLine(); line != "last" {
+		t.Errorf("liveLine = %q; want %q", line, "last")
+	}
+	if most := readWindow/(32*1024) + 1; reads > most {
+		t.Errorf("the read parsed %d chunks of a 1 MiB backlog; want at most %d, the window's", reads, most)
+	}
+	tail := l.Tail()
+	if len(tail) != tailLines || tail[len(tail)-1] != "last" || tail[0] != "y" {
+		t.Errorf("Tail = %q; want %d lines ending in %q", tail, tailLines, "last")
+	}
+	for _, line := range tail {
+		if line != "y" && line != "last" {
+			t.Errorf("a line cut by the window was kept: %q", line)
+		}
+	}
+
+	// Lines longer than the window holds twenty of: the line the window
+	// starts inside would be kept as its padding alone, without its number.
+	l2, err := newLog()
+	if err != nil {
+		t.Fatalf("newLog: %v", err)
+	}
+	t.Cleanup(l2.close)
+	for i := 0; i < 40; i++ {
+		_, _ = fmt.Fprintf(l2, "L%02d %s\n", i, strings.Repeat("p", 32*1024))
+	}
+	tail = l2.Tail()
+	if len(tail) == 0 || !strings.HasPrefix(tail[len(tail)-1], "L39 ") {
+		t.Fatalf("Tail ends %q; want the last line, L39", tail)
+	}
+	for _, line := range tail {
+		if !strings.HasPrefix(line, "L") {
+			t.Errorf("a line cut by the window was kept: %.20q…", line)
+		}
+	}
+}
+
 // TestLogIsAnUnlinkedFile: the log is a regular file that no longer has a
 // name, and a child given File writes to it directly.
 func TestLogIsAnUnlinkedFile(t *testing.T) {
