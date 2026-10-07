@@ -276,7 +276,10 @@ var deleteCmd = &cobra.Command{
 		}
 
 		// A workspace that is not there is refused before the confirmation,
-		// with or without --force.
+		// with or without --force. The devpod step is offered for every
+		// missing name: whether devpod still knows the workspace would take
+		// a devpod call of up to 10s on the refusal path, and devpod refuses
+		// a name it does not know.
 		if !workspace.Exists(cfg, name) {
 			return workspaceNotFound(name, output.Remedy{Label: "Remove it from devpod", Cmd: "devpod delete " + name})
 		}
@@ -291,7 +294,10 @@ var deleteCmd = &cobra.Command{
 
 		// devpod failing to delete its workspace is a warning, and the
 		// directory goes all the same; the warning carries devpod's last
-		// lines, which no longer reach the terminal.
+		// lines, which no longer reach the terminal. A directory that cannot
+		// be removed is a Problem of its own: the task's log holds devpod's
+		// lines, which are not its cause.
+		dir := filepath.Join(cfg.WorkspacesDir, name)
 		return output.Run(output.Task{
 			Title: fmt.Sprintf("Deleting workspace %q", name),
 			Run: func(log *output.Log) error {
@@ -301,7 +307,14 @@ var deleteCmd = &cobra.Command{
 						output.Detail(line)
 					}
 				}
-				return os.RemoveAll(filepath.Join(cfg.WorkspacesDir, name))
+				if err := os.RemoveAll(dir); err != nil {
+					return &output.ProblemError{P: output.Problem{
+						Title: fmt.Sprintf("The directory of workspace %q could not be removed", name),
+						Cause: err.Error(),
+						Facts: []output.Fact{{K: "Directory", V: dir}},
+					}, Err: err}
+				}
+				return nil
 			},
 		})
 	},

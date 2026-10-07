@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"syscall"
@@ -460,6 +461,52 @@ func TestStreams(t *testing.T) {
 				t.Errorf("an ESC byte in a pipe: stdout %q, stderr %q", stdout, stderr)
 			}
 		})
+	}
+}
+
+// TestDeleteKeepsDevpodsLinesOutOfARemovalFailure: when devpod has deleted
+// its workspace and the directory then cannot be removed, the Problem the
+// root prints names the directory and has the removal's error as its cause —
+// not devpod's output, which is all the task's log holds, and which a failed
+// devpod delete has already printed under its warning.
+func TestDeleteKeepsDevpodsLinesOutOfARemovalFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes the entries of a read-only directory")
+	}
+	fx := newStreamsFixture(t)
+	dir := filepath.Join(fx.home, "workspaces", "ops")
+	locked := filepath.Join(dir, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "f"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	t.Setenv("PATH", fx.bin)
+	t.Setenv("HOME", fx.home)
+	t.Setenv("WORKSPACES_DIR", filepath.Join(fx.home, "workspaces"))
+	if err := deleteCmd.Flags().Set("force", "true"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = deleteCmd.Flags().Set("force", "false") })
+
+	var err error
+	_ = captureStderr(t, func() { err = deleteCmd.RunE(deleteCmd, []string{"ops"}) })
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("ws delete --force ops returned %v; want the removal's permission error", err)
+	}
+	p, carried := output.ProblemOf(err)
+	want := output.Problem{
+		Title: `The directory of workspace "ops" could not be removed`,
+		Cause: err.Error(),
+		Facts: []output.Fact{{K: "Directory", V: dir}},
+	}
+	if !carried || !reflect.DeepEqual(p, want) {
+		t.Errorf("the root would print %+v; want %+v", p, want)
 	}
 }
 
