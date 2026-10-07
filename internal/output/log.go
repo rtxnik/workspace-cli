@@ -43,13 +43,14 @@ const (
 	tailLines = 20
 	// lineCap is where each kept line is cut, in bytes.
 	lineCap = 1024
-	// readWindow is the most of what is new that one read parses, counted
-	// back from the file's end: further back, what a child wrote is
-	// skipped, as the tail and the live line are the log's last lines.
+	// readWindow is how much of what is new one read parses, counted back
+	// from the file's end, with the byte before it: further back, what a
+	// child wrote is skipped, as the tail and the live line are the log's
+	// last lines.
 	readWindow = 256 << 10
 )
 
-// newLog creates a task's log, to be shown in glyph mode mode.
+// newLog creates a task's log, to be shown in the glyph mode given.
 func newLog(mode GlyphMode) (*Log, error) {
 	w, err := os.CreateTemp("", "ws-task-*.log")
 	if err != nil {
@@ -97,8 +98,8 @@ func (l *Log) Tail() []string {
 	defer l.mu.Unlock()
 	l.readNew()
 	out := append([]string(nil), l.lines...)
-	if !blank(string(l.partial)) {
-		out = append(out, l.shown(string(l.partial)))
+	if line := l.shown(string(l.partial)); !blank(line) {
+		out = append(out, line)
 	}
 	if len(out) > tailLines {
 		out = out[len(out)-tailLines:]

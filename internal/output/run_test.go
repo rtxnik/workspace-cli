@@ -783,6 +783,22 @@ func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
 			}
 		}
 	})
+	t.Run("Tail and liveLine agree on a cut line still being written", func(t *testing.T) {
+		for _, c := range []struct {
+			name, start, rest string // the window starts on start's second byte
+			want              []string
+		}{
+			{"a stray OSC byte", "\xd0\x9d", strings.Repeat("x", readWindow), []string{"…" + strings.Repeat("x", lineCap-len("…"))}},
+			{"a stray byte before blanks", "\xc3\x80", strings.Repeat(" ", readWindow), nil},
+		} {
+			l := newBacklog(t, "")
+			_, _ = fmt.Fprint(l, strings.Repeat("a", 300*1024)+c.start+c.rest)
+			live := l.liveLine()
+			if got := l.Tail(); !reflect.DeepEqual(got, c.want) || (live != "") != (len(got) > 0) || (live != "" && live != got[len(got)-1]) {
+				t.Errorf("%s: Tail = %.12q, liveLine = %.12q; want Tail %.12q and liveLine its last line", c.name, got, live, c.want)
+			}
+		}
+	})
 	t.Run("a read one byte longer than the window skips nothing and keeps what it had", func(t *testing.T) {
 		l := newBacklog(t, "keep me\nabc")
 		_, _ = fmt.Fprint(l, "def\n"+strings.Repeat("q", readWindow-4)+"\n")

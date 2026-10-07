@@ -429,8 +429,11 @@ const (
 // stream over the real stderr, with the real signals, whose task starts a
 // child that traps SIGINT, keeps writing for a second and then writes a
 // marker file. WS_TEST_RUN_SIGINT_CHILD=pipe gives the child a pipe instead
-// of the task's log, =plain runs the runner off a terminal, and =after runs
-// one task to its end and then waits five seconds with Run returned.
+// of the task's log, =plain runs the runner off a terminal, =plain-dies
+// does so with a child that dies at once, and =after runs one task to its
+// end and then waits five seconds with Run returned. =after-pipe writes to
+// stdout after Run returned, and =dead-pipe fails its task off a terminal
+// once stderr's reader is gone; neither waits for a signal.
 func TestRunSIGINTChild(t *testing.T) {
 	mode := os.Getenv(sigintChildEnv)
 	if mode == "" {
