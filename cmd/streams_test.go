@@ -186,6 +186,9 @@ func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int,
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestExecuteChildProcess$")
 	cmd.WaitDelay = 5 * time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// On the timeout the child's whole session goes, the fake devpod it
+	// started included, not the child alone.
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	// No NO_COLOR: a pipe alone must keep every escape out.
 	cmd.Env = append([]string{
 		executeChildEnv + "=1",
@@ -200,6 +203,9 @@ func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int,
 		"LC_ALL=en_US.UTF-8",
 		"TMPDIR=" + os.TempDir(),
 		"GORACE=atexit_sleep_ms=0",
+		// The git ws status runs reads no system or global configuration.
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
 	}, row.env...)
 	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+v)
@@ -325,6 +331,16 @@ var streamsRows = []streamsRow{
 	{name: "ws list: none", args: []string{"list"}, setup: withoutWorkspaces,
 		stdout: "No workspaces yet.\n  Create one    ws new <name>\n  See profiles  ws profiles\n"},
 	{name: "ws list --json: none", args: []string{"list", "--json"}, setup: withoutWorkspaces, stdout: "[]\n"},
+	// The table and its caption go to stdout and nothing to stderr; the
+	// tables baseline pins the table itself.
+	{name: "ws status: a dirty repo", args: []string{"status"}, setup: withRepos, code: 1,
+		check: func(t *testing.T, stdout string) {
+			for _, want := range []string{"│ vault-ai ", " ~ dirty ", "╯\n1/3 repos healthy\n"} {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("stdout lacks %q:\n%s", want, stdout)
+				}
+			}
+		}},
 	// COLUMNS empty: a pipe with no width, the budget is unbounded.
 	{name: "ws profiles: ten profiles, nothing cut", args: []string{"profiles"}, env: []string{"COLUMNS="},
 		check: func(t *testing.T, stdout string) {
@@ -449,6 +465,10 @@ func TestStreams(t *testing.T) {
 			if row.after != nil {
 				row.after(t, fx)
 			}
+			// No ESC byte in either stream, whatever compares the stdout.
+			if strings.ContainsRune(stdout+stderr, '\x1b') {
+				t.Errorf("an ESC byte in a pipe: stdout %q, stderr %q", stdout, stderr)
+			}
 			if row.check != nil {
 				row.check(t, stdout)
 				stdout = row.stdout
@@ -457,10 +477,24 @@ func TestStreams(t *testing.T) {
 				t.Errorf("exit %d\n--- stdout:\n%s--- stderr:\n%s\nwant exit %d\n--- stdout:\n%s--- stderr:\n%s",
 					code, stdout, stderr, row.code, row.stdout, row.stderr)
 			}
-			if strings.ContainsRune(stdout+stderr, '\x1b') {
-				t.Errorf("an ESC byte in a pipe: stdout %q, stderr %q", stdout, stderr)
-			}
 		})
+	}
+}
+
+// TestStatusIgnoresTheSystemGitConfig: the git ws status runs in a child
+// reads no system configuration. One that hides untracked files would make
+// the fixture's dirty repository — dirty through an untracked file — clean.
+func TestStatusIgnoresTheSystemGitConfig(t *testing.T) {
+	fx := newStreamsFixture(t)
+	withRepos(t, fx)
+	system := filepath.Join(fx.home, "system.gitconfig")
+	if err := os.WriteFile(system, []byte("[status]\n\tshowUntrackedFiles = no\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	row := streamsRow{name: "ws status under a system gitconfig", args: []string{"status"}, env: []string{"GIT_CONFIG_SYSTEM=" + system}}
+	code, stdout, stderr := runStreamsChild(t, fx, row)
+	if code != 1 || !strings.Contains(stdout, "~ dirty") || stderr != "" {
+		t.Errorf("exit %d\n--- stdout:\n%s--- stderr:\n%s\nwant exit 1, vault-ai dirty, and nothing on stderr", code, stdout, stderr)
 	}
 }
 

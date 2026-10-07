@@ -112,7 +112,7 @@ func sweepTables(t *testing.T) []sweptTable {
 	}
 	tb, err := listTable(sweepWorkspaces)
 	add("ws list", tb, err, values, []string{"✓ running", "~ busy", "- stopped", "- not created", "? rebuilding"})
-	values = []string{"+1234 -56", "no remote"}
+	values = []string{"+1234 -56", "no remote", "in sync"}
 	for _, r := range sweepRepos {
 		values = append(values, r.Name, r.Branch, r.Error)
 	}
@@ -236,7 +236,14 @@ func TestTablesFitEveryWidthAmbiguousWide(t *testing.T) {
 		return
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestTablesFitEveryWidthAmbiguousWide$", "-test.v")
-	child.Env = append(os.Environ(), "RUNEWIDTH_EASTASIAN=1", tablesAmbiWideEnv+"=1")
+	// The child's environment is its own: with a UTF-8 locale set, ASCII
+	// can only come from RUNEWIDTH_EASTASIAN, so the glyph-mode check above
+	// cannot pass on a host that sets no locale at all.
+	child.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "TMPDIR=" + os.TempDir(),
+		"LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8", "RUNEWIDTH_EASTASIAN=1", tablesAmbiWideEnv + "=1"}
+	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
+		child.Env = append(child.Env, "GOCOVERDIR="+v)
+	}
 	out, err := child.CombinedOutput()
 	if err != nil {
 		t.Fatalf("the Ambiguous-wide sweep failed: %v\n%s", err, out)
@@ -372,6 +379,37 @@ func TestTablesBaseline(t *testing.T) {
 	}
 }
 
+// TestWithReposIgnoresTheParentsGitEnvironment: the fixture's git commands
+// run in the fixture's repositories whatever git environment the test
+// inherits — a git hook exports GIT_DIR and GIT_WORK_TREE, and with them the
+// fixture's commits and checkouts would land in the enclosing repository.
+func TestWithReposIgnoresTheParentsGitEnvironment(t *testing.T) {
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
+	t.Setenv("GIT_DIR", filepath.Join(elsewhere, ".git"))
+	t.Setenv("GIT_WORK_TREE", elsewhere)
+	fx := newStreamsFixture(t)
+	withRepos(t, fx)
+	if _, err := os.Lstat(elsewhere); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the fixture's git wrote to the inherited GIT_DIR: %v", err)
+	}
+	for _, repo := range []string{"workspace-cli", "vault-ai"} {
+		if _, err := os.Stat(filepath.Join(fx.home, "projects", repo, ".git")); err != nil {
+			t.Errorf("the fixture repository %s was not made: %v", repo, err)
+		}
+	}
+}
+
+// withoutGitEnv is env without its GIT_* variables.
+func withoutGitEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "GIT_") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // withRepos gives ws status the fixture's three repositories, and links git
 // onto the fixture's PATH: workspace-cli on main, clean, two commits ahead of
 // its upstream and one behind; vault-ai on a branch, dirty, with no upstream;
@@ -389,7 +427,10 @@ func withRepos(t *testing.T, fx streamsFixture) {
 		t.Helper()
 		cmd := exec.Command(gitPath, append([]string{"-C", dir, "-c", "user.name=ws", "-c", "user.email=ws@example.com",
 			"-c", "commit.gpgsign=false"}, args...)...)
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		// The parent's GIT_* variables stay out: an enclosing git process —
+		// a hook — exports GIT_DIR and GIT_WORK_TREE, which would point
+		// these commands at its own repository.
+		cmd.Env = append(withoutGitEnv(os.Environ()), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
