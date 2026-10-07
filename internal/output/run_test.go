@@ -727,6 +727,33 @@ func TestLogSkipsToTheEndOfABacklog(t *testing.T) {
 			t.Errorf("Tail holds %d lines from %.6q; want %d, from L32", len(tail), tail[0], readWindow/lineLen)
 		}
 	})
+	t.Run("a line that starts on the byte before the window is kept whole and unmarked", func(t *testing.T) {
+		l := newBacklog(t, "")
+		const lineLen = 32 * 1024
+		for i := 0; i < 40; i++ {
+			_, _ = fmt.Fprintf(l, "L%02d %s\n", i, strings.Repeat("p", lineLen-5))
+		}
+		_, _ = fmt.Fprint(l, "z") // the window now starts one byte into L32
+		tail := l.Tail()
+		if len(tail) != 9 || !strings.HasPrefix(tail[0], "L32 ") || tail[8] != "z" {
+			t.Errorf("Tail holds %d lines from %.6q; want 9, from L32 unmarked to z", len(tail), tail[0])
+		}
+	})
+	t.Run("a window that starts after a carriage return starts a redraw, unmarked", func(t *testing.T) {
+		l := newBacklog(t, "")
+		_, _ = fmt.Fprint(l, strings.Repeat("a", 300*1024)+"\r"+strings.Repeat("b", readWindow)+"\n")
+		if got, want := l.Tail(), []string{strings.Repeat("b", lineCap)}; !reflect.DeepEqual(got, want) {
+			t.Errorf("Tail = %.24q; want %.24q", got, want)
+		}
+	})
+	t.Run("a read one byte longer than the window skips nothing and keeps what it had", func(t *testing.T) {
+		l := newBacklog(t, "keep me\nabc")
+		_, _ = fmt.Fprint(l, "def\n"+strings.Repeat("q", readWindow-4)+"\n")
+		want := []string{"keep me", "abcdef", strings.Repeat("q", lineCap)}
+		if got := l.Tail(); !reflect.DeepEqual(got, want) {
+			t.Errorf("Tail = %.24q; want %.24q", got, want)
+		}
+	})
 	t.Run("a progress run longer than the window ends in its last redraw", func(t *testing.T) {
 		l := newBacklog(t, "")
 		_, _ = fmt.Fprint(l, "starting\n"+strings.Repeat("\r42%", 100000)+"\rError: pull failed\n")

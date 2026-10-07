@@ -123,25 +123,32 @@ func (l *Log) liveLine() string {
 }
 
 // readNew reads what was written since the last read, up to what the file
-// held when it began, and of that no more than readWindow from its end: a
-// child that writes faster than the log is parsed must not keep one read
-// going, nor make each read longer than the one before. Called with mu held.
+// held when it began, and of that no more than the last readWindow bytes
+// and the one before them: a child that writes faster than the log is parsed
+// must not keep one read going, nor make each read longer than the one
+// before. Called with mu held.
 func (l *Log) readNew() {
 	fi, err := l.r.Stat()
 	if err != nil {
 		return
 	}
 	end := fi.Size()
-	if end-l.off > readWindow {
-		// One byte before the window: when it ends a line, the window's
-		// first line is whole and nothing is marked cut. What was kept
-		// before goes, so the tail stays contiguous.
+	if end-l.off > readWindow+1 {
+		// Bytes are skipped. The read starts one byte before the window, so
+		// a line that starts there is kept whole; the line it starts inside
+		// is cut — shown after "…" — unless the byte before it ends a line.
+		// What was kept before goes, so the tail stays contiguous.
 		start := end - readWindow - 1
+		var before [1]byte
+		if _, err := l.r.ReadAt(before[:], start-1); err != nil {
+			return
+		}
 		if _, err := l.r.Seek(start, io.SeekStart); err != nil {
 			return
 		}
 		l.off = start
-		l.lines, l.partial, l.cr, l.full, l.cut = l.lines[:0], l.partial[:0], false, false, true
+		l.lines, l.partial, l.cr, l.full = l.lines[:0], l.partial[:0], false, false
+		l.cut = before[0] != '\n' && before[0] != '\r'
 	}
 	buf := make([]byte, 32*1024)
 	for l.off < end {
