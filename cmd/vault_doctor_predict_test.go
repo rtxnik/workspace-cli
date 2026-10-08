@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/pflag"
 )
 
@@ -287,5 +288,47 @@ func TestPredictEnvelopeErrorRoutesExitCodeEndToEnd(t *testing.T) {
 	}
 	if out.Len()+errOut.Len() != 0 {
 		t.Errorf("cobra printed out=%q errOut=%q; the root owns the error print", out.String(), errOut.String())
+	}
+}
+
+// TestPredictReport pins ws vault predict-bulk-load's report (phase-5
+// §3.9): the streams in name order whatever order the map gives them, then
+// their total, and the projection under its labels; with no stream the first
+// block holds the total alone.
+func TestPredictReport(t *testing.T) {
+	check := func(t *testing.T, name string, kv output.KV, title string, want []output.Fact) {
+		t.Helper()
+		if kv.Title != title {
+			t.Errorf("%s: title %q, want %q", name, kv.Title, title)
+		}
+		if len(kv.Pairs) != len(want) {
+			t.Fatalf("%s: %d pairs, want %d: %+v", name, len(kv.Pairs), len(want), kv.Pairs)
+		}
+		for i, w := range want {
+			if kv.Pairs[i] != w {
+				t.Errorf("%s: pair %d = %+v, want %+v", name, i+1, kv.Pairs[i], w)
+			}
+		}
+	}
+	r := &predictResult{
+		CurrentRowsPerStream:  map[string]int{"search": 70, "mcp": 40, "dedup": 10, "ingest": 5, "audit": 3, "backup": 2, "reindex": 1},
+		ProjectedNewRows:      200,
+		EstimatedDedupSeconds: 3.5,
+		ProjectedSegmentCount: 7,
+	}
+	for run := 1; run <= 10; run++ { // a map's order differs between runs
+		current, projection := predictReport(40, r)
+		check(t, "current", current, "Current rows", []output.Fact{
+			{K: "audit", V: "3"}, {K: "backup", V: "2"}, {K: "dedup", V: "10"}, {K: "ingest", V: "5"},
+			{K: "mcp", V: "40"}, {K: "reindex", V: "1"}, {K: "search", V: "70"}, {K: "total", V: "131"},
+		})
+		check(t, "projection", projection, "Projection for 40 notes", []output.Fact{
+			{K: "Projected New Rows", V: "200"}, {K: "Estimated Dedup Time", V: "3.50s"}, {K: "Projected Segments", V: "7"},
+		})
+	}
+	current, projection := predictReport(1, &predictResult{})
+	check(t, "no streams", current, "Current rows", []output.Fact{{K: "total", V: "0"}})
+	if projection.Title != "Projection for 1 note" {
+		t.Errorf("one note: title %q, want %q", projection.Title, "Projection for 1 note")
 	}
 }

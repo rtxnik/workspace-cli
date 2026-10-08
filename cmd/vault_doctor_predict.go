@@ -10,7 +10,8 @@ package cmd
 // Per memory feedback_no_auto_state_mutation.
 //
 // Output modes:
-//   - default (human) — table with Metric / Value columns
+//   - default (human) — two key/value blocks: the current rows per stream
+//     and their total, then the projection
 //   - --json — JSON object with prediction fields
 
 import (
@@ -18,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -109,29 +111,36 @@ func newVaultDoctorPredictCmd() *cobra.Command {
 				return output.WriteJSON(cmd.OutOrStdout(), result)
 			}
 
-			// Table output
-			w := cmd.OutOrStdout()
-			_, _ = fmt.Fprintf(w, "%-30s %s\n", "Metric", "Value")
-			_, _ = fmt.Fprintf(w, "%-30s %s\n", "------", "-----")
-
-			// Current rows per stream
-			totalCurrent := 0
-			for _, v := range result.CurrentRowsPerStream {
-				totalCurrent += v
-			}
-			_, _ = fmt.Fprintf(w, "%-30s %d\n", "Current Total Rows", totalCurrent)
-
-			// Per-stream breakdown
-			for stream, count := range result.CurrentRowsPerStream {
-				_, _ = fmt.Fprintf(w, "%-30s %d\n", fmt.Sprintf("  %s", stream), count)
-			}
-
-			_, _ = fmt.Fprintf(w, "%-30s %d\n", "Projected New Rows", result.ProjectedNewRows)
-			_, _ = fmt.Fprintf(w, "%-30s %.2fs\n", "Estimated Dedup Time", result.EstimatedDedupSeconds)
-			_, _ = fmt.Fprintf(w, "%-30s %d\n", "Projected Segments", result.ProjectedSegmentCount)
-
-			return nil
+			current, projection := predictReport(count, result)
+			return writeReport(cmd.OutOrStdout(), output.Out(), current, projection)
 		},
 	}
 	return cmd
+}
+
+// predictReport is ws vault predict-bulk-load's report (phase-5 §3.9): the
+// current rows, one pair per stream in name order and then their total, and
+// the projection for count notes. The hierarchy is in the two blocks, not in
+// a key's leading spaces, which a KV loses when it stacks a key above its
+// value.
+func predictReport(count int, r *predictResult) (current, projection output.KV) {
+	streams := make([]string, 0, len(r.CurrentRowsPerStream))
+	total := 0
+	for name, n := range r.CurrentRowsPerStream {
+		streams = append(streams, name)
+		total += n
+	}
+	sort.Strings(streams) // Go randomises a map's iteration
+	pairs := make([]output.Fact, 0, len(streams)+1)
+	for _, name := range streams {
+		pairs = append(pairs, output.Fact{K: name, V: strconv.Itoa(r.CurrentRowsPerStream[name])})
+	}
+	pairs = append(pairs, output.Fact{K: "total", V: strconv.Itoa(total)})
+	current = output.KV{Title: "Current rows", Pairs: pairs}
+	projection = output.KV{Title: "Projection for " + countOf(count, "note", "notes"), Pairs: []output.Fact{
+		{K: "Projected New Rows", V: strconv.Itoa(r.ProjectedNewRows)},
+		{K: "Estimated Dedup Time", V: fmt.Sprintf("%.2fs", r.EstimatedDedupSeconds)},
+		{K: "Projected Segments", V: strconv.Itoa(r.ProjectedSegmentCount)},
+	}}
+	return current, projection
 }
