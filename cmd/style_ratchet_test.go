@@ -16,13 +16,13 @@ import (
 // the stream decides what, if anything, to emit for that fd. A style built
 // outside internal/output — lipgloss.NewStyle, a raw palette colour, the
 // output.Style* values and SectionStyle — is chosen before any stream
-// exists. The lines that still build one are the sites later phases migrate,
-// and directStyleInventory is their exact count per file.
+// exists. The phases of the render layer migrated the lines that built one,
+// lowering directStyleInventory, their count per file, with each.
 //
 // It holds in both directions. A new file or a higher count fails; so does a
 // lower one, until the map is lowered with it, so the map is always the true
-// inventory. When it is empty, it is the render layer's guard that no such
-// line exists outside internal/output.
+// inventory. It is empty: it is now the render layer's standing guard that
+// no such line exists outside internal/output.
 
 // directStylePattern matches a line that builds a style outside the layer.
 var directStylePattern = regexp.MustCompile(
@@ -30,10 +30,8 @@ var directStylePattern = regexp.MustCompile(
 		`output\.(Red|Green|Yellow|Blue|Purple|Aqua|Orange|Gray)\b`)
 
 // directStyleInventory is the count of matching lines per non-test file
-// outside internal/output, as of this commit.
-var directStyleInventory = map[string]int{
-	"cmd/profile.go": 1,
-}
+// outside internal/output: none, since phase 5 migrated the last.
+var directStyleInventory = map[string]int{}
 
 // directStyleLines counts, per non-test Go file under root outside
 // internal/output, the lines that match directStylePattern. Paths are
