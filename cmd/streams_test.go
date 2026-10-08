@@ -245,7 +245,7 @@ func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int,
 	default:
 		t.Fatalf("running %s: %v\n%s", row.name, err, errBuf.String())
 	}
-	return code, normaliseStepTimes(out.String()), normaliseStepTimes(errBuf.String())
+	return code, normaliseUptime(normaliseStepTimes(out.String())), normaliseStepTimes(errBuf.String())
 }
 
 // stepTime is the time at the end of a step's result line.
@@ -254,6 +254,23 @@ var stepTime = regexp.MustCompile(`(?m)  (\d+\.\ds|\d+m\d\ds|\d+h\d\dm)$`)
 // normaliseStepTimes replaces every step time with <t>: how long a step took
 // is the one thing in its line that moves from run to run.
 func normaliseStepTimes(s string) string { return stepTime.ReplaceAllString(s, "  <t>") }
+
+// uptime is the value of ws proxy status's Uptime pair, which the fake
+// daemon's fixed start time turns into a duration that grows from run to run.
+var uptime = regexp.MustCompile(`(?m)^(  Uptime +)[0-9][0-9hms.]*$`)
+
+// normaliseUptime replaces the proxy's uptime with <uptime>.
+func normaliseUptime(s string) string { return uptime.ReplaceAllString(s, "${1}<uptime>") }
+
+func TestNormaliseUptime(t *testing.T) {
+	in := "Proxy\n  State    ✓ running\n  Uptime   24h31m5s\n  Image    devpod-proxy\n" +
+		"  Uptime   not a duration\nUptime   1h\n"
+	want := "Proxy\n  State    ✓ running\n  Uptime   <uptime>\n  Image    devpod-proxy\n" +
+		"  Uptime   not a duration\nUptime   1h\n"
+	if got := normaliseUptime(in); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
 
 func TestNormaliseStepTimes(t *testing.T) {
 	in := "✓ Stopping workspace \"api\"  0.4s\n✗ Starting container  2m13s\n✓ Building  1h04m\n" +
@@ -309,6 +326,32 @@ var streamsRows = []streamsRow{
 			"  ✓ ok        Proxy image built\n" +
 			"  ✓ ok        Proxy container running\n" +
 			"4 of 4 checks passed\n"},
+	{name: "ws proxy status: no daemon", args: []string{"proxy", "status"}, code: 1,
+		stderr: "✗ inspect proxy: Cannot connect to the Docker daemon at\n" +
+			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
+			"  running?\n"},
+	{name: "ws proxy status: stopped and no network", args: []string{"proxy", "status"}, docker: &fakeDockerState{},
+		stdout: "Proxy\n" +
+			"  State    - stopped\n" +
+			"  Network  ws-proxy (172.28.0.2)\n" +
+			"\n" +
+			"Workspaces\n" +
+			"  Route protection  ? unknown\n" +
+			"protection scan failed: inspect network: Error response from daemon: No such\n" +
+			"network (workspace protection UNKNOWN)\n"},
+	{name: "ws proxy status: one workspace unprotected", args: []string{"proxy", "status"}, docker: &fakeHealthyProxy,
+		stdout: "Proxy\n" +
+			"  State    ✓ running\n" +
+			"  Health   ✓ healthy\n" +
+			"  Uptime   <uptime>\n" +
+			"  Image    devpod-proxy\n" +
+			"  Network  ws-proxy (172.28.0.2)\n" +
+			"\n" +
+			"Workspaces\n" +
+			"  unprot-ml-training  ✗ unprotected: default via 172.28.0.1 (not the proxy\n" +
+			"                      172.28.0.2)\n" +
+			"  web-frontend        ✓ protected\n" +
+			"1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)\n"},
 	{name: "ws proxy doctor: no daemon", args: []string{"proxy", "doctor"}, code: 1,
 		check: reportCheck("✗ failed    docker reachable", "? unknown   inbound sockopt.tproxy (advisory)",
 			"Failed at check 1 of 13: docker reachable")},

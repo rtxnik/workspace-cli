@@ -30,6 +30,8 @@ func reportsCases() []streamsRow {
 	for _, c := range []streamsRow{
 		{name: "ws proxy check: no daemon", args: []string{"proxy", "check"}},
 		{name: "ws proxy check: all ok", args: []string{"proxy", "check"}, docker: &fakeHealthyProxy},
+		{name: "ws proxy status: stopped and no network", args: []string{"proxy", "status"}, docker: &fakeDockerState{}},
+		{name: "ws proxy status: one workspace unprotected", args: []string{"proxy", "status"}, docker: &fakeHealthyProxy},
 		{name: "ws proxy doctor: no daemon", args: []string{"proxy", "doctor"}},
 		{name: "ws proxy doctor: the image's datapath differs", args: []string{"proxy", "doctor"}, docker: &fakeHealthyProxy},
 	} {

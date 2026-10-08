@@ -39,6 +39,67 @@ exit 0
 |  ✓ ok        Proxy container running
 |4 of 4 checks passed
 --- stderr (0 bytes)
+=== ws proxy status: stopped and no network at COLUMNS=80
+exit 0
+--- stdout (218 bytes)
+|Proxy
+|  State    - stopped
+|  Network  ws-proxy (172.28.0.2)
+|
+|Workspaces
+|  Route protection  ? unknown
+|protection scan failed: inspect network: Error response from daemon: No such
+|network (workspace protection UNKNOWN)
+--- stderr (0 bytes)
+=== ws proxy status: stopped and no network at COLUMNS=40
+exit 0
+--- stdout (218 bytes)
+|Proxy
+|  State    - stopped
+|  Network  ws-proxy (172.28.0.2)
+|
+|Workspaces
+|  Route protection  ? unknown
+|protection scan failed: inspect network:
+|Error response from daemon: No such
+|network (workspace protection UNKNOWN)
+--- stderr (0 bytes)
+=== ws proxy status: one workspace unprotected at COLUMNS=80
+exit 0
+--- stdout (371 bytes)
+|Proxy
+|  State    ✓ running
+|  Health   ✓ healthy
+|  Uptime   <uptime>
+|  Image    devpod-proxy
+|  Network  ws-proxy (172.28.0.2)
+|
+|Workspaces
+|  unprot-ml-training  ✗ unprotected: default via 172.28.0.1 (not the proxy
+|                      172.28.0.2)
+|  web-frontend        ✓ protected
+|1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)
+--- stderr (0 bytes)
+=== ws proxy status: one workspace unprotected at COLUMNS=40
+exit 0
+--- stdout (437 bytes)
+|Proxy
+|  State    ✓ running
+|  Health   ✓ healthy
+|  Uptime   <uptime>
+|  Image    devpod-proxy
+|  Network  ws-proxy (172.28.0.2)
+|
+|Workspaces
+|  unprot-ml-training  ✗ unprotected:
+|                      default via
+|                      172.28.0.1 (not
+|                      the proxy
+|                      172.28.0.2)
+|  web-frontend        ✓ protected
+|1 of 2 workspace(s) UNPROTECTED — route
+|not via proxy (run: ws proxy fix-routes)
+--- stderr (0 bytes)
 === ws proxy doctor: no daemon at COLUMNS=80
 exit 1
 --- stdout (699 bytes)
