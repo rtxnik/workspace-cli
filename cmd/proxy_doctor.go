@@ -107,14 +107,15 @@ var proxyDoctorCmd = &cobra.Command{
 		cfg := config.Load()
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 
-		res := runChecks(proxyDoctorChecks(cfg, proxyengine.Default()))
+		checks := proxyDoctorChecks(cfg, proxyengine.Default())
+		res := runChecks(checks)
 
 		if jsonFlag {
 			if err := output.WriteJSON(cmd.OutOrStdout(), res); err != nil {
 				return err
 			}
-		} else {
-			renderDoctor(res)
+		} else if _, err := fmt.Fprintln(cmd.OutOrStdout(), doctorReport(checks, res).Render(output.Out())); err != nil {
+			return err
 		}
 		// The report is the output; the exit code carries the verdict.
 		if code := doctorExitCode(res); code != 0 {
@@ -124,30 +125,42 @@ var proxyDoctorCmd = &cobra.Command{
 	},
 }
 
-// renderDoctor prints a ✓/✗ line per check that ran, plus the failing check's
-// Detail and Fix hint, then a summary.
-func renderDoctor(res Result) {
-	for _, r := range res.Outcomes {
-		mark := output.StyleSuccess.Render("✓")
-		if !r.OK {
-			mark = output.StyleError.Render("✗")
+// doctorReport is ws proxy doctor's report: one line for every check in the
+// list, in order. A check that ran renders its outcome — ok, failed, or its
+// soft tier — with its Detail as the note, and the failed check adds its Fix
+// as a second paragraph; a check after the one that stopped the run renders
+// unknown with no note. The caption names the failed check out of the whole
+// list, or, when none failed, counts the states the report rendered.
+func doctorReport(checks []Check, res Result) output.Checks {
+	items := make([]output.Check, 0, len(checks))
+	for i, c := range checks {
+		if i >= len(res.Outcomes) {
+			items = append(items, output.Check{Name: c.Name, State: output.StateUnknown})
+			continue
 		}
-		line := fmt.Sprintf("  %s %s", mark, r.Name)
-		if r.Detail != "" {
-			line += output.StyleDim.Render(" — " + r.Detail)
+		o := res.Outcomes[i]
+		st, note := output.StateOK, o.Detail
+		switch {
+		case !o.OK:
+			st = output.StateFail
+			if o.Fix != "" {
+				if note != "" {
+					note += "\n"
+				}
+				note += "Fix: " + o.Fix
+			}
+		case o.Soft == softDegraded:
+			st = output.StateAdvisory
+		case o.Soft == softUnknown:
+			st = output.StateUnknown
 		}
-		fmt.Println(line)
+		items = append(items, output.Check{Name: c.Name, State: st, Note: note})
 	}
-	fmt.Println()
-	if res.OK {
-		output.Success("All proxy checks passed")
-		return
+	caption := checksCaption(items)
+	if !res.OK {
+		caption = fmt.Sprintf("Failed at check %d of %d: %s", res.FailedAt+1, len(checks), checks[res.FailedAt].Name)
 	}
-	failed := res.Outcomes[res.FailedAt]
-	output.Warn(fmt.Sprintf("Failed at check %d/%d: %s", res.FailedAt+1, len(res.Outcomes), failed.Name))
-	if failed.Fix != "" {
-		output.Detail("Fix: " + failed.Fix)
-	}
+	return output.Checks{Title: "Proxy doctor", Items: items, Caption: caption}
 }
 
 // doctorProxyCheckFn and proxyConnectedContainersFn are the injection seam for

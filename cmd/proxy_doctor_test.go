@@ -19,6 +19,7 @@ import (
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 	"github.com/rtxnik/workspace-cli/internal/xray"
 )
@@ -626,5 +627,68 @@ func e() CheckOutcome { return CheckOutcome{OK: true, Detail: "running, healthy"
 `)
 	if got := strings.Join(untieredSoftOutcomes(t, src), ","); got != "line 2,line 3" {
 		t.Errorf("found %q, want %q", got, "line 2,line 3")
+	}
+}
+
+// TestDoctorReport pins ws proxy doctor's report (phase-5 §3.5): a line for
+// every check in the list, in order — its outcome when it ran, unknown with no
+// note when the run stopped before it; a check's Detail as its note, and the
+// failed check's Fix as a second paragraph; soft findings degraded or unknown;
+// and the caption, which names the failed check out of the whole list, or
+// counts the rendered states when nothing failed.
+func TestDoctorReport(t *testing.T) {
+	checks := []Check{{Name: "first"}, {Name: "second"}, {Name: "third"}, {Name: "fourth"}}
+	ran := func(outs ...CheckOutcome) []checkResult {
+		r := make([]checkResult, len(outs))
+		for i, o := range outs {
+			r[i] = checkResult{Name: checks[i].Name, CheckOutcome: o}
+		}
+		return r
+	}
+	ok, adv, fail, unknown := output.StateOK, output.StateAdvisory, output.StateFail, output.StateUnknown
+	type line struct {
+		state output.State
+		note  string
+	}
+	for _, c := range []struct {
+		name    string
+		res     Result
+		want    []line
+		caption string
+	}{
+		{"every check passes", Result{OK: true, FailedAt: -1, Outcomes: ran(
+			CheckOutcome{OK: true}, CheckOutcome{OK: true, Detail: "devpod-proxy"}, CheckOutcome{OK: true}, CheckOutcome{OK: true})},
+			[]line{{ok, ""}, {ok, "devpod-proxy"}, {ok, ""}, {ok, ""}}, "4 of 4 checks passed"},
+		{"soft findings", Result{OK: true, FailedAt: -1, Outcomes: ran(
+			CheckOutcome{OK: true}, CheckOutcome{OK: true, Detail: "ADVISORY: a", Soft: softDegraded},
+			CheckOutcome{OK: true, Detail: "posture UNKNOWN", Soft: softUnknown}, CheckOutcome{OK: true})},
+			[]line{{ok, ""}, {adv, "ADVISORY: a"}, {unknown, "posture UNKNOWN"}, {ok, ""}},
+			"2 of 4 checks passed, 1 degraded, 1 unknown"},
+		{"the second check fails", Result{OK: false, FailedAt: 1, Outcomes: ran(
+			CheckOutcome{OK: true}, CheckOutcome{OK: false, Detail: "image datapath differs", Fix: "ws proxy rebuild"})},
+			[]line{{ok, ""}, {fail, "image datapath differs\nFix: ws proxy rebuild"}, {unknown, ""}, {unknown, ""}},
+			"Failed at check 2 of 4: second"},
+		{"the first fails with no detail", Result{OK: false, FailedAt: 0, Outcomes: ran(
+			CheckOutcome{OK: false, Fix: "Start Docker and retry."})},
+			[]line{{fail, "Fix: Start Docker and retry."}, {unknown, ""}, {unknown, ""}, {unknown, ""}},
+			"Failed at check 1 of 4: first"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := doctorReport(checks, c.res)
+			if got.Title != "Proxy doctor" {
+				t.Errorf("title %q, want %q", got.Title, "Proxy doctor")
+			}
+			if len(got.Items) != len(checks) {
+				t.Fatalf("%d lines, want one per check in the list, %d: %+v", len(got.Items), len(checks), got.Items)
+			}
+			for i, it := range got.Items {
+				if it.Name != checks[i].Name || it.State != c.want[i].state || it.Note != c.want[i].note {
+					t.Errorf("line %d = %+v, want %q in state %v with note %q", i+1, it, checks[i].Name, c.want[i].state, c.want[i].note)
+				}
+			}
+			if got.Caption != c.caption {
+				t.Errorf("caption %q, want %q", got.Caption, c.caption)
+			}
+		})
 	}
 }
