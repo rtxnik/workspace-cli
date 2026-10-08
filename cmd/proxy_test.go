@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,5 +224,36 @@ func TestProxyCheckReport(t *testing.T) {
 				t.Errorf("caption %q, want %q", got.Caption, c.caption)
 			}
 		})
+	}
+}
+
+// TestProxyCheckExitCode pins ws proxy check's exit code (phase-5 §3.4, owner
+// ruling 2): rc 1 unless all four prerequisites are ok, with no message, since
+// the report already says why; rc 0 when they are. Before phase 5 it exited 0
+// with every check failing, so `ws proxy check && ws proxy up` went on into a
+// certain failure.
+func TestProxyCheckExitCode(t *testing.T) {
+	xray := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(xray, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONFIG", xray)
+
+	t.Setenv("DOCKER_HOST", startFakeDocker(t, fakeDockerState{Down: true}))
+	out, _, err := execCapture(t, "proxy", "check")
+	var cerr *cliErrorWithExit
+	if !errors.As(err, &cerr) || cerr.code != 1 || cerr.msg != "" {
+		t.Errorf("with no daemon: err = %v, want a silent exit 1", err)
+	}
+	if !strings.Contains(out.String(), "1 of 4 checks passed, 1 failed, 2 unknown") {
+		t.Errorf("with no daemon the report is not on stdout:\n%s", out)
+	}
+
+	t.Setenv("DOCKER_HOST", startFakeDocker(t, fakeDockerState{
+		Container: &fakeContainer{Running: true, Health: "healthy", StartedAt: "2026-10-07T10:00:00Z", Image: "devpod-proxy"},
+		Labels:    map[string]string{},
+	}))
+	if out, _, err := execCapture(t, "proxy", "check"); err != nil || !strings.Contains(out.String(), "4 of 4 checks passed") {
+		t.Errorf("with everything ok: err = %v, want none; stdout:\n%s", err, out)
 	}
 }

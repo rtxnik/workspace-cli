@@ -186,8 +186,17 @@ var proxyCheckCmd = &cobra.Command{
 		cmd.SilenceUsage = true
 		cfg := config.Load()
 		report := proxyCheckReport(docker.ProxyCheck(cfg))
-		_, err := fmt.Fprintln(cmd.OutOrStdout(), report.Render(output.Out()))
-		return err
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), report.Render(output.Out())); err != nil {
+			return err
+		}
+		// A prerequisite that is not ok fails the command, so that
+		// `ws proxy check && ws proxy up` stops here. The report says why.
+		for _, it := range report.Items {
+			if it.State != output.StateOK {
+				return &cliErrorWithExit{code: 1, msg: ""}
+			}
+		}
+		return nil
 	},
 }
 
