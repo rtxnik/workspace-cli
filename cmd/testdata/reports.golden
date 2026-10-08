@@ -39,3 +39,116 @@ exit 0
 |  ✓ ok        Proxy container running
 |4 of 4 checks passed
 --- stderr (0 bytes)
+=== ws proxy doctor: no daemon at COLUMNS=80
+exit 1
+--- stdout (699 bytes)
+|Proxy doctor
+|  ✗ failed    docker reachable
+|              Fix: Start Docker (Docker Desktop or the daemon) and retry.
+|  ? unknown   proxy image present
+|  ? unknown   active profile valid (xray -test)
+|  ? unknown   datapath contract (image ↔ profile)
+|  ? unknown   proxy container running and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default route via proxy
+|  ? unknown   self-egress (proxy tunnel exit-IP)
+|  ? unknown   forwarding datapath (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy (advisory)
+|Failed at check 1 of 13: docker reachable
+--- stderr (0 bytes)
+=== ws proxy doctor: no daemon at COLUMNS=40
+exit 1
+--- stdout (825 bytes)
+|Proxy doctor
+|  ✗ failed    docker reachable
+|              Fix: Start Docker (Docker
+|              Desktop or the daemon) and
+|              retry.
+|  ? unknown   proxy image present
+|  ? unknown   active profile valid (xray
+|              -test)
+|  ? unknown   datapath contract (image ↔
+|              profile)
+|  ? unknown   proxy container running
+|              and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default
+|              route via proxy
+|  ? unknown   self-egress (proxy tunnel
+|              exit-IP)
+|  ? unknown   forwarding datapath
+|              (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy
+|              (advisory)
+|Failed at check 1 of 13: docker
+|reachable
+--- stderr (0 bytes)
+=== ws proxy doctor: the image's datapath differs at COLUMNS=80
+exit 4
+--- stdout (949 bytes)
+|Proxy doctor
+|  ✓ ok        docker reachable
+|  ✓ ok        proxy image present
+|              devpod-proxy
+|  ✓ ok        active profile valid (xray -test)
+|              profile "primary"
+|  ✗ failed    datapath contract (image ↔ profile)
+|              image datapath="tproxy" but active profile mode="redirect"
+|              (black-hole risk)
+|              Fix: Realign image and profile: ws proxy rebuild (and, if the
+|              profile is stale, ws proxy upgrade-config)
+|  ? unknown   proxy container running and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default route via proxy
+|  ? unknown   self-egress (proxy tunnel exit-IP)
+|  ? unknown   forwarding datapath (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy (advisory)
+|Failed at check 4 of 13: datapath contract (image ↔ profile)
+--- stderr (0 bytes)
+=== ws proxy doctor: the image's datapath differs at COLUMNS=40
+exit 4
+--- stdout (1117 bytes)
+|Proxy doctor
+|  ✓ ok        docker reachable
+|  ✓ ok        proxy image present
+|              devpod-proxy
+|  ✓ ok        active profile valid (xray
+|              -test)
+|              profile "primary"
+|  ✗ failed    datapath contract (image ↔
+|              profile)
+|              image datapath="tproxy"
+|              but active profile
+|              mode="redirect"
+|              (black-hole risk)
+|              Fix: Realign image and
+|              profile: ws proxy rebuild
+|              (and, if the profile is
+|              stale, ws proxy
+|              upgrade-config)
+|  ? unknown   proxy container running
+|              and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default
+|              route via proxy
+|  ? unknown   self-egress (proxy tunnel
+|              exit-IP)
+|  ? unknown   forwarding datapath
+|              (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy
+|              (advisory)
+|Failed at check 4 of 13: datapath
+|contract (image ↔ profile)
+--- stderr (0 bytes)

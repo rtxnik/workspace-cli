@@ -178,6 +178,20 @@ type streamsRow struct {
 	docker *fakeDockerState
 }
 
+// reportCheck is the stdout check of a report row whose whole stdout the
+// reports baseline pins: the report is there, on stdout, and holds each of
+// lines.
+func reportCheck(lines ...string) func(t *testing.T, stdout string) {
+	return func(t *testing.T, stdout string) {
+		t.Helper()
+		for _, l := range lines {
+			if !strings.Contains(stdout, l+"\n") {
+				t.Errorf("stdout lacks the line %q:\n%s", l, stdout)
+			}
+		}
+	}
+}
+
 // runStreamsChild runs row in a child over fx.
 func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int, stdout, stderr string) {
 	t.Helper()
@@ -295,6 +309,16 @@ var streamsRows = []streamsRow{
 			"  ✓ ok        Proxy image built\n" +
 			"  ✓ ok        Proxy container running\n" +
 			"4 of 4 checks passed\n"},
+	{name: "ws proxy doctor: no daemon", args: []string{"proxy", "doctor"}, code: 1,
+		check: reportCheck("✗ failed    docker reachable", "? unknown   inbound sockopt.tproxy (advisory)",
+			"Failed at check 1 of 13: docker reachable")},
+	{name: "ws proxy doctor: the image's datapath differs", args: []string{"proxy", "doctor"}, code: 4,
+		docker: &fakeHealthyProxy,
+		check: reportCheck("✓ ok        active profile valid (xray -test)", "✗ failed    datapath contract (image ↔ profile)",
+			"? unknown   proxy container running and healthy", "Failed at check 4 of 13: datapath contract (image ↔ profile)")},
+	{name: "ws proxy doctor --json: no daemon", args: []string{"proxy", "doctor", "--json"}, code: 1,
+		stdout: "{\n  \"ok\": false,\n  \"failedAt\": 0,\n  \"checks\": [\n    {\n      \"name\": \"docker reachable\",\n" +
+			"      \"ok\": false,\n      \"fix\": \"Start Docker (Docker Desktop or the daemon) and retry.\"\n    }\n  ]\n}\n"},
 	{name: "ws proxy up: no docker", args: []string{"proxy", "up"}, code: 1,
 		stderr: "~ Starting proxy\n" +
 			"✗ Starting proxy  <t>\n" +
