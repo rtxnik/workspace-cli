@@ -172,6 +172,9 @@ var errorCases = []errorCase{
 	// fails, and the root prints the error.
 	{name: "runtime/proxy-check-unreachable", args: []string{"proxy", "check"}},
 	{name: "runtime/proxy-status-unreachable", args: []string{"proxy", "status"}},
+	// ws vault doctor's verdict is its report's caption: the root prints
+	// nothing of its own for a red band, and the exit code is the band's.
+	{name: "silent/vault-doctor-red", args: []string{"vault", "doctor"}, stub: "vault-doctor-mixed"},
 
 	// A body that refuses with the Problem it returns, exit 1; it rendered
 	// its own error box before phase 3.
@@ -226,6 +229,30 @@ func installExecuteStub(name string) {
 		}
 		proxyTestProbeDNSFn = func(config.Config) (proxyengine.DNSProbeResult, error) {
 			panic("stub: the UDP/DNS leg runs with the tunnel down")
+		}
+	case "vault-doctor-mixed":
+		// The five checks of ws vault doctor in three bands, as a host
+		// without a token and with an old vault-ai checkout answers them.
+		doctorOrphanCheckFn = func(context.Context) *doctorCheck {
+			return &doctorCheck{Name: "orphan-mcp-subprocess", Band: bandGreen, Detail: "0 orphan MCP subprocesses"}
+		}
+		doctorStaleLockCheckFn = func(context.Context) *doctorCheck {
+			return &doctorCheck{Name: "stale-lock-files", Band: bandYellow,
+				Detail:      "1 stale lock(s): /srv/vault-ai/_tooling/state/ingest.lock",
+				Remediation: "re-run with `ws vault doctor --clear-stale-locks --yes` to remove (operator-controlled per CONTEXT D-13)"}
+		}
+		doctorTokenCheckFn = func() *doctorCheck {
+			return &doctorCheck{Name: "vault-ai-token", Band: bandRed, Detail: "VAULT_AI_TOKEN unset or empty",
+				Remediation: "provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles ADR-sec-02 for the age key flow"}
+		}
+		doctorFDPassCheckFn = func(context.Context) *doctorCheck {
+			return &doctorCheck{Name: "token-fd-pass", Band: bandRed, Detail: "stage=newclient: VAULT_AI_TOKEN not set",
+				Remediation: "see RESEARCH §Pitfall 7 + Plan 18-01 for fd-3 wiring; check `ws vault doctor` token check above"}
+		}
+		doctorXrepoCheckFn = func(context.Context) *doctorCheck {
+			return &doctorCheck{Name: "xrepo-contract-parity", Band: bandYellow,
+				Detail:      "check-xrepo-contract.sh not found at /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: stat /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: no such file or directory",
+				Remediation: "verify Phase 17 deliverable is present in vault-ai checkout"}
 		}
 	case "vault-status-red":
 		vaultStatusRunFn = func(context.Context, *cobra.Command) (*statusReport, error) {
