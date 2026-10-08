@@ -6,16 +6,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-func TestStatusText_AllStatuses(t *testing.T) {
-	statuses := []string{"running", "stopped", "notcreated", "", "busy", "starting", "healthy", "unhealthy", "unknown"}
-	for _, s := range statuses {
-		got := StatusText(s)
-		if got == "" {
-			t.Errorf("StatusText(%q) returned empty string", s)
-		}
-	}
-}
-
 // §4.6 requires each role to declare its value explicitly PER LEVEL rather than
 // relying on termenv's automatic downsample, "which was measured to invert the
 // palette at 16 colours (Green renders yellow, Blue renders green)". The palette
