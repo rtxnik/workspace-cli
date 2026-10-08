@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
@@ -467,5 +468,49 @@ func TestRunVaultStatus_AbortsOnCancelledContext(t *testing.T) {
 	_, err := runVaultStatus(ctx, root)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled status run: err = %v, want context.Canceled", err)
+	}
+}
+
+// TestTruncate pins truncate's cut (phase-5 §3.8): at most maxLen bytes, the
+// ellipsis when it fits, and never a cut inside a UTF-8 sequence — a two-,
+// three- or four-byte one, with a limit above 3 and at or below it.
+func TestTruncate(t *testing.T) {
+	for _, c := range []struct {
+		s      string
+		maxLen int
+		want   string
+	}{
+		{"", 0, ""},
+		{"", 5, ""},
+		{"abcdef", 0, "abcdef"},
+		{"abcdef", 6, "abcdef"},
+		{"abcdef", 1, "a"},
+		{"abcdef", 2, "ab"},
+		{"abcdef", 3, "abc"},
+		{"abcdef", 5, "ab..."},
+		{"éabc", 1, ""},
+		{"a€bc", 3, "a"},
+		{"a😀bc", 2, "a"},
+		{"a😀bc", 3, "a"},
+		{"abé123", 6, "ab..."},
+		{"ab€1234", 6, "ab..."},
+		{"ab€1234", 7, "ab..."},
+		{"ab😀1234", 6, "ab..."},
+		{"ab😀1234", 7, "ab..."},
+		{"ab😀1234", 8, "ab..."},
+		{"ab😀1234", 9, "ab😀..."},
+	} {
+		if got := truncate(c.s, c.maxLen); got != c.want {
+			t.Errorf("truncate(%q, %d) = %q; want %q", c.s, c.maxLen, got, c.want)
+		}
+	}
+	// Every limit over a mixed string: valid UTF-8 within the limit.
+	s := "a é € 😀 б 中 ."
+	for n := 1; n < len(s); n++ {
+		got := truncate(s, n)
+		if !utf8.ValidString(got) || len(got) > n {
+			t.Errorf("truncate(%q, %d) = %q (%d bytes, valid %t); want valid UTF-8 within %d bytes",
+				s, n, got, len(got), utf8.ValidString(got), n)
+		}
 	}
 }

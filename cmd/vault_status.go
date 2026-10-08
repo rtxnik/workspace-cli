@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
@@ -445,15 +446,28 @@ func assembleReport(signals []statusSignal) *statusReport {
 	}
 }
 
-// truncate caps a string at maxLen chars (with ellipsis suffix when cut).
+// truncate caps s at maxLen bytes. A longer string is cut at the last rune
+// boundary that leaves room for "...", which is then appended; a limit of 3
+// or less leaves no room for it, and the string is cut at the last rune
+// boundary at or below the limit. Either way the cut never lands inside a
+// UTF-8 sequence. A limit of 0 or less leaves s whole.
 func truncate(s string, maxLen int) string {
 	if maxLen <= 0 || len(s) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		return cutAtRune(s, maxLen)
 	}
-	return s[:maxLen-3] + "..."
+	return cutAtRune(s, maxLen-3) + "..."
+}
+
+// cutAtRune returns the longest prefix of s that is at most n bytes long and
+// ends on a rune boundary; n is less than len(s).
+func cutAtRune(s string, n int) string {
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // resolveVaultAIRepoRoot mirrors internal/mcp/client.go's NewClient
