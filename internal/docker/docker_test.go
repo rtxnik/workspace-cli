@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -297,21 +298,51 @@ func TestProxyCheck_AllPass(t *testing.T) {
 	if !results[3].Passed {
 		t.Error("expected container running check to pass")
 	}
+	for _, r := range results {
+		if r.Skipped {
+			t.Errorf("%q is marked not evaluated although the daemon answered", r.Name)
+		}
+	}
 }
 
+// TestProxyCheck_NoDaemon pins what ProxyCheck reports when it cannot reach
+// the daemon: Docker running fails, the image and container checks are not
+// evaluated — Skipped, not failed — and the xray config, which needs no
+// daemon, is still checked. Before phase 5 the three after the ping were all
+// reported failed, so `ws proxy check` printed "✗ Xray config exists" against
+// a config that exists. Both ways the daemon can be out of reach: the client
+// cannot be built, and the ping fails.
 func TestProxyCheck_NoDaemon(t *testing.T) {
-	mock := &mockClient{
-		pingFn: func(_ context.Context) (types.Ping, error) {
-			return types.Ping{}, errors.New("connection refused")
-		},
+	cfg := testCfg()
+	cfg.XrayConfig = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfg.XrayConfig, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	defer withMock(mock)()
-
-	results := ProxyCheck(testCfg())
-	for _, r := range results {
-		if r.Passed {
-			t.Errorf("expected check %q to fail when daemon is down", r.Name)
-		}
+	for name, install := range map[string]func() func(){
+		"ping fails": func() func() {
+			return withMock(&mockClient{pingFn: func(_ context.Context) (types.Ping, error) {
+				return types.Ping{}, errors.New("connection refused")
+			}})
+		},
+		"no client": func() func() {
+			orig := newClientFunc
+			newClientFunc = func() (DockerClient, error) { return nil, errors.New("no DOCKER_HOST") }
+			return func() { newClientFunc = orig }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer install()()
+			got := ProxyCheck(cfg)
+			want := []CheckResult{
+				{Name: "Docker running"},
+				{Name: "Xray config exists", Passed: true},
+				{Name: "Proxy image built", Skipped: true},
+				{Name: "Proxy container running", Skipped: true},
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("ProxyCheck =\n%+v\nwant\n%+v", got, want)
+			}
+		})
 	}
 }
 

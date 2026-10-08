@@ -268,11 +268,17 @@ func ProxyDown(cfg config.Config) error {
 
 // CheckResult holds a single check result.
 type CheckResult struct {
-	Name   string
-	Passed bool
+	Name    string
+	Passed  bool
+	Skipped bool
 }
 
 // ProxyCheck verifies all prerequisites (docker, config, image, container).
+//
+// The xray config needs no daemon and is checked whatever the daemon does.
+// When the daemon cannot be reached, the image and container checks are not
+// evaluated, and say so with Skipped rather than reporting a failure they did
+// not observe.
 func ProxyCheck(cfg config.Config) []CheckResult {
 	results := make([]CheckResult, 4)
 	results[0] = CheckResult{Name: "Docker running"}
@@ -280,9 +286,18 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 	results[2] = CheckResult{Name: "Proxy image built"}
 	results[3] = CheckResult{Name: "Proxy container running"}
 
+	if _, err := os.Stat(cfg.XrayConfig); err == nil {
+		results[1].Passed = true
+	}
+	unreached := func() []CheckResult {
+		results[2].Skipped = true
+		results[3].Skipped = true
+		return results
+	}
+
 	cli, err := newClientFunc()
 	if err != nil {
-		return results
+		return unreached()
 	}
 	defer func() { _ = cli.Close() }()
 
@@ -290,13 +305,9 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 	defer cancel()
 
 	if _, err := cli.Ping(ctx); err != nil {
-		return results
+		return unreached()
 	}
 	results[0].Passed = true
-
-	if _, err := os.Stat(cfg.XrayConfig); err == nil {
-		results[1].Passed = true
-	}
 
 	if imageExists(ctx, cli, cfg.ProxyImage) {
 		results[2].Passed = true
