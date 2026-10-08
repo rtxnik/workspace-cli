@@ -167,6 +167,10 @@ var errorCases = []errorCase{
 	{name: "body-exit/proxy-doctor-json-unreachable", args: []string{"proxy", "doctor", "--json"}},
 	{name: "runtime/proxy-test-not-running", args: []string{"proxy", "test"}},
 	{name: "runtime/proxy-fix-routes-not-running", args: []string{"proxy", "fix-routes"}},
+	// ws proxy check reports and exits 1; ws proxy status's first docker call
+	// fails, and the root prints the error.
+	{name: "runtime/proxy-check-unreachable", args: []string{"proxy", "check"}},
+	{name: "runtime/proxy-status-unreachable", args: []string{"proxy", "status"}},
 
 	// A body that refuses with the Problem it returns, exit 1; it rendered
 	// its own error box before phase 3.

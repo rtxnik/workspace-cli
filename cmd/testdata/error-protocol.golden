@@ -254,6 +254,23 @@ exit 1
 --- stdout (0 bytes)
 --- stderr (54 bytes)
 |✗ Proxy is not running. Start it first: ws proxy up
+=== runtime/proxy-check-unreachable
+exit 1
+--- stdout (198 bytes)
+|Proxy prerequisites
+|  ✗ failed    Docker running
+|  ✗ failed    Xray config exists
+|  ? unknown   Proxy image built
+|  ? unknown   Proxy container running
+|0 of 4 checks passed, 2 failed, 2 unknown
+--- stderr (0 bytes)
+=== runtime/proxy-status-unreachable
+exit 1
+--- stdout (0 bytes)
+--- stderr (143 bytes)
+|✗ inspect proxy: Cannot connect to the Docker daemon at
+|  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon
+|  running?
 === body-exit/start-not-found
 exit 1
 --- stdout (0 bytes)
