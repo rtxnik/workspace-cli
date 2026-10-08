@@ -32,8 +32,7 @@ var directStylePattern = regexp.MustCompile(
 // directStyleInventory is the count of matching lines per non-test file
 // outside internal/output, as of this commit.
 var directStyleInventory = map[string]int{
-	"cmd/profile.go":      1,
-	"cmd/vault_status.go": 8,
+	"cmd/profile.go": 1,
 }
 
 // directStyleLines counts, per non-test Go file under root outside

@@ -179,10 +179,8 @@ exit 1
 --- stderr (0 bytes)
 === silent/vault-status
 exit 2
---- stdout (37 bytes)
-|Vault Status
-|
-|
+--- stdout (35 bytes)
+|Vault status
 |Overall: red (exit 2)
 --- stderr (0 bytes)
 === helper/select-no-workspaces

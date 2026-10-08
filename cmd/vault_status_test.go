@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/procx"
 	"github.com/spf13/cobra"
 )
@@ -47,8 +48,8 @@ func TestVaultStatusAllGreen(t *testing.T) {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("expected nil error on all-green status; got %v", err)
 	}
-	if !strings.Contains(out.String(), "green") {
-		t.Errorf("expected 'green' in human output; got %q", out.String())
+	if !strings.HasSuffix(out.String(), "\nOverall: green (exit 0)\n") {
+		t.Errorf("expected the report to close with its verdict, Overall: green (exit 0); got %q", out.String())
 	}
 }
 
@@ -88,8 +89,8 @@ func TestVaultStatusYellowOnAdvisory(t *testing.T) {
 	if cerr.code != 1 {
 		t.Errorf("yellow band must map to exit 1; got %d", cerr.code)
 	}
-	if !strings.Contains(out.String(), "yellow") {
-		t.Errorf("expected 'yellow' in human output; got %q", out.String())
+	if !strings.HasSuffix(out.String(), "\nOverall: yellow (exit 1)\n") {
+		t.Errorf("expected the report to close with its verdict, Overall: yellow (exit 1); got %q", out.String())
 	}
 	if !strings.Contains(out.String(), "vault_health composite") {
 		t.Errorf("expected yellow signal label visible in output; got %q", out.String())
@@ -135,6 +136,39 @@ func TestVaultStatusRedOnCritical(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "MCP liveness") {
 		t.Errorf("expected MCP liveness signal visible; got %q", out.String())
+	}
+	if !strings.HasSuffix(out.String(), "\nOverall: red (exit 2)\n") || errOut.Len() != 0 {
+		t.Errorf("expected the verdict, Overall: red (exit 2), on stdout and nothing on stderr; got %q and %q", out.String(), errOut.String())
+	}
+}
+
+// TestVaultStatusReport pins ws vault status's report (phase-5 §3.8): each
+// signal's label, band as state and detail as note, a skipped signal degraded
+// as its yellow band says, and the overall band and exit code as the caption.
+func TestVaultStatusReport(t *testing.T) {
+	rep := assembleReport([]statusSignal{
+		{Label: "MCP liveness", Band: bandRed, Detail: "spawn failed: dial unix: connect: refused"},
+		{Label: "vault_health composite", Band: bandYellow, Detail: "skipped (MCP unreachable)"},
+		{Label: "audit-chain integrity", Band: bandGreen, Detail: "all 8 streams verified"},
+		{Label: "dedup gate readiness", Band: statusBand("blue"), Detail: "a band no signal produces today"},
+	})
+	got := vaultStatusReport(rep)
+	if got.Title != "Vault status" || got.Caption != "Overall: red (exit 2)" {
+		t.Errorf("title %q caption %q; want %q, %q", got.Title, got.Caption, "Vault status", "Overall: red (exit 2)")
+	}
+	want := []output.Check{
+		{Name: "MCP liveness", State: output.StateFail, Note: "spawn failed: dial unix: connect: refused"},
+		{Name: "vault_health composite", State: output.StateAdvisory, Note: "skipped (MCP unreachable)"},
+		{Name: "audit-chain integrity", State: output.StateOK, Note: "all 8 streams verified"},
+		{Name: "dedup gate readiness", State: output.StateUnknown, Note: "a band no signal produces today"},
+	}
+	if len(got.Items) != len(want) {
+		t.Fatalf("%d lines, want %d: %+v", len(got.Items), len(want), got.Items)
+	}
+	for i, w := range want {
+		if got.Items[i] != w {
+			t.Errorf("line %d = %+v; want %+v", i+1, got.Items[i], w)
+		}
 	}
 }
 

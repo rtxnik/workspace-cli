@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +32,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/procx"
@@ -51,7 +49,8 @@ const (
 	bandRed    statusBand = "red"
 )
 
-// statusSignal is one row in the status table.
+// statusSignal is one signal of the report: a line of its human block, an
+// element of its JSON's signals.
 type statusSignal struct {
 	Label  string     `json:"label"`
 	Band   statusBand `json:"band"`
@@ -495,7 +494,12 @@ func newVaultStatusCmd() *cobra.Command {
 			}
 
 			jsonFlag, _ := cmd.Flags().GetBool("json")
-			if err := renderStatusReport(cmd.OutOrStdout(), rep, jsonFlag); err != nil {
+			if jsonFlag {
+				// One JSON object, not NDJSON: the report is one document.
+				if err := output.WriteJSON(cmd.OutOrStdout(), rep); err != nil {
+					return fmt.Errorf("status: render: %w", err)
+				}
+			} else if err := writeReport(cmd.OutOrStdout(), output.Out(), vaultStatusReport(rep)); err != nil {
 				return fmt.Errorf("status: render: %w", err)
 			}
 
@@ -507,24 +511,18 @@ func newVaultStatusCmd() *cobra.Command {
 	}
 }
 
-// renderStatusReport writes the report to out in either JSON mode
-// (single JSON object — not NDJSON because the report is one logical
-// document) or the human-readable table.
-func renderStatusReport(out io.Writer, rep *statusReport, jsonMode bool) error {
-	if jsonMode {
-		return output.WriteJSON(out, rep)
+// vaultStatusReport is ws vault status's report (phase-5 §3.8): one line per
+// signal, its label as the name, its band as its state (bandState) and its
+// detail as the note, and the overall band with the exit code it maps to as
+// the caption. A signal that could not be collected is yellow, so it renders
+// degraded, its note saying it was skipped. The builder cuts nothing: the
+// collectors have already truncated each detail.
+func vaultStatusReport(rep *statusReport) output.Checks {
+	items := make([]output.Check, 0, len(rep.Signals))
+	for _, sig := range rep.Signals {
+		items = append(items, output.Check{Name: sig.Label, State: bandState(sig.Band), Note: sig.Detail})
 	}
-	var b strings.Builder
-	b.WriteString(output.SectionStyle.Render("Vault Status"))
-	b.WriteString("\n\n")
-	for _, s := range rep.Signals {
-		fmt.Fprintf(&b, "  %s %s — %s\n", bandIcon(s.Band), output.StyleDim.Render(s.Label), s.Detail)
-	}
-	b.WriteString("\n")
-	fmt.Fprintf(&b, "Overall: %s (exit %d)\n",
-		bandLabel(rep.OverallBand), rep.ExitCode)
-	_, err := fmt.Fprint(out, b.String())
-	return err
+	return output.Checks{Title: "Vault status", Items: items, Caption: fmt.Sprintf("Overall: %s (exit %d)", rep.OverallBand, rep.ExitCode)}
 }
 
 // bandState is a band's state in a report (phase-5 §3.7): green ok, yellow
@@ -540,27 +538,5 @@ func bandState(b statusBand) output.State {
 		return output.StateFail
 	default:
 		return output.StateUnknown
-	}
-}
-
-func bandIcon(b statusBand) string {
-	switch b {
-	case bandGreen:
-		return output.StyleSuccess.Render("●")
-	case bandYellow:
-		return output.StyleWarning.Render("●")
-	default:
-		return output.StyleError.Render("●")
-	}
-}
-
-func bandLabel(b statusBand) string {
-	switch b {
-	case bandGreen:
-		return lipgloss.NewStyle().Foreground(output.Green).Bold(true).Render("green")
-	case bandYellow:
-		return lipgloss.NewStyle().Foreground(output.Yellow).Bold(true).Render("yellow")
-	default:
-		return lipgloss.NewStyle().Foreground(output.Red).Bold(true).Render("red")
 	}
 }
