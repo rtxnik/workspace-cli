@@ -32,10 +32,25 @@ type Check struct {
 // Fix is a remediation hint shown only on failure. Detail/Fix never contain
 // secrets — only a non-secret cert sha256 may be printed.
 type CheckOutcome struct {
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail,omitempty"`
-	Fix    string `json:"fix,omitempty"`
+	OK     bool     `json:"ok"`
+	Detail string   `json:"detail,omitempty"`
+	Fix    string   `json:"fix,omitempty"`
+	Soft   softTier `json:"-"`
 }
+
+// softTier is how a soft finding — an outcome that does not stop the run
+// (OK true) but is not a pass either — renders in the human report: degraded
+// for a finding that needs attention, unknown for a check that ran without
+// reaching a verdict. It is not part of the JSON, which keeps its shape; the
+// words in Detail say the same for a machine. TestDoctorSoftOutcomesAllCarryATier
+// fails a soft outcome that sets no tier.
+type softTier int
+
+const (
+	softNone     softTier = iota // a pass
+	softDegraded                 // ⚠ degraded
+	softUnknown                  // ? unknown
+)
 
 // checkResult pairs a Check's name with its outcome, for JSON output and
 // rendering.
@@ -239,13 +254,13 @@ func datapathModeFrom(p profileTproxyProbe) (string, error) {
 // not abort here — existing operators may not have migrated yet.
 func inboundTproxyOutcome(p profileTproxyProbe) CheckOutcome {
 	if p.nameErr != nil || p.name == "" {
-		return CheckOutcome{OK: true, Detail: "no active profile (skipped)"}
+		return CheckOutcome{OK: true, Detail: "no active profile (skipped)", Soft: softUnknown}
 	}
 	if p.readErr != nil {
-		return CheckOutcome{OK: true, Detail: "could not read active profile (skipped)"}
+		return CheckOutcome{OK: true, Detail: "could not read active profile (skipped)", Soft: softUnknown}
 	}
 	if p.parseErr != nil {
-		return CheckOutcome{OK: true, Detail: "could not parse active profile (skipped)"}
+		return CheckOutcome{OK: true, Detail: "could not parse active profile (skipped)", Soft: softUnknown}
 	}
 	if p.tproxy {
 		return CheckOutcome{OK: true, Detail: "sockopt.tproxy=tproxy present"}
@@ -254,6 +269,7 @@ func inboundTproxyOutcome(p profileTproxyProbe) CheckOutcome {
 		OK:     true,
 		Detail: "ADVISORY: active profile inbound missing sockopt.tproxy (TPROXY mode may not work)",
 		Fix:    "ws proxy upgrade-config",
+		Soft:   softDegraded,
 	}
 }
 
@@ -476,6 +492,7 @@ func dnsEgressOutcome(probe proxyengine.ProbeResult, dnsExit string) CheckOutcom
 		return CheckOutcome{
 			OK:     true,
 			Detail: fmt.Sprintf("TCP exit-IP %s (direct %s); UDP/DNS: inconclusive (no UDP/DNS egress observed)", probe.ProxiedIP, probe.DirectIP),
+			Soft:   softDegraded,
 		}
 	default: // DNSTunneled
 		return CheckOutcome{
@@ -553,6 +570,7 @@ func v6FailClosedOutcome(names []string, verdicts []docker.WorkspaceV6Verdict) C
 		return CheckOutcome{
 			OK:     true,
 			Detail: fmt.Sprintf("IPv6 posture UNKNOWN for: %s (v6 route table unreadable)", strings.Join(unknown, ", ")),
+			Soft:   softUnknown,
 		}
 	}
 	return CheckOutcome{OK: true, Detail: fmt.Sprintf("%d workspace(s) IPv6 fail-closed", len(names))}
@@ -615,6 +633,7 @@ func hy2ProtocolSanity(dp xray.DetailedProfile) CheckOutcome {
 			OK: true,
 			Detail: fmt.Sprintf("hy2 %s:%d — TCP-TLS probe inconclusive (%v); hysteria2 is QUIC/UDP so a TCP refusal is expected",
 				dp.Address, dp.Port, err),
+			Soft: softUnknown,
 		}
 	}
 	switch {
@@ -627,6 +646,7 @@ func hy2ProtocolSanity(dp xray.DetailedProfile) CheckOutcome {
 			OK: true,
 			Detail: fmt.Sprintf("hy2 observed leaf sha256=%s != pin %s — NOTE: TCP-TLS leaf may differ from the QUIC leaf; verify against the endpoint",
 				observed, dp.PinSHA256),
+			Soft: softDegraded,
 		}
 	}
 }

@@ -1,13 +1,26 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
+	"github.com/rtxnik/workspace-cli/internal/xray"
 )
 
 // TestDoctorStopsAtFirstFailure proves the runner is fail-fast: it stops at the
@@ -473,5 +486,145 @@ func TestActiveProfileReadFold(t *testing.T) {
 				t.Errorf("inboundTproxyOutcome Detail = %q, want %q", out.Detail, c.wantInboundDetail)
 			}
 		})
+	}
+}
+
+// TestSoftTierOfEachSoftOutcome pins the doctor's soft tier (phase-5 §3.5),
+// one row per soft branch of the spec's table, through the outcome builders
+// themselves: a finding that does not stop the run but is not a pass renders
+// degraded or unknown, never ok. hy2's two rows dial a real listener: a
+// closed port for the inconclusive probe, a TLS server whose leaf differs
+// from the pin for the mismatch.
+func TestSoftTierOfEachSoftOutcome(t *testing.T) {
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := closed.Addr().(*net.TCPAddr).Port
+	_ = closed.Close()
+	tlsSrv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	tlsSrv.Config.ErrorLog = log.New(io.Discard, "", 0) // the probe hangs up mid-handshake, by design
+	tlsSrv.StartTLS()
+	t.Cleanup(tlsSrv.Close)
+	tlsAddr := tlsSrv.Listener.Addr().(*net.TCPAddr)
+	sum := sha256.Sum256(tlsSrv.Certificate().Raw)
+	leaf := hex.EncodeToString(sum[:])
+
+	probe := proxyengine.ProbeResult{DirectIP: "198.51.100.1", ProxiedIP: "203.0.113.9", Tunneled: true}
+	for _, c := range []struct {
+		name string
+		got  CheckOutcome
+		ok   bool
+		want softTier
+	}{
+		{"inbound: no active profile", inboundTproxyOutcome(profileTproxyProbe{nameErr: errors.New("no link")}), true, softUnknown},
+		{"inbound: profile unreadable", inboundTproxyOutcome(profileTproxyProbe{name: "p", readErr: errors.New("eacces")}), true, softUnknown},
+		{"inbound: profile unparseable", inboundTproxyOutcome(profileTproxyProbe{name: "p", parseErr: errors.New("eof")}), true, softUnknown},
+		{"inbound: sockopt missing", inboundTproxyOutcome(profileTproxyProbe{name: "p"}), true, softDegraded},
+		{"inbound: sockopt present", inboundTproxyOutcome(profileTproxyProbe{name: "p", tproxy: true}), true, softNone},
+		{"egress: UDP/DNS inconclusive", dnsEgressOutcome(probe, ""), true, softDegraded},
+		{"egress: UDP/DNS tunnelled", dnsEgressOutcome(probe, "203.0.113.9"), true, softNone},
+		{"egress: UDP/DNS leak", dnsEgressOutcome(probe, "198.51.100.1"), false, softNone},
+		{"IPv6: posture unknown", v6FailClosedOutcome([]string{"api"}, []docker.WorkspaceV6Verdict{docker.V6Unknown}), true, softUnknown},
+		{"IPv6: fail-closed", v6FailClosedOutcome([]string{"api"}, []docker.WorkspaceV6Verdict{docker.V6FailClosed}), true, softNone},
+		{"IPv6: none connected", v6FailClosedOutcome(nil, nil), true, softNone},
+		{"hy2: probe inconclusive", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: closedPort}), true, softUnknown},
+		{"hy2: leaf differs from the pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port, PinSHA256: strings.Repeat("0", 64)}), true, softDegraded},
+		{"hy2: leaf matches the pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port, PinSHA256: leaf}), true, softNone},
+		{"hy2: no pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port}), true, softNone},
+	} {
+		if c.got.OK != c.ok || c.got.Soft != c.want {
+			t.Errorf("%s: OK %v, Soft %v; want OK %v, Soft %v (detail %q)", c.name, c.got.OK, c.got.Soft, c.ok, c.want, c.got.Detail)
+		}
+	}
+}
+
+// softWords are the words a doctor outcome writes into its Detail when it is
+// a soft finding (phase-5 §3.5).
+var softWords = []string{"ADVISORY", "inconclusive", "UNKNOWN", "NOTE", "skipped"}
+
+// untieredSoftOutcomes returns, for Go source, every CheckOutcome literal with
+// OK: true whose Detail spells a soft word and that sets no Soft, as
+// "line N". The Detail's words are read from every string literal inside its
+// expression, so a fmt.Sprintf format counts as much as a plain string.
+func untieredSoftOutcomes(t *testing.T, src []byte) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "doctor.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if id, ok := lit.Type.(*ast.Ident); !ok || id.Name != "CheckOutcome" {
+			return true
+		}
+		okTrue, soft, detail := false, false, ""
+		for _, e := range lit.Elts {
+			kv, ok := e.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			switch kv.Key.(*ast.Ident).Name {
+			case "OK":
+				if v, ok := kv.Value.(*ast.Ident); ok && v.Name == "true" {
+					okTrue = true
+				}
+			case "Soft":
+				soft = true
+			case "Detail":
+				ast.Inspect(kv.Value, func(m ast.Node) bool {
+					if b, ok := m.(*ast.BasicLit); ok && b.Kind == token.STRING {
+						detail += b.Value
+					}
+					return true
+				})
+			}
+		}
+		if !okTrue || soft {
+			return true
+		}
+		for _, w := range softWords {
+			if strings.Contains(detail, w) {
+				found = append(found, fmt.Sprintf("line %d", fset.Position(lit.Pos()).Line))
+				break
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// TestDoctorSoftOutcomesAllCarryATier is the guard that keeps §3.5's table
+// whole: a soft outcome added later without a tier would render ok, which is
+// the defect the table exists to end.
+func TestDoctorSoftOutcomesAllCarryATier(t *testing.T) {
+	src, err := os.ReadFile("proxy_doctor.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found := untieredSoftOutcomes(t, src); len(found) > 0 {
+		t.Errorf("proxy_doctor.go: a soft CheckOutcome with no Soft tier at %s", strings.Join(found, ", "))
+	}
+}
+
+// TestDoctorSoftTierGuardCanFail is the guard's control, over planted source:
+// a soft word in a plain string or in a Sprintf format, with OK: true and no
+// tier, is found; the same with a tier, with OK: false, or with no soft word,
+// is not.
+func TestDoctorSoftTierGuardCanFail(t *testing.T) {
+	src := []byte(`package cmd
+func a() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x"} }
+func b() CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("probe inconclusive (%v)", 1)} }
+func c() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: softDegraded} }
+func d() CheckOutcome { return CheckOutcome{OK: false, Detail: "UNKNOWN"} }
+func e() CheckOutcome { return CheckOutcome{OK: true, Detail: "running, healthy"} }
+`)
+	if got := strings.Join(untieredSoftOutcomes(t, src), ","); got != "line 2,line 3" {
+		t.Errorf("found %q, want %q", got, "line 2,line 3")
 	}
 }
