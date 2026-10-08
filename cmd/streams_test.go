@@ -172,6 +172,10 @@ type streamsRow struct {
 	// check replaces the byte comparison of stdout, for a row whose stdout
 	// the tables baseline pins.
 	check func(t *testing.T, stdout string)
+	// docker, when set, is the state of a fake Docker Engine API the row's
+	// child reaches through DOCKER_HOST, with the fake docker CLI on PATH for
+	// route lookups. Unset, the child's DOCKER_HOST reaches nothing.
+	docker *fakeDockerState
 }
 
 // runStreamsChild runs row in a child over fx.
@@ -207,6 +211,10 @@ func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int,
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 	}, row.env...)
+	if row.docker != nil {
+		cmd.Env = append(cmd.Env, "DOCKER_HOST="+startFakeDocker(t, *row.docker))
+		writeFakeDockerCLI(t, fx.bin)
+	}
 	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+v)
 	}
@@ -273,6 +281,20 @@ var streamsRows = []streamsRow{
 				t.Errorf("the workspace directory is still there: %v", err)
 			}
 		}},
+	{name: "ws proxy check: no daemon", args: []string{"proxy", "check"}, code: 1,
+		stdout: "Proxy prerequisites\n" +
+			"  ✗ failed    Docker running\n" +
+			"  ✓ ok        Xray config exists\n" +
+			"  ? unknown   Proxy image built\n" +
+			"  ? unknown   Proxy container running\n" +
+			"1 of 4 checks passed, 1 failed, 2 unknown\n"},
+	{name: "ws proxy check: all ok", args: []string{"proxy", "check"}, docker: &fakeHealthyProxy,
+		stdout: "Proxy prerequisites\n" +
+			"  ✓ ok        Docker running\n" +
+			"  ✓ ok        Xray config exists\n" +
+			"  ✓ ok        Proxy image built\n" +
+			"  ✓ ok        Proxy container running\n" +
+			"4 of 4 checks passed\n"},
 	{name: "ws proxy up: no docker", args: []string{"proxy", "up"}, code: 1,
 		stderr: "~ Starting proxy\n" +
 			"✗ Starting proxy  <t>\n" +

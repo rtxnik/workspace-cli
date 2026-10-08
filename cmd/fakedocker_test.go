@@ -46,6 +46,15 @@ type fakeNetwork struct {
 	Containers []string // endpoint names, in the order the daemon lists them
 }
 
+// fakeHealthyProxy is the daemon of a proxy that is up: running and healthy,
+// its image built by a current ws for the tproxy datapath, and its network
+// holding the proxy and two workspaces, one of which routes around it.
+var fakeHealthyProxy = fakeDockerState{
+	Container: &fakeContainer{Running: true, Health: "healthy", StartedAt: "2026-10-07T10:00:00Z", Image: "devpod-proxy"},
+	Labels:    map[string]string{docker.LabelDatapath: "tproxy"},
+	Network:   &fakeNetwork{Subnet: "172.28.0.0/16", Containers: []string{"dev-proxy", "web-frontend", "unprot-ml-training"}},
+}
+
 // apiPrefix is the version prefix the SDK puts on every call after it has
 // negotiated one from the ping's API-Version header.
 var apiPrefix = regexp.MustCompile(`^/v[0-9.]+`)

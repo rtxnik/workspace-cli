@@ -1,0 +1,41 @@
+=== ws proxy check: no daemon at COLUMNS=80
+exit 1
+--- stdout (198 bytes)
+|Proxy prerequisites
+|  ✗ failed    Docker running
+|  ✓ ok        Xray config exists
+|  ? unknown   Proxy image built
+|  ? unknown   Proxy container running
+|1 of 4 checks passed, 1 failed, 2 unknown
+--- stderr (0 bytes)
+=== ws proxy check: no daemon at COLUMNS=40
+exit 1
+--- stdout (198 bytes)
+|Proxy prerequisites
+|  ✗ failed    Docker running
+|  ✓ ok        Xray config exists
+|  ? unknown   Proxy image built
+|  ? unknown   Proxy container running
+|1 of 4 checks passed, 1 failed, 2
+|unknown
+--- stderr (0 bytes)
+=== ws proxy check: all ok at COLUMNS=80
+exit 0
+--- stdout (181 bytes)
+|Proxy prerequisites
+|  ✓ ok        Docker running
+|  ✓ ok        Xray config exists
+|  ✓ ok        Proxy image built
+|  ✓ ok        Proxy container running
+|4 of 4 checks passed
+--- stderr (0 bytes)
+=== ws proxy check: all ok at COLUMNS=40
+exit 0
+--- stdout (181 bytes)
+|Proxy prerequisites
+|  ✓ ok        Docker running
+|  ✓ ok        Xray config exists
+|  ✓ ok        Proxy image built
+|  ✓ ok        Proxy container running
+|4 of 4 checks passed
+--- stderr (0 bytes)
