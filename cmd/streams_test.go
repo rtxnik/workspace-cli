@@ -352,6 +352,10 @@ var streamsRows = []streamsRow{
 			"                      172.28.0.2)\n" +
 			"  web-frontend        ✓ protected\n" +
 			"1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)\n"},
+	{name: "ws proxy test --json: tunnel and DNS tunnelled", args: []string{"proxy", "test", "--json"}, stub: "tunnel-up",
+		docker: &fakeHealthyProxy,
+		stdout: "{\n  \"directIP\": \"203.0.113.7\",\n  \"proxiedIP\": \"198.51.100.9\",\n  \"tunneled\": true,\n" +
+			"  \"latencyMs\": 182,\n  \"dns\": \"tunneled\",\n  \"dnsExitIP\": \"198.51.100.9\"\n}\n"},
 	{name: "ws proxy doctor: no daemon", args: []string{"proxy", "doctor"}, code: 1,
 		check: reportCheck("✗ failed    docker reachable", "? unknown   inbound sockopt.tproxy (advisory)",
 			"Failed at check 1 of 13: docker reachable")},

@@ -206,25 +206,38 @@ var proxyRebuildCmd = &cobra.Command{
 	},
 }
 
+// proxyTestProbeFn and proxyTestProbeDNSFn are ws proxy test's two probes —
+// the TCP exit-IP comparison and the UDP/DNS leg — as package vars, so that a
+// test can run the command with a tunnel, a leak or a down tunnel and no
+// network.
+var (
+	proxyTestProbeFn    = func(cfg config.Config) (proxyengine.ProbeResult, error) { return proxyengine.Default().Probe(cfg) }
+	proxyTestProbeDNSFn = proxyengine.ProbeDNS
+)
+
 var proxyTestCmd = &cobra.Command{
 	Use:   "test",
 	Short: "Prove tunnel is active by comparing direct vs proxied exit IP",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		cfg := config.Load()
+		// --json is read first: its consumers parse stdout and may merge
+		// stderr into it, so it writes no progress line.
+		jsonFlag, _ := cmd.Flags().GetBool("json")
 		st, err := docker.ProxyStatus(cfg)
 		if err != nil || !st.Running {
 			return errors.New("proxy is not running — start it first: ws proxy up")
 		}
 
-		output.Info("Probing tunnel (comparing direct vs proxied exit IP)...")
+		if !jsonFlag {
+			output.Info("Probing tunnel (comparing direct vs proxied exit IP)...")
+		}
 
-		result, err := proxyengine.Default().Probe(cfg)
+		result, err := proxyTestProbeFn(cfg)
 		if err != nil {
 			return fmt.Errorf("probe failed: %s", err)
 		}
 
-		jsonFlag, _ := cmd.Flags().GetBool("json")
 		if jsonFlag {
 			// Run the same UDP/DNS-leak leg the human path runs, so automation
 			// keying on the JSON sees a leak the operator screen would catch
@@ -232,7 +245,7 @@ var proxyTestCmd = &cobra.Command{
 			// the human path.
 			var dnsExit string
 			if result.Tunneled {
-				dnsRes, _ := proxyengine.ProbeDNS(cfg)
+				dnsRes, _ := proxyTestProbeDNSFn(cfg)
 				dnsExit = dnsRes.ExitIP
 			}
 			verdict, exitNonZero := testDNSVerdict(result, dnsExit)
@@ -265,7 +278,7 @@ var proxyTestCmd = &cobra.Command{
 		if result.Tunneled {
 			output.Success("Tunnel active — exit IPs differ")
 			// UDP/DNS leg (H10): prove the non-TCP path is tunnelled too.
-			dnsRes, _ := proxyengine.ProbeDNS(cfg)
+			dnsRes, _ := proxyTestProbeDNSFn(cfg)
 			switch proxyengine.ClassifyDNS(result.DirectIP, result.ProxiedIP, dnsRes.ExitIP) {
 			case proxyengine.DNSLeak:
 				output.Warn(fmt.Sprintf("UDP/DNS LEAK -- resolver saw your real IP %s (untunnelled)", dnsRes.ExitIP))

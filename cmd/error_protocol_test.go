@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 	"github.com/spf13/cobra"
 )
 
@@ -205,6 +206,13 @@ func installExecuteStub(name string) {
 		warnConfirmFn = func(string, string) bool { return false }
 	case "health-yellow":
 		vaultHealthScoreComputeFn = func(context.Context, *cobra.Command) (int, error) { return 55, nil }
+	case "tunnel-up":
+		proxyTestProbeFn = func(config.Config) (proxyengine.ProbeResult, error) {
+			return proxyengine.ProbeResult{DirectIP: "203.0.113.7", ProxiedIP: "198.51.100.9", Tunneled: true, Latency: 182 * time.Millisecond}, nil
+		}
+		proxyTestProbeDNSFn = func(config.Config) (proxyengine.DNSProbeResult, error) {
+			return proxyengine.DNSProbeResult{ExitIP: "198.51.100.9"}, nil
+		}
 	case "vault-status-red":
 		vaultStatusRunFn = func(context.Context, *cobra.Command) (*statusReport, error) {
 			return &statusReport{OverallBand: bandRed, ExitCode: 2}, nil
