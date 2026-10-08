@@ -20,7 +20,33 @@ import (
 // a slice and not a map: Go randomises map iteration, so a map would print
 // the same failure's context in a different order every run, as the error box
 // the Problem replaced did.
-type Fact struct{ K, V string }
+type Fact struct {
+	K, V string
+
+	state   State
+	isState bool
+}
+
+// StateFact builds a pair whose value renders as "<mark> <label>" in the
+// stream's glyph mode, painted with the state's role after wrapping; an empty
+// label uses the state's default word (§4.5). It is to a KV pair what Mark is
+// to a table cell: `ws proxy status` renders `State  ✓ running`. The glyph is
+// resolved when the block is rendered, for the stream it is rendered for, so a
+// pair cannot carry the glyph of another stream. V holds the label.
+func StateFact(k string, st State, label string) Fact {
+	return Fact{K: k, V: label, state: st, isState: true}
+}
+
+// display is the value this pair renders and the role it is painted with. A
+// state's label is sanitised exactly as Mark's is, newlines folded, because a
+// mark and its word are one line; a plain value keeps its newlines as
+// paragraph breaks and is not painted.
+func (f Fact) display(mode GlyphMode) (string, Role) {
+	if f.isState {
+		return stateText(f.state, SanitiseInline(f.V), mode), stateRole(f.state)
+	}
+	return Sanitise(f.V), RoleDefault
+}
 
 // Remedy is a next step: a short label and a copy-pasteable command.
 type Remedy struct {
@@ -279,14 +305,15 @@ type Checks struct {
 // RAW string instead (planted, one match) leaves the whole package green. What
 // sanitising actually buys is the CONTENT half above — the sequences never
 // reach the terminal — and that half is covered: removing Sanitise from
-// Problem.Cause reddens TestProblemCauseIsSanitised. The other twelve now have
+// Problem.Cause reddens TestProblemCauseIsSanitised. The other thirteen now have
 // escape-bearing fixtures of their own in corpus_test.go — problem, empty, kv
 // and checks /esc-surfaces — and assertESCContainment is their detector:
 // deleting the Sanitise from any one of the call sites below reddens it,
 // measured 12 violations each and 24 where renderPairs or renderRemedies
-// covers two surfaces at once. Counted at this append: 13 caller surfaces read through
-// Sanitise across 15 call sites, the Fact key and the Remedy label being read
-// once in their width pass and once in their render pass.
+// covers two surfaces at once. Counted at this append: 14 caller surfaces read through
+// Sanitise across 16 call sites, the Fact key and the Remedy label being read
+// once in their width pass and once in their render pass, and a StateFact's
+// label through SanitiseInline in Fact.display.
 
 // ----------------------------------------------------------------- Problem
 
@@ -363,7 +390,8 @@ func (p Problem) Render(s *Stream) string {
 // 2sp + key padded to the widest key + 2sp + value, the value wrapped at a
 // hanging indent aligned to the value column (§4.4). Every key is painted
 // keyRole, on the aligned path and on the stacked one; RoleDefault paints
-// nothing.
+// nothing. A StateFact's value is painted its state's role on both paths, a
+// plain value never (Fact.display).
 func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 	const indent, gap = 2, 2
 	keyWidth := 0
@@ -383,13 +411,14 @@ func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 
 	var b strings.Builder
 	for _, f := range pairs {
-		key, value := Sanitise(f.K), Sanitise(f.V)
+		key := Sanitise(f.K)
+		value, valueRole := f.display(s.mode)
 		if stacked {
 			for _, line := range wrapIndent(key, indent, budget) {
 				b.WriteString(s.paint(keyRole, line) + "\n")
 			}
 			for _, line := range wrapIndent(value, indent+2, budget) {
-				b.WriteString(line + "\n")
+				b.WriteString(s.paint(valueRole, line) + "\n")
 			}
 			continue
 		}
@@ -403,9 +432,9 @@ func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 		lines := Wrap(value, valueWidth)
 		b.WriteString(strings.Repeat(" ", indent) +
 			s.paint(keyRole, Pad(key, keyWidth)) +
-			strings.Repeat(" ", gap) + lines[0] + "\n")
+			strings.Repeat(" ", gap) + s.paint(valueRole, lines[0]) + "\n")
 		for _, line := range lines[1:] {
-			b.WriteString(strings.Repeat(" ", valueIndent) + line + "\n")
+			b.WriteString(strings.Repeat(" ", valueIndent) + s.paint(valueRole, line) + "\n")
 		}
 	}
 	return b.String()

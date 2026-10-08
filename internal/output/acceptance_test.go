@@ -562,7 +562,7 @@ func fxProblem() Problem {
 	return Problem{
 		Title: "cannot start workspace \"api\"",
 		Cause: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
-		Facts: []Fact{{"workspace", "api"}, {"profile", "go"}, {"proxy", "de-fra-01"}},
+		Facts: []Fact{{K: "workspace", V: "api"}, {K: "profile", V: "go"}, {K: "proxy", V: "de-fra-01"}},
 		Steps: []Remedy{{"start docker", "sudo systemctl start docker"}, {"check", "ws proxy check"}},
 	}
 }
@@ -921,7 +921,7 @@ func TestKVStacksBelowTwelve(t *testing.T) {
 	}
 	key := strings.Repeat("k", 20) // valueIndent = 2 + 20 + 2 = 24
 	const value = "de-fra-01.example-vpn.net:443"
-	k := KV{Title: "Report", Pairs: []Fact{{key, value}}}
+	k := KV{Title: "Report", Pairs: []Fact{{K: key, V: value}}}
 	const valueIndent = 24
 
 	// The pair lines start at index 1 only while the title occupies exactly one
@@ -986,7 +986,7 @@ func TestKVPlainKeys(t *testing.T) {
 		{"stacked, PlainKeys", valueIndent + 11, true, "  " + key},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			out := KV{Title: "Report", Pairs: []Fact{{key, value}}, PlainKeys: c.plain}.Render(blockStream(c.budget))
+			out := KV{Title: "Report", Pairs: []Fact{{K: key, V: value}}, PlainKeys: c.plain}.Render(blockStream(c.budget))
 			lines := strings.Split(out, "\n")
 			if len(lines) < 2 {
 				t.Fatalf("want a title line and a key line, got %q", out)
@@ -1000,7 +1000,7 @@ func TestKVPlainKeys(t *testing.T) {
 		})
 	}
 
-	p := Problem{Title: "pull failed", Facts: []Fact{{"image", "ws:dev"}}}
+	p := Problem{Title: "pull failed", Facts: []Fact{{K: "image", V: "ws:dev"}}}
 	if out := p.Render(blockStream(80)); !strings.Contains(out, "\n  "+muted+"image"+fxReset+"  ws:dev") {
 		t.Errorf("Problem.Facts no longer paints its keys RoleMuted: %q", out)
 	}
@@ -1075,6 +1075,81 @@ func TestChecksFloorIsVocabularyWide(t *testing.T) {
 	for i, l := range lines {
 		if got := ansi.StringWidth(l); got > MinWidth {
 			t.Fatalf("@%d line %d is %d cells: %q", MinWidth, i+1, got, l)
+		}
+	}
+}
+
+// TestStateFactDrawsMarkAndLabel pins phase-5 §3.1's StateFact by the exact
+// bytes of each pair's line, colour on: the value is "<mark> <label>" in the
+// stream's glyph mode, painted with the state's role on the aligned path and on
+// the stacked one; an empty label is the state's default word; a newline in the
+// label is folded to a space, as Mark folds it; a plain pair beside them stays
+// unpainted. The keys pad to "Health", six cells.
+func TestStateFactDrawsMarkAndLabel(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	ok := fxSGR(t, roleColours[RoleOK].trueColour, ColourTrue)
+	fail := fxSGR(t, roleColours[RoleFail].trueColour, ColourTrue)
+	muted := fxSGR(t, roleColours[RoleMuted].trueColour, ColourTrue)
+	k := KV{Title: "Proxy", Pairs: []Fact{
+		StateFact("State", StateOK, "running"),
+		StateFact("Health", StateFail, ""),
+		StateFact("Route", StateUnknown, "unreadable\nexec failed"),
+		{K: "Image", V: "devpod-proxy"},
+	}}
+	for _, c := range []struct {
+		name string
+		s    *Stream
+		want []string // lines 2 to 5, raw
+	}{
+		{"utf-8", blockStream(80), []string{
+			"  " + muted + "State " + fxReset + "  " + ok + "✓ running" + fxReset,
+			"  " + muted + "Health" + fxReset + "  " + fail + "✗ failed" + fxReset,
+			"  " + muted + "Route " + fxReset + "  " + muted + "? unreadable exec failed" + fxReset,
+			"  " + muted + "Image " + fxReset + "  devpod-proxy",
+		}},
+		{"ascii", sweepStream(80, GlyphASCII), []string{
+			"  " + muted + "State " + fxReset + "  " + ok + "+ running" + fxReset,
+			"  " + muted + "Health" + fxReset + "  " + fail + "x failed" + fxReset,
+			"  " + muted + "Route " + fxReset + "  " + muted + "? unreadable exec failed" + fxReset,
+			"  " + muted + "Image " + fxReset + "  devpod-proxy",
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			lines := strings.Split(k.Render(c.s), "\n")
+			if len(lines) != 1+len(c.want) {
+				t.Fatalf("want a title and %d pair lines, got %d:\n%s", len(c.want), len(lines), strings.Join(lines, "\n"))
+			}
+			for i, want := range c.want {
+				if lines[1+i] != want {
+					t.Errorf("pair line %d = %q, want %q", i+1, lines[1+i], want)
+				}
+			}
+		})
+	}
+
+	// Stacked: a 20-cell key puts the value column at 24, and at 35 columns it
+	// is 11 cells wide, under §4.4's 12, so the value goes under its key at an
+	// indent of 4 — painted as on the aligned path.
+	key := strings.Repeat("k", 20)
+	stacked := KV{Title: "Report", Pairs: []Fact{
+		StateFact(key, StateOK, "running"),
+		{K: key, V: "plain"},
+	}}
+	lines := strings.Split(stacked.Render(blockStream(35)), "\n")
+	want := []string{
+		muted + "  " + key + fxReset,
+		ok + "    ✓ running" + fxReset,
+		muted + "  " + key + fxReset,
+		"    plain",
+	}
+	if len(lines) != 1+len(want) {
+		t.Fatalf("stacked: want a title and %d lines, got %d:\n%s", len(want), len(lines), strings.Join(lines, "\n"))
+	}
+	for i, w := range want {
+		if lines[1+i] != w {
+			t.Errorf("stacked line %d = %q, want %q", i+1, lines[1+i], w)
 		}
 	}
 }
@@ -1679,7 +1754,7 @@ var assertESCContainment = globalAssertion{
 		problem := Problem{
 			Title: "Could not pull the base image",
 			Cause: fxEscCause,
-			Facts: []Fact{{"image", fxBaseImage}},
+			Facts: []Fact{{K: "image", V: fxBaseImage}},
 			Steps: []Remedy{{"Retry", "ws profile rebuild default"}},
 		}
 		for _, w := range []int{MinWidth, 80, sweepMaxWidth} {
@@ -1949,7 +2024,7 @@ func TestAcceptanceGlobals(t *testing.T) {
 // reviewer must be told about rather than have absorbed silently. Record in
 // this comment what moved it and by how much, every time.
 //
-// Measured over 61 fixtures, 19 of them tables: 619 overflowing lines of 1521.
+// Measured over 62 fixtures, 19 of them tables: 641 overflowing lines of 1569.
 // The pair has moved with every fixture set the corpus gained, and each move
 // is that set's worth of geometry at the floor:
 //
@@ -1975,13 +2050,16 @@ func TestAcceptanceGlobals(t *testing.T) {
 //	  and the captions of the two block   over the floor: the captions'
 //	  escape fixtures (phase-5 §3.1)      200-character tokens and 64-character
 //	                                      names, hard-broken at the budget)
+//	+ kv/state-facts and a StateFact in   641 of 1569 (48 lines, 22 of them
+//	  kv/esc-surfaces (phase-5 §3.1)      over the floor: the 64-character key
+//	                                      and the 200-character label)
 //
 // The sweep's own line count moved the other way across the tab fix, 111464 to
 // 111120, because expanded tabs are wider than the zero cells the layer used
 // to measure them at and the wraps land differently. It has grown with the
 // corpus since: 117,700 lines over 49 fixtures, 120,482 over 50, 125,452 over
 // 57.
-const control28Overflows = 619
+const control28Overflows = 641
 
 func TestControlBudget28(t *testing.T) {
 	if mutants != (mutantSwitches{}) {
