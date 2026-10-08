@@ -366,3 +366,54 @@ exit 2
 |              vault-ai checkout
 |Overall: red (exit 2)
 --- stderr (0 bytes)
+=== ws vault status: mixed bands at COLUMNS=80
+exit 1
+--- stdout (767 bytes)
+|Vault status
+|  ✓ ok        MCP liveness
+|              MCP responsive (25 tools advertised)
+|  ⚠ degraded  vault_health composite
+|              vault-health-score: 60 (yellow)
+|  ✓ ok        audit-chain integrity
+|              all 8 streams verified for current month
+|  ⚠ degraded  cost-tracker headroom
+|              no cost-*.jsonl found — Phase 21d daemon not yet shipped (fallback
+|              only)
+|  ✓ ok        dedup gate readiness
+|              create_note advertises check_dedup_before_create (Phase 17
+|              deployed)
+|  ⚠ degraded  last DR-drill age
+|              dr-drill-*.jsonl present but unreadable: open
+|              /srv/vault-ai/_tooling/logs/dr-drill-2026-09.jsonl: permission
+|              denied ...
+|Overall: yellow (exit 1)
+--- stderr (0 bytes)
+=== ws vault status: mixed bands at COLUMNS=40
+exit 1
+--- stdout (866 bytes)
+|Vault status
+|  ✓ ok        MCP liveness
+|              MCP responsive (25 tools
+|              advertised)
+|  ⚠ degraded  vault_health composite
+|              vault-health-score: 60
+|              (yellow)
+|  ✓ ok        audit-chain integrity
+|              all 8 streams verified for
+|              current month
+|  ⚠ degraded  cost-tracker headroom
+|              no cost-*.jsonl found —
+|              Phase 21d daemon not yet
+|              shipped (fallback only)
+|  ✓ ok        dedup gate readiness
+|              create_note advertises
+|              check_dedup_before_create
+|              (Phase 17 deployed)
+|  ⚠ degraded  last DR-drill age
+|              dr-drill-*.jsonl present
+|              but unreadable: open
+|              /srv/vault-ai/_tooling/log
+|              s/dr-drill-2026-09.jsonl:
+|              permission denied ...
+|Overall: yellow (exit 1)
+--- stderr (0 bytes)

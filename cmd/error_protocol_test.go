@@ -254,6 +254,20 @@ func installExecuteStub(name string) {
 				Detail:      "check-xrepo-contract.sh not found at /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: stat /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: no such file or directory",
 				Remediation: "verify Phase 17 deliverable is present in vault-ai checkout"}
 		}
+	case "vault-status-mixed":
+		// Six signals as a host with no cost or DR-drill logs yet answers
+		// them, one detail cut by truncate: yellow overall, exit 1.
+		vaultStatusRunFn = func(context.Context, *cobra.Command) (*statusReport, error) {
+			return assembleReport([]statusSignal{
+				{Label: "MCP liveness", Band: bandGreen, Detail: "MCP responsive (25 tools advertised)"},
+				{Label: "vault_health composite", Band: bandYellow, Detail: "vault-health-score: 60 (yellow)"},
+				{Label: "audit-chain integrity", Band: bandGreen, Detail: "all 8 streams verified for current month"},
+				{Label: "cost-tracker headroom", Band: bandYellow, Detail: "no cost-*.jsonl found — Phase 21d daemon not yet shipped (fallback only)"},
+				{Label: "dedup gate readiness", Band: bandGreen, Detail: "create_note advertises check_dedup_before_create (Phase 17 deployed)"},
+				{Label: "last DR-drill age", Band: bandYellow, Detail: "dr-drill-*.jsonl present but unreadable: " +
+					truncate("open /srv/vault-ai/_tooling/logs/dr-drill-2026-09.jsonl: permission denied — проверьте права доступа", 80)},
+			}), nil
+		}
 	case "vault-status-red":
 		vaultStatusRunFn = func(context.Context, *cobra.Command) (*statusReport, error) {
 			return &statusReport{OverallBand: bandRed, ExitCode: 2}, nil

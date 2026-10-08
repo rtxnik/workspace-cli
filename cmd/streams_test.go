@@ -399,6 +399,9 @@ var streamsRows = []streamsRow{
 	{name: "ws vault doctor: mixed bands", args: []string{"vault", "doctor"}, stub: "vault-doctor-mixed", code: 2,
 		check: reportCheck("Vault doctor", "  ⚠ degraded  stale-lock-files", "  ✗ failed    vault-ai-token",
 			"              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles", "Overall: red (exit 2)")},
+	{name: "ws vault status: mixed bands", args: []string{"vault", "status"}, stub: "vault-status-mixed", code: 1,
+		check: reportCheck("Vault status", "  ✓ ok        MCP liveness", "  ⚠ degraded  cost-tracker headroom",
+			"Overall: yellow (exit 1)")},
 	{name: "ws proxy up: no docker", args: []string{"proxy", "up"}, code: 1,
 		stderr: "~ Starting proxy\n" +
 			"✗ Starting proxy  <t>\n" +
