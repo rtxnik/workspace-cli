@@ -417,3 +417,31 @@ exit 1
 |              permission denied ...
 |Overall: yellow (exit 1)
 --- stderr (0 bytes)
+=== ws vault predict-bulk-load 40: a projection at COLUMNS=80
+exit 0
+--- stdout (175 bytes)
+|Current rows
+|  dedup   10
+|  mcp     40
+|  search  70
+|  total   120
+|
+|Projection for 40 notes
+|  Projected New Rows    200
+|  Estimated Dedup Time  3.50s
+|  Projected Segments    7
+--- stderr (0 bytes)
+=== ws vault predict-bulk-load 40: a projection at COLUMNS=40
+exit 0
+--- stdout (175 bytes)
+|Current rows
+|  dedup   10
+|  mcp     40
+|  search  70
+|  total   120
+|
+|Projection for 40 notes
+|  Projected New Rows    200
+|  Estimated Dedup Time  3.50s
+|  Projected Segments    7
+--- stderr (0 bytes)

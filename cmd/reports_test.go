@@ -39,6 +39,7 @@ func reportsCases() []streamsRow {
 		{name: "ws proxy doctor: the image's datapath differs", args: []string{"proxy", "doctor"}, docker: &fakeHealthyProxy},
 		{name: "ws vault doctor: mixed bands", args: []string{"vault", "doctor"}, stub: "vault-doctor-mixed"},
 		{name: "ws vault status: mixed bands", args: []string{"vault", "status"}, stub: "vault-status-mixed"},
+		{name: "ws vault predict-bulk-load 40: a projection", args: []string{"vault", "predict-bulk-load", "40"}, stub: "predict-projection"},
 	} {
 		for _, w := range []string{"80", "40"} {
 			row := c

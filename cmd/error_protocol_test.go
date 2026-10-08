@@ -268,6 +268,15 @@ func installExecuteStub(name string) {
 					truncate("open /srv/vault-ai/_tooling/logs/dr-drill-2026-09.jsonl: permission denied — проверьте права доступа", 80)},
 			}), nil
 		}
+	case "predict-projection":
+		predictMCPCallFn = func(count int) (*predictResult, error) {
+			return &predictResult{
+				CurrentRowsPerStream:  map[string]int{"search": 70, "mcp": 40, "dedup": 10},
+				ProjectedNewRows:      5 * count,
+				EstimatedDedupSeconds: 3.5,
+				ProjectedSegmentCount: 7,
+			}, nil
+		}
 	case "vault-status-red":
 		vaultStatusRunFn = func(context.Context, *cobra.Command) (*statusReport, error) {
 			return &statusReport{OverallBand: bandRed, ExitCode: 2}, nil

@@ -402,6 +402,17 @@ var streamsRows = []streamsRow{
 	{name: "ws vault status: mixed bands", args: []string{"vault", "status"}, stub: "vault-status-mixed", code: 1,
 		check: reportCheck("Vault status", "  ✓ ok        MCP liveness", "  ⚠ degraded  cost-tracker headroom",
 			"Overall: yellow (exit 1)")},
+	{name: "ws vault predict-bulk-load 40: a projection", args: []string{"vault", "predict-bulk-load", "40"}, stub: "predict-projection",
+		stdout: "Current rows\n" +
+			"  dedup   10\n" +
+			"  mcp     40\n" +
+			"  search  70\n" +
+			"  total   120\n" +
+			"\n" +
+			"Projection for 40 notes\n" +
+			"  Projected New Rows    200\n" +
+			"  Estimated Dedup Time  3.50s\n" +
+			"  Projected Segments    7\n"},
 	{name: "ws proxy up: no docker", args: []string{"proxy", "up"}, code: 1,
 		stderr: "~ Starting proxy\n" +
 			"✗ Starting proxy  <t>\n" +
