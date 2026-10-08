@@ -185,26 +185,9 @@ var proxyCheckCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		cfg := config.Load()
-		results := docker.ProxyCheck(cfg)
-
-		passed := 0
-		for _, r := range results {
-			if r.Passed {
-				fmt.Printf("  %s %s\n", output.StyleSuccess.Render("✓"), r.Name)
-				passed++
-			} else {
-				fmt.Printf("  %s %s\n", output.StyleError.Render("✗"), r.Name)
-			}
-		}
-
-		fmt.Println()
-		total := len(results)
-		if passed == total {
-			output.Success(fmt.Sprintf("%d/%d checks passed", passed, total))
-		} else {
-			output.Warn(fmt.Sprintf("%d/%d checks passed", passed, total))
-		}
-		return nil
+		report := proxyCheckReport(docker.ProxyCheck(cfg))
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), report.Render(output.Out()))
+		return err
 	},
 }
 
@@ -761,4 +744,22 @@ func testDNSVerdict(result proxyengine.ProbeResult, dnsExit string) (verdict str
 		// "tunneled" claim (this is a never-false-green security verdict).
 		return "inconclusive", false
 	}
+}
+
+// proxyCheckReport is ws proxy check's report: one line per prerequisite, in
+// ProxyCheck's order — ok, failed, or unknown for a check the daemon was not
+// there to answer — closed by the count of what it rendered.
+func proxyCheckReport(results []docker.CheckResult) output.Checks {
+	items := make([]output.Check, 0, len(results))
+	for _, r := range results {
+		st := output.StateFail
+		switch {
+		case r.Skipped:
+			st = output.StateUnknown
+		case r.Passed:
+			st = output.StateOK
+		}
+		items = append(items, output.Check{Name: r.Name, State: st})
+	}
+	return output.Checks{Title: "Proxy prerequisites", Items: items, Caption: checksCaption(items)}
 }

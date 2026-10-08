@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 )
 
@@ -150,5 +151,77 @@ func TestProtectionStatusString(t *testing.T) {
 		if got := protectionStatusString(v); got != want {
 			t.Errorf("protectionStatusString(%v) = %q, want %q", v, got, want)
 		}
+	}
+}
+
+// TestChecksCaption pins the caption every Checks report closes with (phase-5
+// §3.4): "N of M checks passed", N counting the ok lines only, then the
+// failed, degraded and unknown counts in that order, each only when it is not
+// zero. An unknown is never counted as passed.
+func TestChecksCaption(t *testing.T) {
+	item := func(st output.State) output.Check { return output.Check{Name: "x", State: st} }
+	for _, c := range []struct {
+		states []output.State
+		want   string
+	}{
+		{[]output.State{output.StateOK, output.StateOK}, "2 of 2 checks passed"},
+		{[]output.State{output.StateFail, output.StateOK, output.StateUnknown, output.StateUnknown}, "1 of 4 checks passed, 1 failed, 2 unknown"},
+		{[]output.State{output.StateOK, output.StateAdvisory, output.StateUnknown, output.StateOK}, "2 of 4 checks passed, 1 degraded, 1 unknown"},
+		{[]output.State{output.StateAdvisory, output.StateFail, output.StateUnknown, output.StateOK}, "1 of 4 checks passed, 1 failed, 1 degraded, 1 unknown"},
+		{[]output.State{output.StateUnknown}, "0 of 1 checks passed, 1 unknown"},
+	} {
+		items := make([]output.Check, 0, len(c.states))
+		for _, st := range c.states {
+			items = append(items, item(st))
+		}
+		if got := checksCaption(items); got != c.want {
+			t.Errorf("checksCaption(%v) = %q, want %q", c.states, got, c.want)
+		}
+	}
+}
+
+// TestProxyCheckReport pins ws proxy check's report (phase-5 §3.4): one line
+// per prerequisite, in ProxyCheck's order — ok, failed, or unknown for a check
+// the daemon was not there to answer — and the caption that counts them.
+func TestProxyCheckReport(t *testing.T) {
+	names := []string{"Docker running", "Xray config exists", "Proxy image built", "Proxy container running"}
+	results := func(passed, skipped [4]bool) []docker.CheckResult {
+		r := make([]docker.CheckResult, 4)
+		for i := range r {
+			r[i] = docker.CheckResult{Name: names[i], Passed: passed[i], Skipped: skipped[i]}
+		}
+		return r
+	}
+	ok, fail, unknown := output.StateOK, output.StateFail, output.StateUnknown
+	for _, c := range []struct {
+		name    string
+		results []docker.CheckResult
+		states  []output.State
+		caption string
+	}{
+		{"no daemon", results([4]bool{false, true, false, false}, [4]bool{false, false, true, true}),
+			[]output.State{fail, ok, unknown, unknown}, "1 of 4 checks passed, 1 failed, 2 unknown"},
+		{"all pass", results([4]bool{true, true, true, true}, [4]bool{}),
+			[]output.State{ok, ok, ok, ok}, "4 of 4 checks passed"},
+		{"no image, stopped", results([4]bool{true, true, false, false}, [4]bool{}),
+			[]output.State{ok, ok, fail, fail}, "2 of 4 checks passed, 2 failed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := proxyCheckReport(c.results)
+			if got.Title != "Proxy prerequisites" {
+				t.Errorf("title %q, want %q", got.Title, "Proxy prerequisites")
+			}
+			if len(got.Items) != len(names) {
+				t.Fatalf("%d lines, want %d: %+v", len(got.Items), len(names), got.Items)
+			}
+			for i, it := range got.Items {
+				if it.Name != names[i] || it.State != c.states[i] || it.Note != "" {
+					t.Errorf("line %d = %+v, want %q in state %v with no note", i+1, it, names[i], c.states[i])
+				}
+			}
+			if got.Caption != c.caption {
+				t.Errorf("caption %q, want %q", got.Caption, c.caption)
+			}
+		})
 	}
 }

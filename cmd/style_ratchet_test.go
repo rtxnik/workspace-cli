@@ -33,7 +33,7 @@ var directStylePattern = regexp.MustCompile(
 // outside internal/output, as of this commit.
 var directStyleInventory = map[string]int{
 	"cmd/profile.go":      1,
-	"cmd/proxy.go":        12,
+	"cmd/proxy.go":        10,
 	"cmd/proxy_doctor.go": 3,
 	"cmd/vault_status.go": 8,
 }
