@@ -83,15 +83,15 @@ const fxCJKNote = "拨号失败：连接超时（30 秒），代理配置文件 
 // title rewrite behind. Two ESC bytes, zero cells to ansi.StringWidth, and a
 // payload — "pwned" — that must never reach the terminal as text.
 //
-// It exists because D-13 sanitises ELEVEN surfaces across blocks.go and, until
+// It exists because D-13 sanitises THIRTEEN surfaces across blocks.go and, until
 // this corpus, only one of them (Problem.Cause) had a fixture carrying an
 // escape at all. A surface that silently stopped sanitising would have kept
-// the whole suite green. The other ten are covered by the four fixtures at the
+// the whole suite green. The other twelve are covered by the four fixtures at the
 // end of fxCorpusBuild, and assertESCContainment asserts both halves over the
 // corpus: zero ESC bytes out, and no "pwned" surviving as text.
 //
-// Each of the ten was proved, one deleted Sanitise at a time, every one
-// restored — eight plants, because renderPairs covers Fact.K with Fact.V and
+// Each of the twelve was proved, one deleted Sanitise at a time, every one
+// restored — ten plants, because renderPairs covers Fact.K with Fact.V and
 // renderRemedies covers Remedy.Label with Remedy.Cmd:
 //
 //	Problem.Title        12 violations, first problem/esc-surfaces @ 29
@@ -102,6 +102,8 @@ const fxCJKNote = "拨号失败：连接超时（30 秒），代理配置文件 
 //	Checks.Title         12, first checks/esc-surfaces @ 29
 //	Check.Name           12, first checks/esc-surfaces @ 29
 //	Check.Note           12, first checks/esc-surfaces @ 29
+//	KV.Caption           12, first kv/esc-surfaces @ 29
+//	Checks.Caption       12, first checks/esc-surfaces @ 29
 func fxEsc(text string) string { return "\x1b[2K" + text + "\x1b]0;pwned\x07" }
 
 // fxTaskTailProblem is the Problem of a failed devpod up whose log tail is
@@ -191,6 +193,9 @@ func fxKVSources(k KV) []string {
 	for _, f := range k.Pairs {
 		out = append(out, f.K, f.V)
 	}
+	if k.Caption != "" {
+		out = append(out, k.Caption)
+	}
 	return out
 }
 
@@ -204,6 +209,9 @@ func fxChecksSources(c Checks) []string {
 		if it.Note != "" {
 			out = append(out, it.Note)
 		}
+	}
+	if c.Caption != "" {
+		out = append(out, c.Caption)
 	}
 	return out
 }
@@ -691,6 +699,9 @@ func fxCorpusBuild() []fixture {
 		{"kv/cjk", "§6.2 CJK-only text", KV{Title: "代理状态", Pairs: []Fact{
 			{"状态", "运行中"}, {"配置文件", "de-fra-01"}, {"端点", fxIPv6},
 			{"运行时间", "四小时十二分钟，自上次路由修复以来"}}}},
+		{"kv/caption-long", "§6.2 caption longer than the budget (phase-5 §3.1)", KV{
+			Title: "Workspaces", Pairs: []Fact{{"api", "protected"}, {fxName64, fxIPv6}},
+			Caption: "protection scan failed: " + fxMultilineErr + " " + fxToken200}},
 	}
 	for _, kf := range kvs {
 		k := kf.k
@@ -737,6 +748,11 @@ func fxCorpusBuild() []fixture {
 			{"路由表是最新的", StateAdvisory, fxCJKNote},
 			{"上游可达性", StateFail, "拨号失败：连接被拒绝"}}},
 			[]fxState{{StateOK, ""}, {StateAdvisory, ""}, {StateFail, ""}}},
+		{"checks/caption-long", "§6.2 caption longer than the budget (phase-5 §3.1)", Checks{
+			Title: "Proxy doctor", Items: []Check{
+				{fxName64, StateFail, fxToken200}, {"protocol sanity", StateUnknown, ""}},
+			Caption: "Failed at check 1 of 13: " + fxName64 + " " + fxToken200},
+			[]fxState{{StateFail, ""}, {StateUnknown, ""}}},
 	}
 	for _, cf := range checks {
 		c := cf.c
@@ -808,25 +824,27 @@ func fxCorpusBuild() []fixture {
 	})
 
 	escKV := KV{
-		Title: fxEsc("Build report"),
-		Pairs: []Fact{{fxEsc("buildkit"), fxEsc("3 of 5 layers cached")}},
+		Title:   fxEsc("Build report"),
+		Pairs:   []Fact{{fxEsc("buildkit"), fxEsc("3 of 5 layers cached")}},
+		Caption: fxEsc("2 layers rebuilt"),
 	}
 	out = append(out, fixture{
 		name: "kv/esc-surfaces", kind: "kv",
-		spec:     "§6.7 / D-13: escapes in Title and in a pair",
-		fidelity: []string{"Build report", "buildkit", "3 of 5 layers cached"},
+		spec:     "§6.7 / D-13: escapes in Title, in a pair and in the Caption",
+		fidelity: []string{"Build report", "buildkit", "3 of 5 layers cached", "2 layers rebuilt"},
 		render:   func(s *Stream) string { return escKV.Render(s) },
 	})
 
 	escChecks := Checks{
-		Title: fxEsc("Build doctor"),
-		Items: []Check{{fxEsc("buildkit cache"), StateAdvisory, fxEsc("2 of 5 layers reused")}},
+		Title:   fxEsc("Build doctor"),
+		Items:   []Check{{fxEsc("buildkit cache"), StateAdvisory, fxEsc("2 of 5 layers reused")}},
+		Caption: fxEsc("1 of 1 checks passed, 1 degraded"),
 	}
 	out = append(out, fixture{
 		name: "checks/esc-surfaces", kind: "checks",
-		spec:     "§6.7 / D-13: escapes in Title, an item Name and an item Note",
+		spec:     "§6.7 / D-13: escapes in Title, an item Name, an item Note and the Caption",
 		states:   []fxState{{StateAdvisory, ""}},
-		fidelity: []string{"Build doctor", "buildkit cache", "2 of 5 layers reused"},
+		fidelity: []string{"Build doctor", "buildkit cache", "2 of 5 layers reused", "1 of 1 checks passed, 1 degraded"},
 		render:   func(s *Stream) string { return escChecks.Render(s) },
 	})
 

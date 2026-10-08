@@ -1079,6 +1079,64 @@ func TestChecksFloorIsVocabularyWide(t *testing.T) {
 	}
 }
 
+// TestBlockCaptionsCloseTheirBlock pins the phase-5 caption of KV and Checks:
+// it closes the block the way a table's closes the grid — directly under the
+// last line, with no blank line between, wrapped at the budget, every line
+// painted RoleMuted on the block's own stream. The expected wrap is worked out
+// by hand at 40 columns: the first line ends at "route", 39 cells, because
+// "not" would take it to 43; the second line is exactly 40.
+func TestBlockCaptionsCloseTheirBlock(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	muted := fxSGR(t, roleColours[RoleMuted].trueColour, ColourTrue)
+	const caption = "1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)"
+	wantCaption := []string{
+		"1 of 2 workspace(s) UNPROTECTED — route",
+		"not via proxy (run: ws proxy fix-routes)",
+	}
+	for _, c := range []struct {
+		name     string
+		captured func(*Stream) string
+		bare     func(*Stream) string
+		last     string // the block's last line, plain
+	}{
+		{"kv",
+			KV{Title: "Workspaces", Pairs: []Fact{{K: "api", V: "protected"}}, Caption: caption}.Render,
+			KV{Title: "Workspaces", Pairs: []Fact{{K: "api", V: "protected"}}}.Render,
+			"  api  protected"},
+		{"checks",
+			Checks{Title: "Proxy prerequisites", Items: []Check{{Name: "Docker running", State: StateOK}}, Caption: caption}.Render,
+			Checks{Title: "Proxy prerequisites", Items: []Check{{Name: "Docker running", State: StateOK}}}.Render,
+			"  ✓ ok        Docker running"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := blockStream(40)
+			bare := plainLines(c.bare(s))
+			if bare[len(bare)-1] != c.last {
+				t.Fatalf("without a caption the block must end on its last line %q; got %q", c.last, bare[len(bare)-1])
+			}
+			raw := strings.Split(c.captured(s), "\n")
+			plain := plainLines(c.captured(s))
+			if len(plain) != len(bare)+len(wantCaption) {
+				t.Fatalf("want the block's %d lines and the caption's %d directly under them, got %d lines:\n%s",
+					len(bare), len(wantCaption), len(plain), strings.Join(plain, "\n"))
+			}
+			if got := plain[len(bare)-1]; got != c.last {
+				t.Errorf("the caption must follow the block's last line with no blank line between; line %d is %q", len(bare), got)
+			}
+			for i, want := range wantCaption {
+				if got := plain[len(bare)+i]; got != want {
+					t.Errorf("caption line %d = %q, want %q (wrapped at the budget)", i+1, got, want)
+				}
+				if got := raw[len(bare)+i]; got != muted+want+fxReset {
+					t.Errorf("caption line %d is not painted RoleMuted on the block's stream: %q", i+1, got)
+				}
+			}
+		})
+	}
+}
+
 // TestEmptyNamesTheNextStep is §4.9's one shape: exit 0, always naming the next
 // step, no numbering. The assertion is that Empty's remedies are NOT numbered —
 // the shape differs from Problem's on purpose, and nothing else would notice.
@@ -1891,7 +1949,7 @@ func TestAcceptanceGlobals(t *testing.T) {
 // reviewer must be told about rather than have absorbed silently. Record in
 // this comment what moved it and by how much, every time.
 //
-// Measured over 59 fixtures, 19 of them tables: 543 overflowing lines of 1399.
+// Measured over 61 fixtures, 19 of them tables: 619 overflowing lines of 1521.
 // The pair has moved with every fixture set the corpus gained, and each move
 // is that set's worth of geometry at the floor:
 //
@@ -1913,13 +1971,17 @@ func TestAcceptanceGlobals(t *testing.T) {
 //	                                      glyph modes, 70 of them over the
 //	                                      floor: the tail's lines under the
 //	                                      cause's indent)
+//	+ kv/caption-long, checks/caption-long 619 of 1521 (122 lines, 76 of them
+//	  and the captions of the two block   over the floor: the captions'
+//	  escape fixtures (phase-5 §3.1)      200-character tokens and 64-character
+//	                                      names, hard-broken at the budget)
 //
 // The sweep's own line count moved the other way across the tab fix, 111464 to
 // 111120, because expanded tabs are wider than the zero cells the layer used
 // to measure them at and the wraps land differently. It has grown with the
 // corpus since: 117,700 lines over 49 fixtures, 120,482 over 50, 125,452 over
 // 57.
-const control28Overflows = 543
+const control28Overflows = 619
 
 func TestControlBudget28(t *testing.T) {
 	if mutants != (mutantSwitches{}) {

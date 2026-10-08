@@ -69,15 +69,25 @@ func (t Table) Render(s *Stream) string {
 	}
 	// Termination at n = 0 (§4.3): the table renders as its caption alone
 	// with no box, because the chrome formula 3(n−1)+4 is undefined there.
+	return closeWithCaption(s, out, t.captionText(a))
+}
 
-	if caption := t.captionText(a); caption != "" {
-		width := budget + mutants.CaptionWidth
-		for _, line := range Wrap(caption, width) {
-			if out != "" {
-				out += "\n"
-			}
-			out += s.paint(RoleMuted, line)
+// closeWithCaption appends a block's caption to its render: directly under the
+// last line, wrapped at the stream's budget, every line painted RoleMuted.
+// Table, KV and Checks all close through it, so a caption has one geometry
+// whichever block it belongs to, and the caption_wrapped_too_wide mutant stands
+// for all three (TestCaptionMutantReachesEveryBlockCaption). The caption must
+// already be sanitised; an empty one adds nothing.
+func closeWithCaption(s *Stream, out, caption string) string {
+	if caption == "" {
+		return out
+	}
+	width := s.budget() + mutants.CaptionWidth
+	for _, line := range Wrap(caption, width) {
+		if out != "" {
+			out += "\n"
 		}
+		out += s.paint(RoleMuted, line)
 	}
 	return out
 }
@@ -211,10 +221,14 @@ type Empty struct {
 // KV and Problem.Facts rendered before the field existed, byte for byte; the
 // help document sets it, because there the section titles are the only text
 // that carries colour.
+//
+// Caption closes the block as a table's caption closes its grid — a report's
+// verdict or summary line, on the block's stream (closeWithCaption).
 type KV struct {
 	Title     string
 	Pairs     []Fact
 	PlainKeys bool
+	Caption   string
 }
 
 // Check is one line of a Checks block. It carries no word of its own: the
@@ -227,10 +241,12 @@ type Check struct {
 	Note  string
 }
 
-// Checks is a titled list of state lines. A report body: Out() (§4.7).
+// Checks is a titled list of state lines. A report body: Out() (§4.7). Its
+// Caption closes it as KV's does: the report's verdict, `3 of 4 checks passed`.
 type Checks struct {
-	Title string
-	Items []Check
+	Title   string
+	Items   []Check
+	Caption string
 }
 
 // D-13, as the blocks below apply it: a caller's string is read exactly ONCE,
@@ -263,13 +279,13 @@ type Checks struct {
 // RAW string instead (planted, one match) leaves the whole package green. What
 // sanitising actually buys is the CONTENT half above — the sequences never
 // reach the terminal — and that half is covered: removing Sanitise from
-// Problem.Cause reddens TestProblemCauseIsSanitised. The other ten now have
+// Problem.Cause reddens TestProblemCauseIsSanitised. The other twelve now have
 // escape-bearing fixtures of their own in corpus_test.go — problem, empty, kv
 // and checks /esc-surfaces — and assertESCContainment is their detector:
 // deleting the Sanitise from any one of the call sites below reddens it,
 // measured 12 violations each and 24 where renderPairs or renderRemedies
-// covers two surfaces at once. Counted at this append: 11 caller surfaces read through
-// Sanitise across 13 call sites, the Fact key and the Remedy label being read
+// covers two surfaces at once. Counted at this append: 13 caller surfaces read through
+// Sanitise across 15 call sites, the Fact key and the Remedy label being read
 // once in their width pass and once in their render pass.
 
 // ----------------------------------------------------------------- Problem
@@ -487,7 +503,7 @@ func (k KV) Render(s *Stream) string {
 		keyRole = RoleDefault
 	}
 	b.WriteString(renderPairs(s, k.Pairs, budget, keyRole))
-	return strings.TrimRight(b.String(), "\n")
+	return closeWithCaption(s, strings.TrimRight(b.String(), "\n"), Sanitise(k.Caption))
 }
 
 // ------------------------------------------------------------------ Checks
@@ -531,5 +547,5 @@ func (c Checks) Render(s *Stream) string {
 			}
 		}
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return closeWithCaption(s, strings.TrimRight(b.String(), "\n"), Sanitise(c.Caption))
 }
