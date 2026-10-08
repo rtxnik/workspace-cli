@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
@@ -255,5 +256,105 @@ func TestProxyCheckExitCode(t *testing.T) {
 	}))
 	if out, _, err := execCapture(t, "proxy", "check"); err != nil || !strings.Contains(out.String(), "4 of 4 checks passed") {
 		t.Errorf("with everything ok: err = %v, want none; stdout:\n%s", err, out)
+	}
+}
+
+// TestProxyStatusReport pins ws proxy status's report (phase-5 §3.3): a Proxy
+// block whose state and health carry their mark and word, and, when a
+// workspace is connected or the scan failed, a Workspaces block with one
+// route verdict per workspace and the protection summary as its caption.
+func TestProxyStatusReport(t *testing.T) {
+	cfg := config.Config{ProxyNetwork: "ws-proxy", ProxyIP: "172.28.0.2"}
+	type pair struct {
+		k, v  string
+		state output.State
+		mark  bool // the value carries a state
+	}
+	check := func(t *testing.T, name string, kv output.KV, title string, want []pair, caption string) {
+		t.Helper()
+		if kv.Title != title || kv.Caption != caption {
+			t.Errorf("%s: title %q caption %q; want %q, %q", name, kv.Title, kv.Caption, title, caption)
+		}
+		if len(kv.Pairs) != len(want) {
+			t.Fatalf("%s: %d pairs, want %d: %+v", name, len(kv.Pairs), len(want), kv.Pairs)
+		}
+		for i, w := range want {
+			got := kv.Pairs[i]
+			var wantFact output.Fact
+			if w.mark {
+				wantFact = output.StateFact(w.k, w.state, w.v)
+			} else {
+				wantFact = output.Fact{K: w.k, V: w.v}
+			}
+			if got != wantFact {
+				t.Errorf("%s: pair %d = %+v, want %+v", name, i+1, got, wantFact)
+			}
+		}
+	}
+
+	up := docker.Status{Running: true, Health: "healthy", Uptime: "10h18m28s", Image: "devpod-proxy"}
+	prot := []docker.RouteProtection{
+		{Name: "api", Verdict: docker.RouteProtected, Detail: "default via 172.28.0.2"},
+		{Name: "web-frontend", Verdict: docker.RouteUnprotected, Detail: "default via 172.28.0.1 (not the proxy 172.28.0.2)"},
+		{Name: "ml", Verdict: docker.RouteUnknown, Detail: "route unreadable: exit status 1"},
+	}
+	blocks := proxyStatusReport(up, cfg, prot, nil)
+	if len(blocks) != 2 {
+		t.Fatalf("running with workspaces: %d blocks, want 2", len(blocks))
+	}
+	check(t, "running", blocks[0], "Proxy", []pair{
+		{"State", "running", output.StateOK, true},
+		{"Health", "healthy", output.StateOK, true},
+		{"Uptime", "10h18m28s", 0, false},
+		{"Image", "devpod-proxy", 0, false},
+		{"Network", "ws-proxy (172.28.0.2)", 0, false},
+	}, "")
+	check(t, "running", blocks[1], "Workspaces", []pair{
+		{"api", "protected", output.StateOK, true},
+		{"web-frontend", "unprotected: default via 172.28.0.1 (not the proxy 172.28.0.2)", output.StateFail, true},
+		{"ml", "unknown: route unreadable: exit status 1", output.StateUnknown, true},
+	}, "1 of 3 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)")
+
+	for health, want := range map[string]pair{
+		"unhealthy":  {"Health", "unhealthy", output.StateFail, true},
+		"starting":   {"Health", "starting", output.StateBusy, true},
+		"restarting": {"Health", "restarting", output.StateUnknown, true},
+	} {
+		st := up
+		st.Health = health
+		check(t, health, proxyStatusReport(st, cfg, nil, nil)[0], "Proxy", []pair{
+			{"State", "running", output.StateOK, true}, want,
+			{"Uptime", "10h18m28s", 0, false}, {"Image", "devpod-proxy", 0, false},
+			{"Network", "ws-proxy (172.28.0.2)", 0, false},
+		}, "")
+	}
+
+	blocks = proxyStatusReport(docker.Status{}, cfg, nil, errors.New("inspect network: not found"))
+	if len(blocks) != 2 {
+		t.Fatalf("stopped, scan failed: %d blocks, want 2", len(blocks))
+	}
+	check(t, "stopped", blocks[0], "Proxy", []pair{
+		{"State", "stopped", output.StateIdle, true},
+		{"Network", "ws-proxy (172.28.0.2)", 0, false},
+	}, "")
+	check(t, "stopped", blocks[1], "Workspaces", []pair{{"Route protection", "", output.StateUnknown, true}},
+		"protection scan failed: inspect network: not found (workspace protection UNKNOWN)")
+
+	if blocks := proxyStatusReport(up, cfg, nil, nil); len(blocks) != 1 {
+		t.Errorf("no workspace connected and no scan error: %d blocks, want the Proxy block alone", len(blocks))
+	}
+}
+
+// TestReportBlocksAreSeparated pins writeReport's composition: one blank line
+// between two blocks, none after the last, one write.
+func TestReportBlocksAreSeparated(t *testing.T) {
+	var b strings.Builder
+	s := output.NewStreamAt(&b, 80, false, output.ColourNone, false)
+	err := writeReport(&b, s, output.KV{Title: "A", Pairs: []output.Fact{{K: "k", V: "v"}}}, output.KV{Title: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "A\n  k  v\n\nB\n"; b.String() != want {
+		t.Errorf("got %q; want one blank line between the blocks, %q", b.String(), want)
 	}
 }

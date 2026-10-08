@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/hysteria2"
@@ -124,58 +123,12 @@ var proxyStatusCmd = &cobra.Command{
 			})
 		}
 
-		stateStatus := "stopped"
-		if st.Running {
-			stateStatus = "running"
-		}
-
-		label := output.StyleDim.Render
-		var lines []string
-		lines = append(lines, fmt.Sprintf("%s  %s", label("State"), output.StatusText(stateStatus)))
-		if st.Health != "" {
-			lines = append(lines, fmt.Sprintf("%s %s", label("Health"), output.StatusText(st.Health)))
-		}
-		if st.Uptime != "" {
-			lines = append(lines, fmt.Sprintf("%s %s", label("Uptime"), st.Uptime))
-		}
-		if st.Image != "" {
-			lines = append(lines, fmt.Sprintf("%s  %s", label("Image"), st.Image))
-		}
-		lines = append(lines, fmt.Sprintf("%s  %s (%s)",
-			label("Network"), cfg.ProxyNetwork, cfg.ProxyIP))
-
-		// Connected workspaces + route-protection summary (single read-only scan).
 		prot, perr := docker.WorkspaceRouteProtection(cfg)
-		if names := protectionNames(prot); len(names) > 0 {
-			lines = append(lines, "")
-			lines = append(lines, output.StyleHeader.Render("Connected Workspaces"))
-			for _, name := range names {
-				lines = append(lines, "  "+name)
-			}
+		var blocks []reportBlock
+		for _, kv := range proxyStatusReport(st, cfg, prot, perr) {
+			blocks = append(blocks, kv)
 		}
-		if perr != nil {
-			lines = append(lines, "")
-			lines = append(lines, output.StyleHeader.Render("Protection"))
-			lines = append(lines, "  "+output.StyleError.Render("✗ ")+"protection scan failed: "+perr.Error()+" (workspace protection UNKNOWN)")
-		} else if summary, anyUnprot := protectionSummary(prot); summary != "" {
-			lines = append(lines, "")
-			lines = append(lines, output.StyleHeader.Render("Protection"))
-			marked := summary
-			if anyUnprot {
-				marked = output.StyleError.Render("✗ ") + summary
-			}
-			lines = append(lines, "  "+marked)
-		}
-
-		box := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(output.Blue).
-			BorderTop(true).
-			Padding(0, 2).
-			Render(output.StyleHeader.Render("Proxy") + "\n\n" + strings.Join(lines, "\n"))
-
-		fmt.Println(box)
-		return nil
+		return writeReport(cmd.OutOrStdout(), output.Out(), blocks...)
 	},
 }
 
@@ -771,4 +724,60 @@ func proxyCheckReport(results []docker.CheckResult) output.Checks {
 		items = append(items, output.Check{Name: r.Name, State: st})
 	}
 	return output.Checks{Title: "Proxy prerequisites", Items: items, Caption: checksCaption(items)}
+}
+
+// proxyStatusReport is ws proxy status's report: the Proxy block, its state
+// and health carrying their mark and word, and — when a workspace is
+// connected or the route scan failed — a Workspaces block with one route
+// verdict per workspace, closed by the protection summary.
+func proxyStatusReport(st docker.Status, cfg config.Config, prot []docker.RouteProtection, perr error) []output.KV {
+	state := output.StateFact("State", output.StateIdle, "stopped")
+	if st.Running {
+		state = output.StateFact("State", output.StateOK, "running")
+	}
+	pairs := []output.Fact{state}
+	if st.Health != "" {
+		hs := output.StateUnknown
+		switch st.Health {
+		case "healthy":
+			hs = output.StateOK
+		case "unhealthy":
+			hs = output.StateFail
+		case "starting":
+			hs = output.StateBusy
+		}
+		pairs = append(pairs, output.StateFact("Health", hs, st.Health))
+	}
+	if st.Uptime != "" {
+		pairs = append(pairs, output.Fact{K: "Uptime", V: st.Uptime})
+	}
+	if st.Image != "" {
+		pairs = append(pairs, output.Fact{K: "Image", V: st.Image})
+	}
+	pairs = append(pairs, output.Fact{K: "Network", V: fmt.Sprintf("%s (%s)", cfg.ProxyNetwork, cfg.ProxyIP)})
+	blocks := []output.KV{{Title: "Proxy", Pairs: pairs}}
+
+	switch {
+	case perr != nil:
+		blocks = append(blocks, output.KV{
+			Title:   "Workspaces",
+			Pairs:   []output.Fact{output.StateFact("Route protection", output.StateUnknown, "")},
+			Caption: "protection scan failed: " + perr.Error() + " (workspace protection UNKNOWN)",
+		})
+	case len(prot) > 0:
+		ws := make([]output.Fact, 0, len(prot))
+		for _, p := range prot {
+			switch p.Verdict {
+			case docker.RouteProtected:
+				ws = append(ws, output.StateFact(p.Name, output.StateOK, "protected"))
+			case docker.RouteUnprotected:
+				ws = append(ws, output.StateFact(p.Name, output.StateFail, "unprotected: "+p.Detail))
+			default:
+				ws = append(ws, output.StateFact(p.Name, output.StateUnknown, "unknown: "+p.Detail))
+			}
+		}
+		summary, _ := protectionSummary(prot)
+		blocks = append(blocks, output.KV{Title: "Workspaces", Pairs: ws, Caption: summary})
+	}
+	return blocks
 }
