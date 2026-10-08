@@ -396,6 +396,9 @@ var streamsRows = []streamsRow{
 	{name: "ws proxy doctor --json: no daemon", args: []string{"proxy", "doctor", "--json"}, code: 1,
 		stdout: "{\n  \"ok\": false,\n  \"failedAt\": 0,\n  \"checks\": [\n    {\n      \"name\": \"docker reachable\",\n" +
 			"      \"ok\": false,\n      \"fix\": \"Start Docker (Docker Desktop or the daemon) and retry.\"\n    }\n  ]\n}\n"},
+	{name: "ws vault doctor: mixed bands", args: []string{"vault", "doctor"}, stub: "vault-doctor-mixed", code: 2,
+		check: reportCheck("Vault doctor", "  ⚠ degraded  stale-lock-files", "  ✗ failed    vault-ai-token",
+			"              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles", "Overall: red (exit 2)")},
 	{name: "ws proxy up: no docker", args: []string{"proxy", "up"}, code: 1,
 		stderr: "~ Starting proxy\n" +
 			"✗ Starting proxy  <t>\n" +

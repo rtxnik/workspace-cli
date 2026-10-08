@@ -296,3 +296,73 @@ exit 4
 |Failed at check 4 of 13: datapath
 |contract (image ↔ profile)
 --- stderr (0 bytes)
+=== ws vault doctor: mixed bands at COLUMNS=80
+exit 2
+--- stdout (1118 bytes)
+|Vault doctor
+|  ✓ ok        orphan-mcp-subprocess
+|              0 orphan MCP subprocesses
+|  ⚠ degraded  stale-lock-files
+|              1 stale lock(s): /srv/vault-ai/_tooling/state/ingest.lock
+|              Fix: re-run with `ws vault doctor --clear-stale-locks --yes` to
+|              remove (operator-controlled per CONTEXT D-13)
+|  ✗ failed    vault-ai-token
+|              VAULT_AI_TOKEN unset or empty
+|              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles
+|              ADR-sec-02 for the age key flow
+|  ✗ failed    token-fd-pass
+|              stage=newclient: VAULT_AI_TOKEN not set
+|              Fix: see RESEARCH §Pitfall 7 + Plan 18-01 for fd-3 wiring; check
+|              `ws vault doctor` token check above
+|  ⚠ degraded  xrepo-contract-parity
+|              check-xrepo-contract.sh not found at
+|              /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: stat
+|              /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: no such file
+|              or directory
+|              Fix: verify Phase 17 deliverable is present in vault-ai checkout
+|Overall: red (exit 2)
+--- stderr (0 bytes)
+=== ws vault doctor: mixed bands at COLUMNS=40
+exit 2
+--- stdout (1373 bytes)
+|Vault doctor
+|  ✓ ok        orphan-mcp-subprocess
+|              0 orphan MCP subprocesses
+|  ⚠ degraded  stale-lock-files
+|              1 stale lock(s):
+|              /srv/vault-ai/_tooling/sta
+|              te/ingest.lock
+|              Fix: re-run with `ws vault
+|              doctor --clear-stale-locks
+|              --yes` to remove
+|              (operator-controlled per
+|              CONTEXT D-13)
+|  ✗ failed    vault-ai-token
+|              VAULT_AI_TOKEN unset or
+|              empty
+|              Fix: provision via
+|              chezmoi+age per ADR-ai-06
+|              §Auth; see dotfiles
+|              ADR-sec-02 for the age key
+|              flow
+|  ✗ failed    token-fd-pass
+|              stage=newclient:
+|              VAULT_AI_TOKEN not set
+|              Fix: see RESEARCH §Pitfall
+|              7 + Plan 18-01 for fd-3
+|              wiring; check `ws vault
+|              doctor` token check above
+|  ⚠ degraded  xrepo-contract-parity
+|              check-xrepo-contract.sh
+|              not found at
+|              /srv/vault-ai/_tooling/lin
+|              t/check-xrepo-contract.sh:
+|              stat
+|              /srv/vault-ai/_tooling/lin
+|              t/check-xrepo-contract.sh:
+|              no such file or directory
+|              Fix: verify Phase 17
+|              deliverable is present in
+|              vault-ai checkout
+|Overall: red (exit 2)
+--- stderr (0 bytes)
