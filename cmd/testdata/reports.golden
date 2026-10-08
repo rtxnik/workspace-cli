@@ -100,6 +100,89 @@ exit 0
 |1 of 2 workspace(s) UNPROTECTED — route
 |not via proxy (run: ws proxy fix-routes)
 --- stderr (0 bytes)
+=== ws proxy test: tunnel and DNS tunnelled at COLUMNS=80
+exit 0
+--- stdout (184 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  198.51.100.9
+|  Tunneled    ✓ yes
+|  Latency     182ms
+|  UDP/DNS     ✓ tunnelled (exit 198.51.100.9)
+|Tunnel active — exit IPs differ
+--- stderr (75 bytes)
+|Probing tunnel (comparing direct vs proxied exit IP)...
+|Probing UDP/DNS...
+=== ws proxy test: tunnel and DNS tunnelled at COLUMNS=40
+exit 0
+--- stdout (198 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  198.51.100.9
+|  Tunneled    ✓ yes
+|  Latency     182ms
+|  UDP/DNS     ✓ tunnelled (exit
+|              198.51.100.9)
+|Tunnel active — exit IPs differ
+--- stderr (75 bytes)
+|Probing tunnel (comparing direct vs
+|proxied exit IP)...
+|Probing UDP/DNS...
+=== ws proxy test: DNS leak at COLUMNS=80
+exit 1
+--- stdout (229 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  198.51.100.9
+|  Tunneled    ✓ yes
+|  Latency     182ms
+|  UDP/DNS     ✗ leak (exit 203.0.113.7 is the direct IP)
+|UDP/DNS LEAK -- resolver saw your real IP 203.0.113.7 (untunnelled)
+--- stderr (75 bytes)
+|Probing tunnel (comparing direct vs proxied exit IP)...
+|Probing UDP/DNS...
+=== ws proxy test: DNS leak at COLUMNS=40
+exit 1
+--- stdout (243 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  198.51.100.9
+|  Tunneled    ✓ yes
+|  Latency     182ms
+|  UDP/DNS     ✗ leak (exit 203.0.113.7
+|              is the direct IP)
+|UDP/DNS LEAK -- resolver saw your real
+|IP 203.0.113.7 (untunnelled)
+--- stderr (75 bytes)
+|Probing tunnel (comparing direct vs
+|proxied exit IP)...
+|Probing UDP/DNS...
+=== ws proxy test: tunnel down at COLUMNS=80
+exit 1
+--- stdout (189 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  203.0.113.7
+|  Tunneled    ✗ no
+|  Latency     95ms
+|  UDP/DNS     - not probed
+|Tunnel NOT active — direct and proxied exit IPs are the same
+--- stderr (56 bytes)
+|Probing tunnel (comparing direct vs proxied exit IP)...
+=== ws proxy test: tunnel down at COLUMNS=40
+exit 1
+--- stdout (189 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  203.0.113.7
+|  Tunneled    ✗ no
+|  Latency     95ms
+|  UDP/DNS     - not probed
+|Tunnel NOT active — direct and proxied
+|exit IPs are the same
+--- stderr (56 bytes)
+|Probing tunnel (comparing direct vs
+|proxied exit IP)...
 === ws proxy doctor: no daemon at COLUMNS=80
 exit 1
 --- stdout (699 bytes)

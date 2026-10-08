@@ -213,6 +213,20 @@ func installExecuteStub(name string) {
 		proxyTestProbeDNSFn = func(config.Config) (proxyengine.DNSProbeResult, error) {
 			return proxyengine.DNSProbeResult{ExitIP: "198.51.100.9"}, nil
 		}
+	case "tunnel-dns-leak":
+		proxyTestProbeFn = func(config.Config) (proxyengine.ProbeResult, error) {
+			return proxyengine.ProbeResult{DirectIP: "203.0.113.7", ProxiedIP: "198.51.100.9", Tunneled: true, Latency: 182 * time.Millisecond}, nil
+		}
+		proxyTestProbeDNSFn = func(config.Config) (proxyengine.DNSProbeResult, error) {
+			return proxyengine.DNSProbeResult{ExitIP: "203.0.113.7"}, nil
+		}
+	case "tunnel-down":
+		proxyTestProbeFn = func(config.Config) (proxyengine.ProbeResult, error) {
+			return proxyengine.ProbeResult{DirectIP: "203.0.113.7", ProxiedIP: "203.0.113.7", Latency: 95 * time.Millisecond}, nil
+		}
+		proxyTestProbeDNSFn = func(config.Config) (proxyengine.DNSProbeResult, error) {
+			panic("stub: the UDP/DNS leg runs with the tunnel down")
+		}
 	case "vault-status-red":
 		vaultStatusRunFn = func(context.Context, *cobra.Command) (*statusReport, error) {
 			return &statusReport{OverallBand: bandRed, ExitCode: 2}, nil

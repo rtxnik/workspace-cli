@@ -32,6 +32,9 @@ func reportsCases() []streamsRow {
 		{name: "ws proxy check: all ok", args: []string{"proxy", "check"}, docker: &fakeHealthyProxy},
 		{name: "ws proxy status: stopped and no network", args: []string{"proxy", "status"}, docker: &fakeDockerState{}},
 		{name: "ws proxy status: one workspace unprotected", args: []string{"proxy", "status"}, docker: &fakeHealthyProxy},
+		{name: "ws proxy test: tunnel and DNS tunnelled", args: []string{"proxy", "test"}, stub: "tunnel-up", docker: &fakeHealthyProxy},
+		{name: "ws proxy test: DNS leak", args: []string{"proxy", "test"}, stub: "tunnel-dns-leak", docker: &fakeHealthyProxy},
+		{name: "ws proxy test: tunnel down", args: []string{"proxy", "test"}, stub: "tunnel-down", docker: &fakeHealthyProxy},
 		{name: "ws proxy doctor: no daemon", args: []string{"proxy", "doctor"}},
 		{name: "ws proxy doctor: the image's datapath differs", args: []string{"proxy", "doctor"}, docker: &fakeHealthyProxy},
 	} {

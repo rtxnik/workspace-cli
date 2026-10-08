@@ -352,6 +352,36 @@ var streamsRows = []streamsRow{
 			"                      172.28.0.2)\n" +
 			"  web-frontend        ✓ protected\n" +
 			"1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)\n"},
+	{name: "ws proxy test: tunnel and DNS tunnelled", args: []string{"proxy", "test"}, stub: "tunnel-up",
+		docker: &fakeHealthyProxy,
+		stdout: "Tunnel\n" +
+			"  Direct IP   203.0.113.7\n" +
+			"  Proxied IP  198.51.100.9\n" +
+			"  Tunneled    ✓ yes\n" +
+			"  Latency     182ms\n" +
+			"  UDP/DNS     ✓ tunnelled (exit 198.51.100.9)\n" +
+			"Tunnel active — exit IPs differ\n",
+		stderr: proxyTestProgress + "Probing UDP/DNS...\n"},
+	{name: "ws proxy test: DNS leak", args: []string{"proxy", "test"}, stub: "tunnel-dns-leak", code: 1,
+		docker: &fakeHealthyProxy,
+		stdout: "Tunnel\n" +
+			"  Direct IP   203.0.113.7\n" +
+			"  Proxied IP  198.51.100.9\n" +
+			"  Tunneled    ✓ yes\n" +
+			"  Latency     182ms\n" +
+			"  UDP/DNS     ✗ leak (exit 203.0.113.7 is the direct IP)\n" +
+			"UDP/DNS LEAK -- resolver saw your real IP 203.0.113.7 (untunnelled)\n",
+		stderr: proxyTestProgress + "Probing UDP/DNS...\n"},
+	{name: "ws proxy test: tunnel down", args: []string{"proxy", "test"}, stub: "tunnel-down", code: 1,
+		docker: &fakeHealthyProxy,
+		stdout: "Tunnel\n" +
+			"  Direct IP   203.0.113.7\n" +
+			"  Proxied IP  203.0.113.7\n" +
+			"  Tunneled    ✗ no\n" +
+			"  Latency     95ms\n" +
+			"  UDP/DNS     - not probed\n" +
+			"Tunnel NOT active — direct and proxied exit IPs are the same\n",
+		stderr: proxyTestProgress},
 	{name: "ws proxy test --json: tunnel and DNS tunnelled", args: []string{"proxy", "test", "--json"}, stub: "tunnel-up",
 		docker: &fakeHealthyProxy,
 		stdout: "{\n  \"directIP\": \"203.0.113.7\",\n  \"proxiedIP\": \"198.51.100.9\",\n  \"tunneled\": true,\n" +
@@ -482,6 +512,10 @@ var streamsRows = []streamsRow{
 	{name: "ws proxy profile list --reveal --json: none", args: []string{"proxy", "profile", "list", "--reveal", "--json"},
 		setup: withoutXrayProfiles, stdout: "[]\n"},
 }
+
+// proxyTestProgress is the progress line ws proxy test prints on stderr
+// before its first probe, in human mode only.
+const proxyTestProgress = "Probing tunnel (comparing direct vs proxied exit IP)...\n"
 
 // proxyProfilesEmpty is what ws proxy profile list answers with no profile.
 const proxyProfilesEmpty = "No proxy profiles yet.\n" +
