@@ -52,8 +52,8 @@ package output
 //     rest of the run, with `go test -race ./...` green and nothing to say so.
 //
 // This file is NEVER build-tagged (decision D-11). Production code branches
-// on these switches directly — measured with the last of them wired: 34
-// references over seven files, blocks.go 7, alloc.go 6, run.go 6, stream.go
+// on these switches directly — measured with the last of them wired: 39
+// references over seven files, run.go 9, blocks.go 8, alloc.go 7, stream.go
 // 5, glyph.go 4, text.go 3, message.go 3 — so tagging the DECLARATION out
 // breaks the ordinary build rather than the harness. The tag goes on the
 // mutation harness and only there. The cost in the shipped binary is one
@@ -149,6 +149,12 @@ type mutantSwitches struct {
 	// A Problem holding only a title then differs from the line Fail prints
 	// for the same text.
 	ProblemTitleUnmarked bool
+
+	// ----------------------------------------- phase-5 §3.1 a KV pair's state
+	// StateFactUTF8 draws a StateFact's mark from the UTF-8 vocabulary
+	// whatever the stream's glyph mode, so an ASCII stream gets `✓ running`
+	// where it should get `+ running`.
+	StateFactUTF8 bool
 
 	// ---------------------------------------------------- §4.7 step runner
 	FrameUncut         bool // the frame's lines are laid out against the whole budget, not budget − 1

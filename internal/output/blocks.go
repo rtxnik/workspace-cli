@@ -43,6 +43,9 @@ func StateFact(k string, st State, label string) Fact {
 // paragraph breaks and is not painted.
 func (f Fact) display(mode GlyphMode) (string, Role) {
 	if f.isState {
+		if mutants.StateFactUTF8 {
+			mode = GlyphUTF8
+		}
 		return stateText(f.state, SanitiseInline(f.V), mode), stateRole(f.state)
 	}
 	return Sanitise(f.V), RoleDefault
