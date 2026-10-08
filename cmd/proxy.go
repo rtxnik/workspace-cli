@@ -238,17 +238,21 @@ var proxyTestCmd = &cobra.Command{
 			return fmt.Errorf("probe failed: %s", err)
 		}
 
-		if jsonFlag {
-			// Run the same UDP/DNS-leak leg the human path runs, so automation
-			// keying on the JSON sees a leak the operator screen would catch
-			// (SEC2-02). DNS is probed only when the TCP tunnel holds, mirroring
-			// the human path.
-			var dnsExit string
-			if result.Tunneled {
-				dnsRes, _ := proxyTestProbeDNSFn(cfg)
-				dnsExit = dnsRes.ExitIP
+		// The UDP/DNS leg (H10) proves the non-TCP path is tunnelled too. It
+		// runs only when the TCP tunnel holds, under --json as on the screen,
+		// so that automation keying on the JSON sees a leak the operator
+		// would (SEC2-02); one decision, testDNSVerdict, sets the verdict
+		// of both and the exit code.
+		var dnsExit string
+		if result.Tunneled {
+			if !jsonFlag {
+				output.Info("Probing UDP/DNS...")
 			}
-			verdict, exitNonZero := testDNSVerdict(result, dnsExit)
+			dnsRes, _ := proxyTestProbeDNSFn(cfg)
+			dnsExit = dnsRes.ExitIP
+		}
+		verdict, exitNonZero := testDNSVerdict(result, dnsExit)
+		if jsonFlag {
 			if err := output.WriteJSON(cmd.OutOrStdout(), testJSONResult{
 				DirectIP:  result.DirectIP,
 				ProxiedIP: result.ProxiedIP,
@@ -259,37 +263,10 @@ var proxyTestCmd = &cobra.Command{
 			}); err != nil {
 				return err
 			}
-			if exitNonZero {
-				return &cliErrorWithExit{code: 1, msg: ""}
-			}
-			return nil
+		} else if err := writeReport(cmd.OutOrStdout(), output.Out(), tunnelReport(result, dnsExit)); err != nil {
+			return err
 		}
-
-		tunnelMark := "✗"
-		if result.Tunneled {
-			tunnelMark = "✓"
-		}
-		label := output.StyleDim.Render
-		fmt.Printf("%s  %s\n", label("Direct IP "), result.DirectIP)
-		fmt.Printf("%s %s\n", label("Proxied IP"), result.ProxiedIP)
-		fmt.Printf("%s   %s\n", label("Tunneled "), tunnelMark)
-		fmt.Printf("%s  %s\n", label("Latency  "), result.Latency.Truncate(time.Millisecond).String())
-
-		if result.Tunneled {
-			output.Success("Tunnel active — exit IPs differ")
-			// UDP/DNS leg (H10): prove the non-TCP path is tunnelled too.
-			dnsRes, _ := proxyTestProbeDNSFn(cfg)
-			switch proxyengine.ClassifyDNS(result.DirectIP, result.ProxiedIP, dnsRes.ExitIP) {
-			case proxyengine.DNSLeak:
-				output.Warn(fmt.Sprintf("UDP/DNS LEAK -- resolver saw your real IP %s (untunnelled)", dnsRes.ExitIP))
-				return &cliErrorWithExit{code: 1, msg: ""}
-			case proxyengine.DNSInconclusive:
-				output.Info("UDP/DNS: inconclusive (no UDP/DNS egress observed)")
-			default:
-				output.Success(fmt.Sprintf("UDP/DNS tunnelled -- exit %s", dnsRes.ExitIP))
-			}
-		} else {
-			output.Warn("Tunnel NOT active — direct and proxied exit IPs are the same")
+		if exitNonZero {
 			return &cliErrorWithExit{code: 1, msg: ""}
 		}
 		return nil
@@ -719,6 +696,39 @@ func testDNSVerdict(result proxyengine.ProbeResult, dnsExit string) (verdict str
 		// "tunneled" claim (this is a never-false-green security verdict).
 		return "inconclusive", false
 	}
+}
+
+// tunnelReport is ws proxy test's report (phase-5 §3.6): the two exit IPs,
+// whether they differ, the probe's latency and the UDP/DNS leg, with the
+// run's verdict as its caption. The UDP/DNS state comes from testDNSVerdict,
+// the decision the JSON and the exit code follow, so the screen cannot read
+// greener than either.
+func tunnelReport(r proxyengine.ProbeResult, dnsExit string) output.KV {
+	tunneled := output.StateFact("Tunneled", output.StateFail, "no")
+	caption := "Tunnel NOT active — direct and proxied exit IPs are the same"
+	if r.Tunneled {
+		tunneled = output.StateFact("Tunneled", output.StateOK, "yes")
+		caption = "Tunnel active — exit IPs differ"
+	}
+	var dns output.Fact
+	switch verdict, _ := testDNSVerdict(r, dnsExit); verdict {
+	case "skipped":
+		dns = output.StateFact("UDP/DNS", output.StateIdle, "not probed")
+	case "leak":
+		dns = output.StateFact("UDP/DNS", output.StateFail, fmt.Sprintf("leak (exit %s is the direct IP)", dnsExit))
+		caption = fmt.Sprintf("UDP/DNS LEAK -- resolver saw your real IP %s (untunnelled)", dnsExit)
+	case "tunneled":
+		dns = output.StateFact("UDP/DNS", output.StateOK, fmt.Sprintf("tunnelled (exit %s)", dnsExit))
+	default:
+		dns = output.StateFact("UDP/DNS", output.StateUnknown, "inconclusive")
+	}
+	return output.KV{Title: "Tunnel", Pairs: []output.Fact{
+		{K: "Direct IP", V: r.DirectIP},
+		{K: "Proxied IP", V: r.ProxiedIP},
+		tunneled,
+		{K: "Latency", V: r.Latency.Truncate(time.Millisecond).String()},
+		dns,
+	}, Caption: caption}
 }
 
 // proxyCheckReport is ws proxy check's report: one line per prerequisite, in

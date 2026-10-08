@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
@@ -70,6 +72,39 @@ func TestTestDNSVerdict_JSONNotWeakerThanHuman(t *testing.T) {
 				t.Errorf("exitNonZero = %v, want %v", nonZero, c.wantNonZero)
 			}
 		})
+	}
+}
+
+// TestTunnelReport pins ws proxy test's report (phase-5 §3.6) in each state
+// of the run: the UDP/DNS leg's mark and word, and the verdict the caption
+// carries — a leak's over the tunnel's.
+func TestTunnelReport(t *testing.T) {
+	up := proxyengine.ProbeResult{DirectIP: "203.0.113.7", ProxiedIP: "198.51.100.9", Tunneled: true, Latency: 182600 * time.Microsecond}
+	down := proxyengine.ProbeResult{DirectIP: "203.0.113.7", ProxiedIP: "203.0.113.7", Latency: 95 * time.Millisecond}
+	report := func(r proxyengine.ProbeResult, tunneled, dns output.Fact, latency, caption string) output.KV {
+		return output.KV{Title: "Tunnel", Pairs: []output.Fact{
+			{K: "Direct IP", V: r.DirectIP}, {K: "Proxied IP", V: r.ProxiedIP}, tunneled, {K: "Latency", V: latency}, dns,
+		}, Caption: caption}
+	}
+	yes, no := output.StateFact("Tunneled", output.StateOK, "yes"), output.StateFact("Tunneled", output.StateFail, "no")
+	for _, c := range []struct {
+		name    string
+		result  proxyengine.ProbeResult
+		dnsExit string
+		want    output.KV
+	}{
+		{"tunnelled", up, "198.51.100.9", report(up, yes, output.StateFact("UDP/DNS", output.StateOK, "tunnelled (exit 198.51.100.9)"),
+			"182ms", "Tunnel active — exit IPs differ")},
+		{"leak", up, "203.0.113.7", report(up, yes, output.StateFact("UDP/DNS", output.StateFail, "leak (exit 203.0.113.7 is the direct IP)"),
+			"182ms", "UDP/DNS LEAK -- resolver saw your real IP 203.0.113.7 (untunnelled)")},
+		{"inconclusive", up, "", report(up, yes, output.StateFact("UDP/DNS", output.StateUnknown, "inconclusive"),
+			"182ms", "Tunnel active — exit IPs differ")},
+		{"down", down, "", report(down, no, output.StateFact("UDP/DNS", output.StateIdle, "not probed"),
+			"95ms", "Tunnel NOT active — direct and proxied exit IPs are the same")},
+	} {
+		if got := tunnelReport(c.result, c.dnsExit); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", c.name, got, c.want)
+		}
 	}
 }
 
