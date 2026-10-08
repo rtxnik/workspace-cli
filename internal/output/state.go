@@ -104,15 +104,16 @@ func widestStateMark(mode GlyphMode) int {
 // build their own one-off line rather than a block.
 //
 // Nothing inside this layer calls it, and that is §4.5's seam rather than an
-// oversight: the first caller is phase 2's migration of the status commands.
-// An exported identifier is invisible to the `unused` linter, so it would ship
-// unexercised — TestStreamStateHelpers in acceptance_test.go is the one thing
-// that runs it.
+// oversight; outside it, only tests do. An exported identifier is invisible to
+// the `unused` linter, so it would ship unexercised — TestStreamStateHelpers
+// in acceptance_test.go is the one thing that runs it.
 func (s *Stream) StateMark(st State) string { return stateMark(st, s.mode) }
 
 // StateText renders "mark + label" for this stream, defaulting the label to
-// the state's fixed word. It has no caller inside the layer either; see
-// StateMark above.
+// the state's fixed word. Nothing inside the layer calls it either; its one
+// caller is the workspace selector of ws ssh and ws code, whose options it
+// labels (cmd/workspace.go). A report's state goes through a block instead:
+// Mark in a table cell, StateFact in a KV pair, a Check's state.
 func (s *Stream) StateText(st State, label string) string {
 	return stateText(st, label, s.mode)
 }

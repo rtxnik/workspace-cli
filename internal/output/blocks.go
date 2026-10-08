@@ -243,7 +243,9 @@ type Empty struct {
 	Steps   []Remedy
 }
 
-// KV is a titled list of ordered pairs. A report body: Out() (§4.7).
+// KV is a titled list of ordered pairs. It goes to the stream of what it
+// belongs to (§4.7): a report to Out(), a summary that belongs to a prompt —
+// the profile-create wizard's — to Err().
 //
 // Keys are painted RoleMuted unless PlainKeys is set, which renders them with
 // no role and so with no SGR at all. The zero value is the muted form every
