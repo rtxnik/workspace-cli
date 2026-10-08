@@ -969,8 +969,8 @@ func TestKVPlainKeys(t *testing.T) {
 	if mutants != (mutantSwitches{}) {
 		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
 	}
-	muted := fxSGR(t, roleColours[RoleMuted].trueColour, ColourTrue)
-	accent := fxSGR(t, roleColours[RoleAccent].trueColour, ColourTrue)
+	muted := fxSGR(t, string(roleColours[RoleMuted].trueColour), ColourTrue)
+	accent := fxSGR(t, string(roleColours[RoleAccent].trueColour), ColourTrue)
 	key := strings.Repeat("k", 20) // valueIndent = 2 + 20 + 2 = 24
 	const value, valueIndent = "on", 24
 
@@ -1089,9 +1089,9 @@ func TestStateFactDrawsMarkAndLabel(t *testing.T) {
 	if mutants != (mutantSwitches{}) {
 		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
 	}
-	ok := fxSGR(t, roleColours[RoleOK].trueColour, ColourTrue)
-	fail := fxSGR(t, roleColours[RoleFail].trueColour, ColourTrue)
-	muted := fxSGR(t, roleColours[RoleMuted].trueColour, ColourTrue)
+	ok := fxSGR(t, string(roleColours[RoleOK].trueColour), ColourTrue)
+	fail := fxSGR(t, string(roleColours[RoleFail].trueColour), ColourTrue)
+	muted := fxSGR(t, string(roleColours[RoleMuted].trueColour), ColourTrue)
 	k := KV{Title: "Proxy", Pairs: []Fact{
 		StateFact("State", StateOK, "running"),
 		StateFact("Health", StateFail, ""),
@@ -1164,7 +1164,7 @@ func TestBlockCaptionsCloseTheirBlock(t *testing.T) {
 	if mutants != (mutantSwitches{}) {
 		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
 	}
-	muted := fxSGR(t, roleColours[RoleMuted].trueColour, ColourTrue)
+	muted := fxSGR(t, string(roleColours[RoleMuted].trueColour), ColourTrue)
 	const caption = "1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)"
 	wantCaption := []string{
 		"1 of 2 workspace(s) UNPROTECTED — route",

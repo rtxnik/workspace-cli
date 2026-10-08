@@ -112,15 +112,18 @@ const (
 	ColourTrue
 )
 
-// roleColours holds the gruvbox hue for each role at each colour level.
+// roleColours holds the gruvbox hue for each role at each colour level, each
+// written out as the lipgloss.Color it is painted with. The colour-literal
+// guard (antidrift_test.go) fails when this file names no `lipgloss.Color("#`
+// at all, so the literals it finds are the palette the layer paints with.
 // RoleDefault is deliberately absent: it never emits SGR.
-var roleColours = map[Role]struct{ trueColour, c256, c16 string }{
-	RoleOK:     {"#b8bb26", "142", "2"},
-	RoleWarn:   {"#fabd2f", "214", "3"},
-	RoleFail:   {"#fb4934", "167", "1"},
-	RoleInfo:   {"#83a598", "109", "4"},
-	RoleMuted:  {"#928374", "245", "8"},
-	RoleAccent: {"#d3869b", "175", "5"},
+var roleColours = map[Role]struct{ trueColour, c256, c16 lipgloss.Color }{
+	RoleOK:     {lipgloss.Color("#b8bb26"), lipgloss.Color("142"), lipgloss.Color("2")},
+	RoleWarn:   {lipgloss.Color("#fabd2f"), lipgloss.Color("214"), lipgloss.Color("3")},
+	RoleFail:   {lipgloss.Color("#fb4934"), lipgloss.Color("167"), lipgloss.Color("1")},
+	RoleInfo:   {lipgloss.Color("#83a598"), lipgloss.Color("109"), lipgloss.Color("4")},
+	RoleMuted:  {lipgloss.Color("#928374"), lipgloss.Color("245"), lipgloss.Color("8")},
+	RoleAccent: {lipgloss.Color("#d3869b"), lipgloss.Color("175"), lipgloss.Color("5")},
 }
 
 // colourFor returns the terminal colour for a role at a colour level, and
@@ -135,11 +138,11 @@ func colourFor(role Role, level ColourLevel) (lipgloss.TerminalColor, bool) {
 	}
 	switch level {
 	case ColourTrue:
-		return lipgloss.Color(entry.trueColour), true
+		return entry.trueColour, true
 	case Colour256:
-		return lipgloss.Color(entry.c256), true
+		return entry.c256, true
 	case Colour16:
-		return lipgloss.Color(entry.c16), true
+		return entry.c16, true
 	}
 	return nil, false
 }

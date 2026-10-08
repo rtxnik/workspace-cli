@@ -336,13 +336,14 @@ var assertAntiDrift = globalAssertion{
 // Measured on this tree, REPO-WIDE and not merely in this package:
 //
 //	$ grep -rn 'lipgloss.Color("#' --include='*.go' . | grep -v _test.go | sed 's/:[0-9]*:.*//' | sort | uniq -c
-//	     19 ./internal/output/theme.go
+//	     25 ./internal/output/theme.go
 //	$ find . -name theme.go -not -path './.git/*'
 //	./internal/output/theme.go
 //
-// 19 matches, all in the permitted file, zero outside it, and exactly one file
-// in the tree called theme.go. (An earlier draft pinned 18; the palette gained
-// a value since.) Five further matches are in TEST files — one in
+// 25 matches, all in the permitted file, zero outside it, and exactly one file
+// in the tree called theme.go: the eighteen exported palette values, the six
+// true-colour literals of roleColours, and a comment. (An earlier draft pinned
+// 18, then 19.) Five further matches are in TEST files — one in
 // mutation_test.go and four in this one — and the scanner skips every one of
 // them by the `_test.go` suffix. The assertion is therefore GREEN before any
 // of this work happens. Without this control it would be an assertion that
