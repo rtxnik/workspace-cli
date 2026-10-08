@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 
 	"github.com/docker/docker/api/types/network"
@@ -99,7 +100,8 @@ func classifyRouteProtection(via string, lookupErr error, proxyIP string) RouteP
 // ProxyFixRoutes' job, DR-SH1-4). A container whose route cannot be read is
 // UNKNOWN, never PROTECTED. Enumeration failure itself is returned as an
 // error so the caller renders UNKNOWN rather than an empty, falsely
-// reassuring scan.
+// reassuring scan. The result is in name order, as ProxyConnectedContainers'
+// is: the endpoints come from a map, whose iteration Go randomises.
 //
 // NOTE: this is a third read-only reader of the proxy-network route topology
 // (checkDefaultRoute and ProxyFixRoutes are the others); now that
@@ -134,6 +136,7 @@ func WorkspaceRouteProtection(cfg config.Config) ([]RouteProtection, error) {
 		rp.Name = ep.Name
 		out = append(out, rp)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
