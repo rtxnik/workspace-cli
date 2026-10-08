@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/pflag"
 )
 
@@ -466,5 +467,70 @@ func TestVaultDoctorKillOrphansWithYes(t *testing.T) {
 		if i >= len(gotPIDs) || gotPIDs[i] != pid {
 			t.Errorf("PID[%d] mismatch: want %d got %v", i, pid, gotPIDs)
 		}
+	}
+}
+
+// TestVaultDoctorReport pins ws vault doctor's report (phase-5 §3.7): each
+// check's band as its state, its detail as the note with its remediation as
+// a second paragraph, and the worst band with its exit code as the caption.
+func TestVaultDoctorReport(t *testing.T) {
+	checks := []*doctorCheck{
+		{Name: "orphan-mcp-subprocess", Band: bandGreen, Detail: "0 orphan MCP subprocesses"},
+		{Name: "vault-ai-token", Band: bandRed, Detail: "VAULT_AI_TOKEN unset or empty", Remediation: "provision via chezmoi+age"},
+		{Name: "xrepo-contract-parity", Band: bandYellow, Detail: "check-xrepo-contract.sh not found", Remediation: "verify the checkout"},
+		{Name: "token-fd-pass", Band: bandRed, Remediation: "re-run with --verbose"},
+		{Name: "future-check", Band: statusBand("purple"), Detail: "a band no check produces today"},
+	}
+	want := output.Checks{Title: "Vault doctor", Items: []output.Check{
+		{Name: "orphan-mcp-subprocess", State: output.StateOK, Note: "0 orphan MCP subprocesses"},
+		{Name: "vault-ai-token", State: output.StateFail, Note: "VAULT_AI_TOKEN unset or empty\nFix: provision via chezmoi+age"},
+		{Name: "xrepo-contract-parity", State: output.StateAdvisory, Note: "check-xrepo-contract.sh not found\nFix: verify the checkout"},
+		{Name: "token-fd-pass", State: output.StateFail, Note: "Fix: re-run with --verbose"},
+		{Name: "future-check", State: output.StateUnknown, Note: "a band no check produces today"},
+	}, Caption: "Overall: red (exit 2)"}
+	got := vaultDoctorReport(checks, bandRed, 2)
+	if got.Title != want.Title || got.Caption != want.Caption {
+		t.Errorf("title %q caption %q; want %q, %q", got.Title, got.Caption, want.Title, want.Caption)
+	}
+	if len(got.Items) != len(want.Items) {
+		t.Fatalf("%d lines, want %d: %+v", len(got.Items), len(want.Items), got.Items)
+	}
+	for i, w := range want.Items {
+		if got.Items[i] != w {
+			t.Errorf("line %d = %+v; want %+v", i+1, got.Items[i], w)
+		}
+	}
+}
+
+// TestVaultDoctorVerdictOnStdout: the human report and its verdict go to
+// stdout, nothing to stderr, and the command returns the band's exit code
+// with no message, so the root prints nothing of its own.
+func TestVaultDoctorVerdictOnStdout(t *testing.T) {
+	restore := installDoctorMocks(t)
+	t.Cleanup(restore)
+	resetVaultDoctorFlags(t)
+	doctorTokenCheckFn = func() *doctorCheck {
+		return &doctorCheck{Name: "vault-ai-token", Band: bandRed, Detail: "VAULT_AI_TOKEN unset or empty", Remediation: "provision it"}
+	}
+
+	var out, errOut bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	rootCmd.SetArgs([]string{"vault", "doctor"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
+	err := rootCmd.Execute()
+	var cerr *cliErrorWithExit
+	if !errors.As(err, &cerr) || cerr.code != 2 || cerr.msg != "" {
+		t.Errorf("returned %#v; want a cliErrorWithExit with code 2 and no message", err)
+	}
+	if !strings.HasPrefix(out.String(), "Vault doctor\n") || !strings.HasSuffix(out.String(), "\nOverall: red (exit 2)\n") {
+		t.Errorf("stdout is not the report closed by its verdict:\n%s", out.String())
+	}
+	if errOut.Len() != 0 {
+		t.Errorf("stderr = %q; want nothing", errOut.String())
 	}
 }

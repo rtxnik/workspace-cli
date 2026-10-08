@@ -527,6 +527,22 @@ func renderStatusReport(out io.Writer, rep *statusReport, jsonMode bool) error {
 	return err
 }
 
+// bandState is a band's state in a report (phase-5 §3.7): green ok, yellow
+// degraded, red failed, and any other band unknown, never ok. It draws the
+// band and decides nothing: the exit code is mcp.HealthBandExitCode's.
+func bandState(b statusBand) output.State {
+	switch b {
+	case bandGreen:
+		return output.StateOK
+	case bandYellow:
+		return output.StateAdvisory
+	case bandRed:
+		return output.StateFail
+	default:
+		return output.StateUnknown
+	}
+}
+
 func bandIcon(b statusBand) string {
 	switch b {
 	case bandGreen:
