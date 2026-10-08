@@ -29,7 +29,7 @@ The xray container (`dev-proxy`) mounts the whole `~/.config/xray/` directory re
 ## First-time setup
 
 ```bash
-ws proxy check                              # verify Docker + image + config
+ws proxy check                              # verify Docker + image + config (exit 1 unless all pass)
 ws proxy init 'vless://<your-first-uri>'    # generates the first profile (VLESS)
 ws proxy init 'hysteria2://<auth>@host:443' # or a Hysteria2 URI
 ws proxy up                                 # start the container
@@ -109,7 +109,7 @@ ws proxy profile add hy2-exit 'hysteria2://<auth>@host:443?sni=host&pinSHA256=AA
 ws proxy profile add hy2-exit 'hysteria2://<auth>@host:443?sni=host&pinSHA256=<base64>'
 ```
 
-`ws proxy doctor` prints the observed leaf SHA-256 of the endpoint as lowercase hex without colons (via a best-effort TCP-TLS probe) — the same form `ws` stores in the config. Because Hysteria2 is QUIC/UDP, a TCP refusal is normal — in that case the doctor prints a caveat and marks the check as inconclusive rather than failed. To get the fingerprint from outside the tool, you can use (the colon-hex it prints is accepted verbatim by `?pinSHA256=`):
+`ws proxy doctor` prints the observed leaf SHA-256 of the endpoint as lowercase hex without colons (via a best-effort TCP-TLS probe) — the same form `ws` stores in the config. Because Hysteria2 is QUIC/UDP, a TCP refusal is normal — in that case the doctor prints a caveat and the check reads `? unknown` (inconclusive) rather than `✗ failed`. To get the fingerprint from outside the tool, you can use (the colon-hex it prints is accepted verbatim by `?pinSHA256=`):
 
 ```bash
 openssl s_client -connect host:443 2>/dev/null </dev/null \
@@ -150,7 +150,31 @@ ws proxy profile add hy2-hop 'hysteria2://<auth>@host:443,5000-6000?sni=host&hop
 12. Protocol sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
 13. Inbound `sockopt.tproxy` (advisory)
 
-It stops at the first hard failure and prints a remediation hint plus exits non-zero. Use `--json` for a machine-readable report.
+It stops at the first hard failure. The report still lists all thirteen checks: those that ran with their state and finding, the failed one with a `Fix:` line, and those after it as `? unknown`. Its last line names the failure, or counts the states when nothing failed (`13 of 13 checks passed`; `11 of 13 checks passed, 2 degraded` when advisory findings remain). The exit code is the failed check's number, 0 when none failed. Use `--json` for a machine-readable report.
+
+```
+Proxy doctor
+  ✓ ok        docker reachable
+  ✓ ok        proxy image present
+              devpod-proxy
+  ✓ ok        active profile valid (xray -test)
+              profile "primary"
+  ✗ failed    datapath contract (image ↔ profile)
+              image datapath="tproxy" but active profile mode="redirect"
+              (black-hole risk)
+              Fix: Realign image and profile: ws proxy rebuild (and, if the
+              profile is stale, ws proxy upgrade-config)
+  ? unknown   proxy container running and healthy
+  ? unknown   tproxy preconditions
+  ? unknown   ws-proxy network + subnet
+  ? unknown   dev-container default route via proxy
+  ? unknown   self-egress (proxy tunnel exit-IP)
+  ? unknown   forwarding datapath (dev-container exit-IP)
+  ? unknown   workspace IPv6 fail-closed
+  ? unknown   protocol sanity
+  ? unknown   inbound sockopt.tproxy (advisory)
+Failed at check 4 of 13: datapath contract (image ↔ profile)
+```
 
 ```bash
 ws proxy doctor            # human-readable, fail-fast
@@ -161,7 +185,7 @@ ws proxy doctor --json     # full JSON result list
 
 The proxy captures traffic via an IPv4-only TPROXY rule. A workspace container that has a global IPv6 default route can send v6 traffic straight to the internet, bypassing the tunnel entirely — the capture never sees it, so `ws proxy test` and the human eye both look clean while v6 packets leak unencrypted and unproxied.
 
-`ws proxy doctor`'s "workspace IPv6 fail-closed" check (step 11 above) asserts every connected workspace has no such route. It fails hard, naming the affected workspace(s), when one is found; it reports the posture as UNKNOWN (not a pass, not a leak) when a workspace's route table can't be read.
+`ws proxy doctor`'s "workspace IPv6 fail-closed" check (step 11 above) asserts every connected workspace has no such route. It fails hard, naming the affected workspace(s), when one is found; it reports the posture as UNKNOWN (not a pass, not a leak) when a workspace's route table can't be read, and the check reads `? unknown`.
 
 **Remediation:** disable IPv6 in the affected workspace, or otherwise drop its v6 default route/egress, so all outbound traffic is forced through the IPv4 path the proxy actually captures.
 
@@ -170,13 +194,27 @@ The proxy captures traffic via an IPv4-only TPROXY rule. A workspace container t
 `ws proxy test` proves the tunnel is active by comparing the direct exit IP to the proxied exit IP:
 
 ```bash
-ws proxy test              # human-readable (✓/✗ + latency), also probes the UDP/DNS leg
+ws proxy test              # the Tunnel report; also probes the UDP/DNS leg
 ws proxy test --json       # JSON: {"directIP","proxiedIP","tunneled","latencyMs","dns","dnsExitIP"}
 ```
 
 `tunneled` compares the TCP exit IPs (direct vs proxied). `dns` is the UDP/DNS-leg verdict, probed only when `tunneled=true`: one of `tunneled` (the resolver-observed exit IP is not your direct/real IP — the query egressed through the tunnel; usually the proxied IP, but any non-direct IP counts, e.g. a multi-homed exit), `leak` (resolver saw the direct/real IP — the DNS query egressed around the tunnel), `inconclusive` (no UDP/DNS egress observed — advisory, not treated as a leak), or `skipped` (the TCP tunnel itself is down, so the DNS leg was not probed). `dnsExitIP` carries the resolver-observed exit IP and is omitted when `dns` is `inconclusive` or `skipped`.
 
 Exits 0 when `tunneled=true` and `dns` is not `leak` (an `inconclusive` DNS leg is advisory and does not fail the command). Exits 1 when `tunneled=false` (the exit IPs are identical) or when `dns:"leak"` (the DNS query escaped the tunnel).
+
+Without `--json` the same verdicts are a report on stdout, its last line the verdict; the `Probing …` progress lines go to stderr, and under `--json` nothing does:
+
+```
+Tunnel
+  Direct IP   203.0.113.7
+  Proxied IP  198.51.100.9
+  Tunneled    ✓ yes
+  Latency     182ms
+  UDP/DNS     ✗ leak (exit 203.0.113.7 is the direct IP)
+UDP/DNS LEAK -- resolver saw your real IP 203.0.113.7 (untunnelled)
+```
+
+`UDP/DNS` reads `✓ tunnelled (exit <ip>)`, `✗ leak (exit <ip> is the direct IP)`, `? inconclusive`, or `- not probed` when the TCP tunnel is down.
 
 ## Editing routing rules
 
@@ -210,7 +248,7 @@ Refuses to remove the active profile. Asks for confirmation; use `--force` to sk
 | `ws proxy test` | End-to-end connectivity test through proxy |
 | `ws proxy debug on\|off` | Toggle verbose xray logging |
 
-`ws proxy status` also lists each connected workspace's route-protection verdict (read-only — it does not fix anything): `protected` (default route goes via the proxy), `unprotected` (it does not — run `ws proxy fix-routes`), or `unknown` (the route table could not be read). `ws proxy status --json` carries the same verdicts in `workspaceProtection` (one `{"name","status","detail"}` entry per workspace); a `protectionScanError` field appears only when the read-only scan itself failed (for example, the proxy network became uninspectable); in that case `workspaceProtection` is empty and protection cannot be determined for any workspace.
+`ws proxy status` also lists each connected workspace's route-protection verdict, in name order (read-only — it does not fix anything): `protected` (default route goes via the proxy), `unprotected` (it does not — run `ws proxy fix-routes`), or `unknown` (the route table could not be read). `ws proxy status --json` carries the same verdicts in `workspaceProtection` (one `{"name","status","detail"}` entry per workspace); a `protectionScanError` field appears only when the read-only scan itself failed (for example, the proxy network became uninspectable); in that case `workspaceProtection` is empty and protection cannot be determined for any workspace.
 
 ## Recovery
 
@@ -224,7 +262,7 @@ ws proxy restart                    # retry the reload
 docker logs dev-proxy --tail 50     # see what xray actually complained about
 ```
 
-If the error is a health-check timeout, run `ws proxy status` before backing out: the container can still turn healthy after the 60s wait (on Docker Engine older than 27.0, whenever its first probe failed). While it shows `Starting`, check again in about 30s; back out if it shows `Unhealthy`.
+If the error is a health-check timeout, run `ws proxy status` before backing out: the container can still turn healthy after the 60s wait (on Docker Engine older than 27.0, whenever its first probe failed). While its `Health` reads `~ starting`, check again in about 30s; back out if it reads `✗ unhealthy`.
 
 There is **no auto-rollback** — both because rolling back the symlink without checking *why* the new config failed risks masking real config errors, and because the operator may want to keep the new config visible on disk while investigating.
 
