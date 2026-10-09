@@ -1169,6 +1169,9 @@ func TestStateFactKeepsItsMarkWithItsWord(t *testing.T) {
 			StateFact("web-frontend", StateOK, "protected"),
 		}},
 		{Title: "Workspaces", Pairs: []Fact{StateFact("ml-training-gpu", StateUnknown, verdict)}},
+		// A first word wider than any column, stacked or not: the mark keeps
+		// the head of it.
+		{Title: "Route", Pairs: []Fact{StateFact("api", StateFail, strings.Repeat("9f86d081", 8)+" unreadable")}},
 	}
 	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
 		for w := MinWidth; w <= 200; w++ {
@@ -1176,7 +1179,11 @@ func TestStateFactKeepsItsMarkWithItsWord(t *testing.T) {
 			for i, k := range blocks {
 				for _, f := range k.Pairs {
 					mark := stateMark(f.state, mode)
-					want := mark + " " + strings.Fields(f.V)[0]
+					word := strings.Fields(f.V)[0]
+					if len(word) > 20 {
+						word = word[:8] // the head of a word that must break
+					}
+					want := mark + " " + word
 					var marked, held bool
 					for _, line := range strings.Split(ansi.Strip(k.Render(s)), "\n") {
 						if strings.Contains(" "+line+" ", " "+mark+" ") {

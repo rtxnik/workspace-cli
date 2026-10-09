@@ -64,6 +64,21 @@ func (f Fact) leadWidth(mode GlyphMode) int {
 	return W(mark + " " + first)
 }
 
+// wrapValue wraps a pair's displayed value at width. A state whose mark and
+// first word do not fit together — a first word wider than the column, which
+// stacking cannot widen further — keeps its mark at the head of the word's
+// first piece: the label is wrapped at the width less the mark's, and the
+// mark leads its first line, rather than standing on a line of its own.
+func (f Fact) wrapValue(value string, mode GlyphMode, width int) []string {
+	if !f.isState || f.leadWidth(mode) <= width {
+		return Wrap(value, width)
+	}
+	mark, label, _ := strings.Cut(value, " ")
+	lines := Wrap(label, width-W(mark)-1)
+	lines[0] = mark + " " + lines[0]
+	return lines
+}
+
 // Remedy is a next step: a short label and a copy-pasteable command.
 type Remedy struct {
 	Label string
@@ -446,8 +461,8 @@ func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 			for _, line := range wrapIndent(key, indent, budget) {
 				b.WriteString(s.paint(keyRole, line) + "\n")
 			}
-			for _, line := range wrapIndent(value, indent+2, budget) {
-				b.WriteString(s.paint(valueRole, line) + "\n")
+			for _, line := range f.wrapValue(value, s.mode, budget-(indent+2)) {
+				b.WriteString(s.paint(valueRole, strings.Repeat(" ", indent+2)+line) + "\n")
 			}
 			continue
 		}
@@ -458,7 +473,7 @@ func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 			// by the width of the key column.
 			valueWidth = budget
 		}
-		lines := Wrap(value, valueWidth)
+		lines := f.wrapValue(value, s.mode, valueWidth)
 		b.WriteString(strings.Repeat(" ", indent) +
 			s.paint(keyRole, Pad(key, keyWidth)) +
 			strings.Repeat(" ", gap) + s.paint(valueRole, lines[0]) + "\n")
