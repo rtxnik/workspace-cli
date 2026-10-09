@@ -42,9 +42,10 @@ var sweepProtection = []docker.RouteProtection{
 }
 
 // sweptReport is one report, with what it must render whole in a pipe: every
-// value and note its fixture was built from — a note of several paragraphs
-// paragraph by paragraph — every state it draws, mark and word, in the UTF-8
-// glyph mode, and the caption it closes with.
+// value and note its fixture was built from — a pair's value after its key, so
+// that the same text elsewhere cannot stand in for it, and a note of several
+// paragraphs paragraph by paragraph — every state it draws, mark and word, in
+// the UTF-8 glyph mode, and the caption it closes with.
 type sweptReport struct {
 	name    string
 	blocks  []reportBlock
@@ -79,7 +80,7 @@ func sweepReports(t *testing.T) []sweptReport {
 
 	cfg := config.Config{ProxyNetwork: "ws-proxy", ProxyIP: sweepIPv6}
 	add("ws proxy status: running, three workspaces",
-		[]string{"10h18m28s", sweepImage, "ws-proxy (" + sweepIPv6 + ")", sweepName, "数据科学", "api"},
+		[]string{"Uptime 10h18m28s", "Image " + sweepImage, "Network ws-proxy (" + sweepIPv6 + ")", sweepName, "数据科学", "api"},
 		[]string{"✓ running", "✓ healthy", "✓ protected", "✗ unprotected: " + sweepProtection[1].Detail,
 			"? unknown: " + sweepProtection[2].Detail},
 		"1 of 3 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)",
@@ -90,11 +91,12 @@ func sweepReports(t *testing.T) []sweptReport {
 		[]string{"✓ running", "~ starting", "? unknown"},
 		"protection scan failed: "+sweepMultiline+" (workspace protection UNKNOWN)",
 		kvBlocks(proxyStatusReport(docker.Status{Running: true, Health: "starting"}, cfg, nil, errors.New(sweepMultiline)))...)
-	add("ws proxy status: stopped",
-		[]string{"ws-proxy (" + sweepIPv6 + ")"},
+	tagged := "registry.example.com/" + sweepToken + ":v26.2.6"
+	add("ws proxy status: stopped, a long image tag",
+		[]string{"Image " + tagged, "Network ws-proxy (" + sweepIPv6 + ")"},
 		[]string{"- stopped", "✗ unhealthy"},
 		"",
-		kvBlocks(proxyStatusReport(docker.Status{Health: "unhealthy"}, cfg, nil, nil))...)
+		kvBlocks(proxyStatusReport(docker.Status{Health: "unhealthy", Image: tagged}, cfg, nil, nil))...)
 
 	add("ws proxy check: no daemon",
 		[]string{"Docker running", "Xray config exists", "Proxy image built", "Proxy container running"},
@@ -144,7 +146,7 @@ func sweepReports(t *testing.T) []sweptReport {
 		doctorReport(checks, soft))
 
 	probe := proxyengine.ProbeResult{DirectIP: sweepIPv6, ProxiedIP: "198.51.100.9", Tunneled: true, Latency: 182 * time.Millisecond}
-	tunnel := []string{sweepIPv6, "198.51.100.9", "182ms"}
+	tunnel := []string{"Direct IP " + sweepIPv6, "Proxied IP 198.51.100.9", "Latency 182ms"}
 	add("ws proxy test: tunnelled", tunnel,
 		[]string{"✓ yes", "✓ tunnelled (exit 198.51.100.9)"},
 		"Tunnel active — exit IPs differ",
@@ -158,7 +160,7 @@ func sweepReports(t *testing.T) []sweptReport {
 		"Tunnel active — exit IPs differ",
 		tunnelReport(probe, ""))
 	add("ws proxy test: tunnel down",
-		[]string{sweepIPv6, "2.345s"},
+		[]string{"Direct IP " + sweepIPv6, "Proxied IP " + sweepIPv6, "Latency 2.345s"},
 		[]string{"✗ no", "- not probed"},
 		"Tunnel NOT active — direct and proxied exit IPs are the same",
 		tunnelReport(proxyengine.ProbeResult{DirectIP: sweepIPv6, ProxiedIP: sweepIPv6, Latency: 2345 * time.Millisecond}, ""))
@@ -203,20 +205,20 @@ func sweepReports(t *testing.T) []sweptReport {
 		ProjectedNewRows:     200, EstimatedDedupSeconds: 3.5, ProjectedSegmentCount: 7,
 	})
 	add("ws vault predict-bulk-load 40",
-		[]string{sweepName + "  10", "数据流", "mcp", "total", "120", "Projection for 40 notes", "Projected New Rows",
-			"Estimated Dedup Time", "3.50s", "Projected Segments"},
+		[]string{sweepName + " 10", "数据流 40", "mcp 70", "total 120", "Projection for 40 notes", "Projected New Rows 200",
+			"Estimated Dedup Time 3.50s", "Projected Segments 7"},
 		nil, "", current, projection)
 	current, projection = predictReport(1, &predictResult{})
 	add("ws vault predict-bulk-load 1: no rows",
-		[]string{"total 0", "Projection for 1 note"},
+		[]string{"total 0", "Projection for 1 note", "Projected New Rows 0", "Estimated Dedup Time 0.00s", "Projected Segments 0"},
 		nil, "", current, projection)
 
 	add("the profile wizard's summary",
-		[]string{sweepName, sweepImage, "curl git " + sweepToken, "go, golangci-lint, 数据工具", "true"},
+		[]string{"Name " + sweepName, "Image " + sweepImage, "Packages curl git " + sweepToken, "Tools go, golangci-lint, 数据工具", "DinD true"},
 		nil, "",
 		profileSummary(sweepName, sweepImage, "curl git "+sweepToken, []string{"go", "golangci-lint", "数据工具"}, true))
 	add("the profile wizard's summary: no packages or tools",
-		[]string{"go-custom", "debian:bookworm-slim", "false"},
+		[]string{"Name go-custom", "Image debian:bookworm-slim", "DinD false"},
 		nil, "",
 		profileSummary("go-custom", "debian:bookworm-slim", "", nil, false))
 	return reports
@@ -294,10 +296,32 @@ func TestReportsLoseNothingInAPipe(t *testing.T) {
 	}
 }
 
+// leadingSGR is the escape a line opens with, or "" for a line that opens
+// with none.
+func leadingSGR(line string) string {
+	if !strings.HasPrefix(line, "\x1b[") {
+		return ""
+	}
+	return line[:strings.IndexByte(line, 'm')+1]
+}
+
+// roleSGR is the escape the layer opens a state's value with on the aligned
+// path, at true colour: the reference a stacked value's colour is held to.
+func roleSGR(t *testing.T, st output.State) string {
+	t.Helper()
+	line := output.KV{Pairs: []output.Fact{output.StateFact("k", st, "x")}}.Render(output.NewStreamAt(io.Discard, 80, true, output.ColourTrue, false))
+	_, value, ok := strings.Cut(line, "\x1b[0m  ")
+	if !ok || leadingSGR(value) == "" {
+		t.Fatalf("the aligned %v value is not painted: %q", st, line)
+	}
+	return leadingSGR(value)
+}
+
 // TestReportsStackInOrder: where a block stacks, every key goes above its
 // value and the block keeps its order — the projection below 36 columns, and
 // ws proxy status's workspaces under a 64-character name — and a stacked
-// state carries its role's colour on every line it wraps to.
+// state carries its own role's colour on every line it wraps to: the colour
+// the layer gives the same state on the aligned path.
 func TestReportsStackInOrder(t *testing.T) {
 	_, projection := predictReport(40, &predictResult{ProjectedNewRows: 200, EstimatedDedupSeconds: 3.5, ProjectedSegmentCount: 7})
 	plain := func(w int) *output.Stream { return output.NewStreamAt(io.Discard, w, true, output.ColourNone, false) }
@@ -323,10 +347,13 @@ func TestReportsStackInOrder(t *testing.T) {
 		t.Fatalf("the Workspaces block at 70 columns:\n%s", strings.Join(lines, "\n"))
 	}
 	i := 1
-	for _, p := range []struct{ key, value string }{
-		{sweepName, "✓ protected"},
-		{"数据科学", "✗ unprotected: " + sweepProtection[1].Detail},
-		{"api", "? unknown: " + sweepProtection[2].Detail},
+	for _, p := range []struct {
+		key, value string
+		state      output.State
+	}{
+		{sweepName, "✓ protected", output.StateOK},
+		{"数据科学", "✗ unprotected: " + sweepProtection[1].Detail, output.StateFail},
+		{"api", "? unknown: " + sweepProtection[2].Detail, output.StateUnknown},
 	} {
 		if i >= len(lines) || lines[i] != "  "+p.key {
 			t.Fatalf("line %d of the Workspaces block: want the key %q:\n%s", i, p.key, strings.Join(lines, "\n"))
@@ -342,15 +369,10 @@ func TestReportsStackInOrder(t *testing.T) {
 		if strip := func(s string) string { return strings.Join(strings.Fields(s), "") }; strip(strings.Join(value, "")) != strip(p.value) {
 			t.Errorf("the value under %q reads %q, want %q", p.key, strings.Join(value, " "), p.value)
 		}
-		sgr := func(line string) string {
-			if !strings.HasPrefix(line, "\x1b[") {
-				return ""
-			}
-			return line[:strings.IndexByte(line, 'm')+1]
-		}
+		want := roleSGR(t, p.state)
 		for j := first; j < i; j++ {
-			if sgr(painted[j]) == "" || sgr(painted[j]) != sgr(painted[first]) {
-				t.Errorf("line %d, of the value under %q, is not painted as its first line is: %q", j, p.key, painted[j])
+			if leadingSGR(painted[j]) != want {
+				t.Errorf("line %d, of the value under %q, is not painted with its state's colour %q: %q", j, p.key, want, painted[j])
 			}
 		}
 	}
