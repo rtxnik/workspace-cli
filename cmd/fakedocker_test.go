@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
@@ -25,6 +26,16 @@ import (
 // commands make — the ping, and the container, image and network inspections
 // — from a state the row chooses. A child gets it through DOCKER_HOST in the
 // row's env, which comes after the harness's unreachable default and so wins.
+
+// The names the fake daemon knows its objects by: ws's defaults for the proxy
+// container, its image and its network. An inspection of any other name is a
+// 404, as on a real daemon, so a command that inspects the wrong object fails
+// its row instead of reading the proxy's.
+const (
+	fakeProxyContainer = "dev-proxy"
+	fakeProxyImage     = "devpod-proxy"
+	fakeProxyNetwork   = "ws-proxy"
+)
 
 // fakeDockerState is what the fake daemon answers.
 type fakeDockerState struct {
@@ -86,7 +97,7 @@ func (st fakeDockerState) handler() http.Handler {
 			_, _ = io.WriteString(w, "OK")
 		case strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
 			c := st.Container
-			if c == nil {
+			if c == nil || path != "/containers/"+fakeProxyContainer+"/json" {
 				notFound(w, "container")
 				return
 			}
@@ -100,7 +111,7 @@ func (st fakeDockerState) handler() http.Handler {
 				"Config": map[string]any{"Image": c.Image},
 			})
 		case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
-			if st.Labels == nil {
+			if st.Labels == nil || path != "/images/"+fakeProxyImage+"/json" {
 				notFound(w, "image")
 				return
 			}
@@ -110,7 +121,7 @@ func (st fakeDockerState) handler() http.Handler {
 			})
 		case strings.HasPrefix(path, "/networks/"):
 			n := st.Network
-			if n == nil {
+			if n == nil || path != "/networks/"+fakeProxyNetwork {
 				notFound(w, "network")
 				return
 			}
@@ -129,19 +140,33 @@ func (st fakeDockerState) handler() http.Handler {
 	})
 }
 
-// writeFakeDockerCLI puts a fake docker on PATH for the one call the proxy
-// commands make through the CLI rather than the SDK: `docker exec NAME ip route
-// show default`, whose answer routes a container through the proxy (172.28.0.2)
-// unless its name carries "unprot". Any other exec — the doctor's xray -test —
-// gets the same line and succeeds. It does not replace withFakeDockerBuild,
-// which answers a build: a row takes one or the other.
+// writeFakeDockerCLI puts a fake docker on PATH for the two calls the proxy
+// commands make through the CLI rather than the SDK, and refuses any other:
+// `docker exec NAME ip route show default`, whose answer routes a container
+// through the proxy (172.28.0.2) unless its name carries "unprot", and the
+// doctor's `docker exec dev-proxy xray run -test -config PATH`, which accepts
+// the profile. A command that execs anything else fails its row rather than
+// reading an answer meant for another call. It does not replace
+// withFakeDockerBuild, which answers a build: a row takes one or the other.
 func writeFakeDockerCLI(t *testing.T, bin string) {
 	t.Helper()
 	const script = `#!/bin/sh
 [ "$1" = exec ] || { echo "fake docker: unsupported: $*" >&2; exit 1; }
-case "$2" in
-*unprot*) echo "default via 172.28.0.1 dev eth0" ;;
-*) echo "default via 172.28.0.2 dev eth0" ;;
+case "$3 $4 $5 $6 $#" in
+"ip route show default 6")
+	case "$2" in
+	*unprot*) echo "default via 172.28.0.1 dev eth0" ;;
+	*) echo "default via 172.28.0.2 dev eth0" ;;
+	esac
+	;;
+"xray run -test -config 7")
+	[ "$2" = dev-proxy ] || { echo "fake docker: no xray in $2" >&2; exit 1; }
+	echo "Configuration OK."
+	;;
+*)
+	echo "fake docker: unsupported: $*" >&2
+	exit 1
+	;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
@@ -166,8 +191,9 @@ func startFakeDocker(t *testing.T, st fakeDockerState) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewUnstartedServer(st.handler())
-	srv.Listener = l
+	// Built around the unix listener, not by NewUnstartedServer, which would
+	// open a TCP listener of its own for this one to replace.
+	srv := &httptest.Server{Listener: l, Config: &http.Server{Handler: st.handler(), ReadHeaderTimeout: 10 * time.Second}}
 	srv.Start()
 	t.Cleanup(srv.Close)
 	return "unix://" + sock
@@ -220,6 +246,19 @@ func TestFakeDockerAnswersTheSDK(t *testing.T) {
 		t.Errorf("ProxyConnectedContainers = %v, %v; want api,web (sorted, the proxy left out)", names, err)
 	}
 
+	// The objects are found by their names only, as on a real daemon.
+	other := cfg
+	other.ProxyContainer, other.ProxyImage, other.ProxyNetwork = "nosuch-proxy", "nosuch-image", "nosuch-net"
+	if st, err := docker.ProxyStatus(other); err != nil || st.Running {
+		t.Errorf("another container's status = %+v, %v; want not running: the fake answers for %s only", st, err, fakeProxyContainer)
+	}
+	if _, err := docker.ImageLabels(other); err == nil {
+		t.Errorf("another image's labels were found; the fake answers for %s only", fakeProxyImage)
+	}
+	if _, err := docker.NetworkSubnet(other); err == nil {
+		t.Errorf("another network's subnet was found; the fake answers for %s only", fakeProxyNetwork)
+	}
+
 	t.Setenv("DOCKER_HOST", startFakeDocker(t, fakeDockerState{}))
 	if st, err := docker.ProxyStatus(cfg); err != nil || st.Running {
 		t.Errorf("with no container ProxyStatus = %+v, %v; want not running and no error", st, err)
@@ -238,8 +277,10 @@ func TestFakeDockerAnswersTheSDK(t *testing.T) {
 }
 
 // TestFakeDockerCLIAnswersRouteLookups holds the fake docker on PATH to the
-// route lookup that reads it: a workspace whose name carries "unprot" routes
-// around the proxy, every other one through it.
+// calls that read it: the route lookup — a workspace whose name carries
+// "unprot" routes around the proxy, every other one through it — and the
+// doctor's xray -test in the proxy, through the code that makes them. Any
+// other call fails.
 func TestFakeDockerCLIAnswersRouteLookups(t *testing.T) {
 	bin := t.TempDir()
 	writeFakeDockerCLI(t, bin)
@@ -247,6 +288,15 @@ func TestFakeDockerCLIAnswersRouteLookups(t *testing.T) {
 	for name, want := range map[string]string{"api": "172.28.0.2", "unprot-ml": "172.28.0.1"} {
 		if via, err := docker.DefaultRouteOf(name); err != nil || via != want {
 			t.Errorf("DefaultRouteOf(%q) = %q, %v; want %s", name, via, err, want)
+		}
+	}
+	cfg := config.Config{ProxyContainer: fakeProxyContainer}
+	if out, err := docker.ProxyExec(cfg, "xray", "run", "-test", "-config", "/etc/xray/config.json"); err != nil {
+		t.Errorf("xray -test in the proxy: %v (%s)", err, out)
+	}
+	for _, args := range [][]string{{"cat", "/etc/passwd"}, {"ip", "rule"}, {"xray", "version"}} {
+		if out, err := docker.ProxyExec(cfg, args...); err == nil {
+			t.Errorf("docker exec %s %v succeeded with %q; the fake answers two calls only", fakeProxyContainer, args, out)
 		}
 	}
 }
