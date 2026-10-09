@@ -351,7 +351,8 @@ func TestProxyCheck_NoDaemon(t *testing.T) {
 // container inspection that failed other than with not-found — the daemon
 // went away after the ping, or the shared deadline ran out — and a stat of
 // the config that failed other than with not-exist. An absent image,
-// container or config still fails its check.
+// container or config still fails its check, and so does one whose name the
+// daemon rejects or whose path runs through a regular file.
 func TestProxyCheck_UndecidedChecks(t *testing.T) {
 	cfg := testCfg()
 	dir := filepath.Join(t.TempDir(), "xray")
@@ -403,6 +404,26 @@ func TestProxyCheck_UndecidedChecks(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("absent objects: ProxyCheck =\n%+v\nwant\n%+v", got, want)
+	}
+
+	// Absent too: a config path that runs through a regular file, and an
+	// image and a container whose names the daemon rejects.
+	defer withMock(&mockClient{
+		pingFn: ping,
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, errdefs.InvalidParameter(errors.New("invalid reference format"))
+		},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, errdefs.InvalidParameter(errors.New("invalid container name"))
+		},
+	})()
+	regular := filepath.Join(t.TempDir(), "xray")
+	if err := os.WriteFile(regular, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.XrayConfig = filepath.Join(regular, "config.json")
+	if got = ProxyCheck(cfg); !reflect.DeepEqual(got, want) {
+		t.Errorf("a config path through a file, rejected names: ProxyCheck =\n%+v\nwant\n%+v", got, want)
 	}
 }
 

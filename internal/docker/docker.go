@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -280,7 +282,9 @@ type CheckResult struct {
 // evaluated, and say so with Skipped rather than reporting a failure they did
 // not observe. So does a check that ran and could not decide: an inspection
 // that failed other than with not-found, or a stat of the config that failed
-// other than with not-exist. Only an absent object fails its check.
+// other than with not-exist. Only an absent object fails its check — one the
+// daemon does not find or rejects the name of, a config path that does not
+// exist or runs through a regular file.
 func ProxyCheck(cfg config.Config) []CheckResult {
 	results := make([]CheckResult, 4)
 	results[0] = CheckResult{Name: "Docker running"}
@@ -291,7 +295,7 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 	switch _, err := os.Stat(cfg.XrayConfig); {
 	case err == nil:
 		results[1].Passed = true
-	case !os.IsNotExist(err):
+	case !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR):
 		results[1].Skipped = true
 	}
 	unreached := func() []CheckResult {
@@ -317,14 +321,14 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 	switch _, _, err := cli.ImageInspectWithRaw(ctx, cfg.ProxyImage); {
 	case err == nil:
 		results[2].Passed = true
-	case !cerrdefs.IsNotFound(err):
+	case !cerrdefs.IsNotFound(err) && !cerrdefs.IsInvalidArgument(err):
 		results[2].Skipped = true
 	}
 
 	switch info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer); {
 	case err == nil:
 		results[3].Passed = info.State.Running
-	case !cerrdefs.IsNotFound(err):
+	case !cerrdefs.IsNotFound(err) && !cerrdefs.IsInvalidArgument(err):
 		results[3].Skipped = true
 	}
 
