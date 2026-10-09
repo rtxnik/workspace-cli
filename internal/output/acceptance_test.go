@@ -1214,6 +1214,27 @@ func TestStateFactPaintsEveryLineAligned(t *testing.T) {
 	}
 }
 
+// TestBlankCaptionsAddNothing: a caption that is whitespace alone, or that
+// sanitising empties, adds no line to a KV or a Checks — on a terminal it
+// would otherwise leave lines of bare SGR under the block.
+func TestBlankCaptionsAddNothing(t *testing.T) {
+	piped := NewStreamAt(io.Discard, WidthUnbounded, false, ColourNone, false)
+	for _, caption := range []string{" ", "\n", " \n\t ", "\x1b[31m\x1b[0m"} {
+		for _, s := range []*Stream{blockStream(40), piped} {
+			kv := KV{Title: "Proxy", Pairs: []Fact{{K: "Image", V: "devpod-proxy"}}}
+			ch := Checks{Title: "Proxy prerequisites", Items: []Check{{Name: "Docker running", State: StateOK}}}
+			bare, bareChecks := kv.Render(s), ch.Render(s)
+			kv.Caption, ch.Caption = caption, caption
+			if got := kv.Render(s); got != bare {
+				t.Errorf("KV with caption %q:\n%q\nwant\n%q", caption, got, bare)
+			}
+			if got := ch.Render(s); got != bareChecks {
+				t.Errorf("Checks with caption %q:\n%q\nwant\n%q", caption, got, bareChecks)
+			}
+		}
+	}
+}
+
 // TestBlockCaptionsCloseTheirBlock pins the phase-5 caption of KV and Checks:
 // it closes the block the way a table's closes the grid — directly under the
 // last line, with no blank line between, wrapped at the budget, every line

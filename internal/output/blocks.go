@@ -121,7 +121,9 @@ func (t Table) Render(s *Stream) string {
 // for all three (TestCaptionMutantReachesEveryBlockCaption). The caption must
 // already be sanitised; an empty one adds nothing.
 func closeWithCaption(s *Stream, out, caption string) string {
-	if caption == "" {
+	// A caption of whitespace alone says nothing and would leave lines of
+	// bare SGR under the block on a terminal.
+	if strings.TrimSpace(caption) == "" {
 		return out
 	}
 	width := s.budget() + mutants.CaptionWidth
