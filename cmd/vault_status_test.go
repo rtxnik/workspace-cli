@@ -52,6 +52,12 @@ func TestVaultStatusAllGreen(t *testing.T) {
 	if !strings.HasSuffix(out.String(), "\nOverall: green (exit 0)\n") {
 		t.Errorf("expected the report to close with its verdict, Overall: green (exit 0); got %q", out.String())
 	}
+	// The body: the title, and every signal with its detail.
+	for _, want := range []string{"Vault status\n", "MCP liveness\n", "MCP responsive (25 tools)\n", "last DR-drill age\n", "last drill 14 days ago\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the all-green report lost %q:\n%s", strings.TrimSuffix(want, "\n"), out.String())
+		}
+	}
 }
 
 func TestVaultStatusYellowOnAdvisory(t *testing.T) {
@@ -482,7 +488,8 @@ func TestTruncate(t *testing.T) {
 	}{
 		{"", 0, ""},
 		{"", 5, ""},
-		{"abcdef", 0, "abcdef"},
+		{"abcdef", 0, ""},
+		{"abcdef", -1, ""},
 		{"abcdef", 6, "abcdef"},
 		{"abcdef", 1, "a"},
 		{"abcdef", 2, "ab"},
@@ -506,7 +513,7 @@ func TestTruncate(t *testing.T) {
 	}
 	// Every limit over a mixed string: valid UTF-8 within the limit.
 	s := "a é € 😀 б 中 ."
-	for n := 1; n < len(s); n++ {
+	for n := 0; n < len(s); n++ {
 		got := truncate(s, n)
 		if !utf8.ValidString(got) || len(got) > n {
 			t.Errorf("truncate(%q, %d) = %q (%d bytes, valid %t); want valid UTF-8 within %d bytes",

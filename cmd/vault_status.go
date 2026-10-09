@@ -450,10 +450,14 @@ func assembleReport(signals []statusSignal) *statusReport {
 // boundary that leaves room for "...", which is then appended; a limit of 3
 // or less leaves no room for it, and the string is cut at the last rune
 // boundary at or below the limit. Either way the cut never lands inside a
-// UTF-8 sequence. A limit of 0 or less leaves s whole.
+// UTF-8 sequence, and the result is never longer than the limit: a limit of 0
+// or less leaves nothing.
 func truncate(s string, maxLen int) string {
-	if maxLen <= 0 || len(s) <= maxLen {
+	if len(s) <= maxLen {
 		return s
+	}
+	if maxLen <= 0 {
+		return ""
 	}
 	if maxLen <= 3 {
 		return cutAtRune(s, maxLen)
