@@ -100,9 +100,9 @@ For machine-readable output: `ws proxy test --json` → `{"directIP":"…","prox
 
 If TPROXY misbehaves on the operator's kernel (e.g. the container lacks `CAP_NET_ADMIN` or the host kernel does not support TPROXY in Docker), fall back to REDIRECT-TCP mode:
 
-- Revert the entrypoint to use iptables REDIRECT instead of TPROXY (edit `dotfiles`; rebuild with `ws proxy rebuild --force`).
+- Revert the entrypoint to use iptables REDIRECT instead of TPROXY (edit `dotfiles`). The recipe then differs from the one `ws` pins, so rebuild with `ws proxy rebuild --allow-drift` (add `--force` to skip the confirmation for connected workspaces): without `--allow-drift` the rebuild refuses a drifted recipe.
 - Leave UDP fail-closed (no UDP forwarding rule) until TPROXY is confirmed working.
-- In REDIRECT mode `ws proxy doctor` does not reach its advisory check (step 13, "inbound sockopt.tproxy"): it stops at step 6, TPROXY preconditions — or at step 4 if the image's datapath label and the profile disagree — because it asserts the TPROXY datapath (the mangle and fwmark rules) that REDIRECT does not set up, and the checks after it read `? unknown`. That failure is expected while rolled back.
+- `ws proxy doctor` then stops at step 4, datapath contract: an image built from a drifted recipe is labelled `unverified`, which no profile's mode matches. The checks after it read `? unknown`, its advisory check (step 13) among them. That failure is expected while rolled back.
 
 ---
 
