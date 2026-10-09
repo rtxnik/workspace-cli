@@ -278,7 +278,9 @@ type CheckResult struct {
 // The xray config needs no daemon and is checked whatever the daemon does.
 // When the daemon cannot be reached, the image and container checks are not
 // evaluated, and say so with Skipped rather than reporting a failure they did
-// not observe.
+// not observe. So does a check that ran and could not decide: an inspection
+// that failed other than with not-found, or a stat of the config that failed
+// other than with not-exist. Only an absent object fails its check.
 func ProxyCheck(cfg config.Config) []CheckResult {
 	results := make([]CheckResult, 4)
 	results[0] = CheckResult{Name: "Docker running"}
@@ -286,8 +288,11 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 	results[2] = CheckResult{Name: "Proxy image built"}
 	results[3] = CheckResult{Name: "Proxy container running"}
 
-	if _, err := os.Stat(cfg.XrayConfig); err == nil {
+	switch _, err := os.Stat(cfg.XrayConfig); {
+	case err == nil:
 		results[1].Passed = true
+	case !os.IsNotExist(err):
+		results[1].Skipped = true
 	}
 	unreached := func() []CheckResult {
 		results[2].Skipped = true
@@ -309,13 +314,18 @@ func ProxyCheck(cfg config.Config) []CheckResult {
 	}
 	results[0].Passed = true
 
-	if imageExists(ctx, cli, cfg.ProxyImage) {
+	switch _, _, err := cli.ImageInspectWithRaw(ctx, cfg.ProxyImage); {
+	case err == nil:
 		results[2].Passed = true
+	case !cerrdefs.IsNotFound(err):
+		results[2].Skipped = true
 	}
 
-	info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer)
-	if err == nil && info.State.Running {
-		results[3].Passed = true
+	switch info, err := cli.ContainerInspect(ctx, cfg.ProxyContainer); {
+	case err == nil:
+		results[3].Passed = info.State.Running
+	case !cerrdefs.IsNotFound(err):
+		results[3].Skipped = true
 	}
 
 	return results
