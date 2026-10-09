@@ -352,13 +352,15 @@ func checkImagePresent(cfg config.Config, results []docker.CheckResult) CheckOut
 				return CheckOutcome{OK: true, Detail: cfg.ProxyImage}
 			}
 			if r.Skipped {
-				// The daemon answered the ping but not the inspection: nothing
-				// shows the image missing, so no rebuild is advised. The check
-				// still stops the run, as any hard check that does not pass.
+				// The daemon answered the ping, but the inspection failed with
+				// something other than not-found — a timeout, a refusal, a
+				// server error: nothing shows the image missing, so no rebuild
+				// is advised and no cause is claimed. The check still stops the
+				// run, as any hard check that does not pass.
 				return CheckOutcome{
 					OK:     false,
-					Detail: "the image inspection did not complete: the daemon stopped answering after the ping",
-					Fix:    "Check that the Docker daemon is up, then re-run: ws proxy doctor",
+					Detail: "the image inspection failed after a good ping, so whether the image exists is not known",
+					Fix:    "Check the Docker daemon and its access to images (docker image inspect " + cfg.ProxyImage + "), then re-run: ws proxy doctor",
 				}
 			}
 			return CheckOutcome{

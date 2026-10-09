@@ -556,13 +556,14 @@ func TestSoftTierOfEachSoftOutcome(t *testing.T) {
 	}
 }
 
-// TestCheckImagePresentUndecided: an image inspection that did not complete
-// after a good ping stops the doctor as a missing image does, but advises no
-// rebuild — nothing showed the image missing.
+// TestCheckImagePresentUndecided: an image inspection that failed after a good
+// ping stops the doctor as a missing image does, but advises no rebuild and
+// claims no cause — nothing showed the image missing, and the failure may be a
+// refusal or a server error from a daemon that is up.
 func TestCheckImagePresentUndecided(t *testing.T) {
 	cfg := config.Config{ProxyImage: "devpod-proxy"}
 	undecided := checkImagePresent(cfg, []docker.CheckResult{{Name: "Proxy image built", Skipped: true}})
-	if undecided.OK || strings.Contains(undecided.Fix, "rebuild") || !strings.Contains(undecided.Detail, "did not complete") {
+	if undecided.OK || strings.Contains(undecided.Fix, "rebuild") || !strings.Contains(undecided.Detail, "not known") {
 		t.Errorf("an undecided image check = %+v; want a stop that advises no rebuild", undecided)
 	}
 	if missing := checkImagePresent(cfg, []docker.CheckResult{{Name: "Proxy image built"}}); missing.OK || missing.Fix != "Build the proxy image: ws proxy rebuild" {
