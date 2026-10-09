@@ -1,6 +1,6 @@
 module github.com/rtxnik/workspace-cli
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/charmbracelet/huh v1.0.0
