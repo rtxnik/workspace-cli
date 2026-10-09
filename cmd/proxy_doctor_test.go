@@ -567,74 +567,129 @@ var softWord = regexp.MustCompile(`(?i)\b(advisory|inconclusive|unknown|note|ski
 // "file:line", with the number of literals that do carry a tier. It fails
 // closed where it cannot read a literal:
 //   - a literal is found by its type, or by the element type of the slice,
-//     array or map literal it sits in when its own type is elided;
+//     array or map literal it sits in when its own type is elided — a named
+//     slice, array or map type of CheckOutcome included;
 //   - an unkeyed literal is reported as it stands, its fields unread;
 //   - an OK set to anything but the constant false counts as possibly
 //     true (an absent OK is false);
-//   - Soft carries a tier only when it is set to something other than
-//     softNone or 0;
-//   - a Detail's words are read from every string literal in its
-//     expression — a fmt.Sprintf format among them — and, for a name in it,
-//     from the package's string constants of that name and every string
-//     literal assigned to the name in the enclosing function.
+//   - a tier is Soft set to softDegraded or softUnknown, written as such;
+//     any other value — softNone, 0, a conversion, a call — is no tier;
+//   - a Detail is read through string literals, concatenation, fmt's and
+//     strings.Join's formatting, and names: a name is followed to its
+//     constants and variables, in the package and in the function, through
+//     any chain of them. A Detail that calls anything else, or names a value
+//     in another package, cannot be read and is reported. What a function the
+//     Detail does not call directly returns is out of the guard's reach.
 func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string, tiered int) {
 	t.Helper()
 	fset := token.NewFileSet()
 	var parsed []*ast.File
-	consts := map[string][]string{}
+	pkgValues := map[string][]ast.Expr{} // package-level constants and variables, by name
+	containers := map[string]bool{}      // named slice, array and map types of CheckOutcome
 	for _, name := range sortedKeys(files) {
 		file, err := parser.ParseFile(fset, name, files[name], 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		parsed = append(parsed, file)
-		ast.Inspect(file, func(n ast.Node) bool {
-			if vs, ok := n.(*ast.ValueSpec); ok {
-				for i, id := range vs.Names {
-					if i < len(vs.Values) {
-						consts[id.Name] = append(consts[id.Name], stringLits(vs.Values[i])...)
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				switch sp := spec.(type) {
+				case *ast.ValueSpec:
+					collectValues(pkgValues, sp)
+				case *ast.TypeSpec:
+					if isOutcome(elementType(sp.Type)) {
+						containers[sp.Name.Name] = true
 					}
 				}
 			}
-			return true
-		})
-	}
-	isOutcome := func(e ast.Expr) bool {
-		if s, ok := e.(*ast.StarExpr); ok {
-			e = s.X
 		}
-		id, ok := e.(*ast.Ident)
-		return ok && id.Name == "CheckOutcome"
 	}
 	for _, file := range parsed {
+		imported := map[string]bool{}
+		for _, im := range file.Imports {
+			path, _ := strconv.Unquote(im.Path.Value)
+			name := path[strings.LastIndex(path, "/")+1:]
+			if im.Name != nil {
+				name = im.Name.Name
+			}
+			imported[name] = true
+		}
 		for _, decl := range file.Decls {
-			// Names assigned in this declaration — a function, or a var
-			// block — and the string literals assigned to them.
-			assigned := map[string][]string{}
-			ast.Inspect(decl, func(n ast.Node) bool {
-				if as, ok := n.(*ast.AssignStmt); ok {
-					for i, lhs := range as.Lhs {
-						if id, ok := lhs.(*ast.Ident); ok && i < len(as.Rhs) {
-							assigned[id.Name] = append(assigned[id.Name], stringLits(as.Rhs[i])...)
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			// The function's own constants and variables, and what it assigns.
+			locals := map[string][]ast.Expr{}
+			ast.Inspect(fn, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.ValueSpec:
+					collectValues(locals, x)
+				case *ast.AssignStmt:
+					for i, lhs := range x.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok && i < len(x.Rhs) {
+							locals[id.Name] = append(locals[id.Name], x.Rhs[i])
 						}
 					}
 				}
 				return true
 			})
+			// read returns the text of a Detail and whether all of it could be
+			// read. Inside a name's value or a formatting call's arguments a
+			// call is data, not text, and is skipped; at the Detail's top it
+			// is reported.
+			var read func(e ast.Expr, top bool, seen map[string]bool) (string, bool)
+			read = func(e ast.Expr, top bool, seen map[string]bool) (string, bool) {
+				switch x := e.(type) {
+				case *ast.BasicLit:
+					s, _ := strconv.Unquote(x.Value)
+					return s, true
+				case *ast.ParenExpr:
+					return read(x.X, top, seen)
+				case *ast.BinaryExpr:
+					a, okA := read(x.X, top, seen)
+					b, okB := read(x.Y, top, seen)
+					return a + " " + b, okA && okB
+				case *ast.Ident:
+					if seen[x.Name] {
+						return "", true
+					}
+					seen[x.Name] = true
+					text, all := "", true
+					for _, v := range append(locals[x.Name], pkgValues[x.Name]...) {
+						s, ok := read(v, false, seen)
+						text, all = text+" "+s, all && ok
+					}
+					return text, all
+				case *ast.SelectorExpr:
+					id, ok := x.X.(*ast.Ident)
+					return "", !ok || !imported[id.Name] || id.Name == "fmt" || id.Name == "strings"
+				case *ast.CallExpr:
+					if !formats(x.Fun) {
+						return "", !top
+					}
+					text, all := "", true
+					for _, a := range x.Args {
+						s, ok := read(a, false, seen)
+						text, all = text+" "+s, all && ok
+					}
+					return text, all
+				default:
+					return "", !top
+				}
+			}
 			elided := map[*ast.CompositeLit]bool{}
-			ast.Inspect(decl, func(n ast.Node) bool {
+			ast.Inspect(fn, func(n ast.Node) bool {
 				lit, ok := n.(*ast.CompositeLit)
 				if !ok {
 					return true
 				}
-				var elem ast.Expr
-				switch ty := lit.Type.(type) {
-				case *ast.ArrayType:
-					elem = ty.Elt
-				case *ast.MapType:
-					elem = ty.Value
-				}
-				if elem != nil && isOutcome(elem) {
+				if id, ok := lit.Type.(*ast.Ident); ok && containers[id.Name] || isOutcome(elementType(lit.Type)) {
 					for _, e := range lit.Elts {
 						if kv, ok := e.(*ast.KeyValueExpr); ok {
 							e = kv.Value
@@ -649,7 +704,7 @@ func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string
 				}
 				at := fset.Position(lit.Pos())
 				where := fmt.Sprintf("%s:%d", filepath.Base(at.Filename), at.Line)
-				okFalse, soft, words := true, false, "" // an absent OK is false
+				okFalse, soft, words, readable := true, false, "", true // an absent OK is false
 				for _, e := range lit.Elts {
 					kv, ok := e.(*ast.KeyValueExpr)
 					if !ok {
@@ -661,28 +716,18 @@ func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string
 						v, ok := kv.Value.(*ast.Ident)
 						okFalse = ok && v.Name == "false"
 					case "Soft":
-						switch v := kv.Value.(type) {
-						case *ast.Ident:
-							soft = v.Name != "softNone"
-						case *ast.BasicLit:
-							soft = v.Value != "0"
-						default:
-							soft = true
-						}
+						v, ok := ast.Unparen(kv.Value).(*ast.Ident)
+						soft = ok && (v.Name == "softDegraded" || v.Name == "softUnknown")
 					case "Detail":
-						words += strings.Join(stringLits(kv.Value), " ")
-						ast.Inspect(kv.Value, func(m ast.Node) bool {
-							if id, ok := m.(*ast.Ident); ok {
-								words += " " + strings.Join(consts[id.Name], " ") + " " + strings.Join(assigned[id.Name], " ")
-							}
-							return true
-						})
+						words, readable = read(kv.Value, true, map[string]bool{})
 					}
 				}
 				switch {
 				case okFalse:
 				case soft:
 					tiered++
+				case !readable:
+					found = append(found, where+" (Detail unreadable)")
 				case softWord.MatchString(words):
 					found = append(found, where)
 				}
@@ -693,18 +738,45 @@ func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string
 	return found, tiered
 }
 
-// stringLits returns the string literals in an expression, unquoted.
-func stringLits(e ast.Expr) []string {
-	var out []string
-	ast.Inspect(e, func(n ast.Node) bool {
-		if b, ok := n.(*ast.BasicLit); ok && b.Kind == token.STRING {
-			if s, err := strconv.Unquote(b.Value); err == nil {
-				out = append(out, s)
-			}
+// isOutcome reports whether a type expression is CheckOutcome or a pointer to it.
+func isOutcome(e ast.Expr) bool {
+	if s, ok := e.(*ast.StarExpr); ok {
+		e = s.X
+	}
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == "CheckOutcome"
+}
+
+// elementType is the element type of a slice, array or map type expression,
+// or nil.
+func elementType(e ast.Expr) ast.Expr {
+	switch ty := e.(type) {
+	case *ast.ArrayType:
+		return ty.Elt
+	case *ast.MapType:
+		return ty.Value
+	}
+	return nil
+}
+
+// formats reports whether a called function is one that formats its
+// arguments into the text it returns: fmt's Sprint family and strings.Join.
+func formats(fun ast.Expr) bool {
+	sel, ok := fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && (pkg.Name == "fmt" && strings.HasPrefix(sel.Sel.Name, "Sprint") || pkg.Name == "strings" && sel.Sel.Name == "Join")
+}
+
+// collectValues adds a const or var spec's values to m, by name.
+func collectValues(m map[string][]ast.Expr, vs *ast.ValueSpec) {
+	for i, id := range vs.Names {
+		if i < len(vs.Values) {
+			m[id.Name] = append(m[id.Name], vs.Values[i])
 		}
-		return true
-	})
-	return out
+	}
 }
 
 // doctorTieredOutcomes is how many tiered outcomes §3.5's table names today:
@@ -743,14 +815,22 @@ func TestDoctorSoftOutcomesAllCarryATier(t *testing.T) {
 }
 
 // TestDoctorSoftTierGuardCanFail is the guard's control, over planted source.
-// Found: a soft word in a plain string, in a Sprintf format, in a constant,
-// in a local assigned a string, in any case; a literal with its type elided in
-// a slice or a map of pointers; an unkeyed literal; an OK computed at run
-// time; a Soft set to softNone or 0. Not found: a real tier (counted), OK
-// false, and a detail with no soft word.
+// Found: a soft word in a plain string, in a Sprintf format or argument, in a
+// constant or a chain of them, in a local assigned a string, in any case; a
+// literal with its type elided in a slice, a map of pointers or a named slice
+// type; an unkeyed literal; an OK computed at run time; a Soft that is no
+// tier — softNone, 0, softTier(0), (softNone); a Detail the guard cannot read
+// — a call, a name in another package. Not found: a real tier (counted), OK
+// false, a detail with no soft word, a local constant of the same name as
+// another function's, a value assigned from a call, and formatting arguments
+// that are data.
 func TestDoctorSoftTierGuardCanFail(t *testing.T) {
 	src := []byte(`package cmd
+import "example.invalid/other"
 const adv = "ADVISORY: x"
+const warning = "ADVISORY: x"
+const message = warning
+type outcomes []CheckOutcome
 func a() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x"} }
 func b() CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("probe inconclusive (%v)", 1)} }
 func c() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: softDegraded} }
@@ -765,14 +845,27 @@ func k() CheckOutcome { return CheckOutcome{OK: true, Detail: "UDP best-effort: 
 func l(n int) CheckOutcome { return CheckOutcome{OK: n > 0, Detail: "Advisory: x"} }
 func m() map[string]*CheckOutcome { return map[string]*CheckOutcome{"a": {OK: true, Detail: "Note: x"}} }
 func n() CheckOutcome { return CheckOutcome{OK: true, Detail: "probe Inconclusive", Soft: 0} }
+func o() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: softTier(0)} }
+func p() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: (softNone)} }
+func q() CheckOutcome { return CheckOutcome{OK: true, Detail: message} }
+func r() CheckOutcome { return CheckOutcome{OK: true, Detail: helper()} }
+func s() CheckOutcome { return CheckOutcome{OK: true, Detail: other.Advice} }
+func t() outcomes { return outcomes{{OK: true, Detail: "UNKNOWN posture"}} }
+func u() CheckOutcome { const said = "ADVISORY: x"; return CheckOutcome{OK: true, Detail: said, Soft: softDegraded} }
+func v() CheckOutcome { const said = "running, healthy"; return CheckOutcome{OK: true, Detail: said} }
+func w(c config) CheckOutcome { subnet, err := lookup(c); _ = err; return CheckOutcome{OK: true, Detail: subnet} }
+func x(c config) CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("%d of %s", len(c.names), c.Image)} }
+func y() CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("%s", adv)} }
 `)
 	found, tiered := untieredSoftOutcomes(t, map[string][]byte{"doctor.go": src})
-	want := "doctor.go:3,doctor.go:4,doctor.go:8,doctor.go:9 (unkeyed),doctor.go:10,doctor.go:11,doctor.go:12,doctor.go:13,doctor.go:14,doctor.go:15,doctor.go:16"
+	want := "doctor.go:7,doctor.go:8,doctor.go:12,doctor.go:13 (unkeyed),doctor.go:14,doctor.go:15,doctor.go:16,doctor.go:17," +
+		"doctor.go:18,doctor.go:19,doctor.go:20,doctor.go:21,doctor.go:22,doctor.go:23,doctor.go:24 (Detail unreadable)," +
+		"doctor.go:25 (Detail unreadable),doctor.go:26,doctor.go:31"
 	if got := strings.Join(found, ","); got != want {
 		t.Errorf("found %q,\nwant %q", got, want)
 	}
-	if tiered != 1 {
-		t.Errorf("counted %d tiered outcomes, want 1", tiered)
+	if tiered != 2 {
+		t.Errorf("counted %d tiered outcomes, want 2", tiered)
 	}
 }
 
