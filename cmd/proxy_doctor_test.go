@@ -1,13 +1,30 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
+	"github.com/rtxnik/workspace-cli/internal/xray"
 )
 
 // TestDoctorStopsAtFirstFailure proves the runner is fail-fast: it stops at the
@@ -72,7 +89,9 @@ func TestDoctorAllPass(t *testing.T) {
 func TestDoctorSoftCheckDoesNotStop(t *testing.T) {
 	ran := false
 	checks := []Check{
-		{Name: "soft-warn", Run: func() CheckOutcome { return CheckOutcome{OK: true, Detail: "UDP best-effort: SKIP"} }},
+		{Name: "soft-warn", Run: func() CheckOutcome {
+			return CheckOutcome{OK: true, Detail: "UDP best-effort: SKIP", Soft: softDegraded}
+		}},
 		{Name: "after", Run: func() CheckOutcome { ran = true; return CheckOutcome{OK: true} }},
 	}
 	res := runChecks(checks)
@@ -471,6 +490,507 @@ func TestActiveProfileReadFold(t *testing.T) {
 			}
 			if out.Detail != c.wantInboundDetail {
 				t.Errorf("inboundTproxyOutcome Detail = %q, want %q", out.Detail, c.wantInboundDetail)
+			}
+		})
+	}
+}
+
+// TestSoftTierOfEachSoftOutcome pins the doctor's soft tier (phase-5 §3.5),
+// one row per soft branch of the spec's table, through the outcome builders
+// themselves: a finding that does not stop the run but is not a pass renders
+// degraded or unknown, never ok. hy2's rows dial a real listener: one that
+// hangs up on every connection for the inconclusive probe — held open, so no
+// other process can take its port between the listen and the dial — and a
+// TLS server whose leaf differs from the pin for the mismatch.
+func TestSoftTierOfEachSoftOutcome(t *testing.T) {
+	hangup, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hangup.Close() })
+	go func() {
+		for {
+			c, err := hangup.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	hangupPort := hangup.Addr().(*net.TCPAddr).Port
+	tlsSrv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	tlsSrv.Config.ErrorLog = log.New(io.Discard, "", 0) // the probe hangs up mid-handshake, by design
+	tlsSrv.StartTLS()
+	t.Cleanup(tlsSrv.Close)
+	tlsAddr := tlsSrv.Listener.Addr().(*net.TCPAddr)
+	sum := sha256.Sum256(tlsSrv.Certificate().Raw)
+	leaf := hex.EncodeToString(sum[:])
+
+	probe := proxyengine.ProbeResult{DirectIP: "198.51.100.1", ProxiedIP: "203.0.113.9", Tunneled: true}
+	for _, c := range []struct {
+		name string
+		got  CheckOutcome
+		ok   bool
+		want softTier
+	}{
+		{"inbound: no active profile", inboundTproxyOutcome(profileTproxyProbe{nameErr: errors.New("no link")}), true, softUnknown},
+		{"inbound: profile unreadable", inboundTproxyOutcome(profileTproxyProbe{name: "p", readErr: errors.New("eacces")}), true, softUnknown},
+		{"inbound: profile unparseable", inboundTproxyOutcome(profileTproxyProbe{name: "p", parseErr: errors.New("eof")}), true, softUnknown},
+		{"inbound: sockopt missing", inboundTproxyOutcome(profileTproxyProbe{name: "p"}), true, softDegraded},
+		{"inbound: sockopt present", inboundTproxyOutcome(profileTproxyProbe{name: "p", tproxy: true}), true, softNone},
+		{"egress: UDP/DNS inconclusive", dnsEgressOutcome(probe, ""), true, softDegraded},
+		{"egress: UDP/DNS tunnelled", dnsEgressOutcome(probe, "203.0.113.9"), true, softNone},
+		{"egress: UDP/DNS leak", dnsEgressOutcome(probe, "198.51.100.1"), false, softNone},
+		{"IPv6: posture unknown", v6FailClosedOutcome([]string{"api"}, []docker.WorkspaceV6Verdict{docker.V6Unknown}), true, softUnknown},
+		{"IPv6: fail-closed", v6FailClosedOutcome([]string{"api"}, []docker.WorkspaceV6Verdict{docker.V6FailClosed}), true, softNone},
+		{"IPv6: none connected", v6FailClosedOutcome(nil, nil), true, softNone},
+		{"default route: none connected", checkDefaultRoute(config.Config{}, containerList{}), true, softNone},
+		{"hy2: probe inconclusive", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: hangupPort}), true, softUnknown},
+		{"hy2: leaf differs from the pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port, PinSHA256: strings.Repeat("0", 64)}), true, softDegraded},
+		{"hy2: leaf matches the pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port, PinSHA256: leaf}), true, softNone},
+		{"hy2: no pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port}), true, softNone},
+	} {
+		if c.got.OK != c.ok || c.got.Soft != c.want {
+			t.Errorf("%s: OK %v, Soft %v; want OK %v, Soft %v (detail %q)", c.name, c.got.OK, c.got.Soft, c.ok, c.want, c.got.Detail)
+		}
+	}
+}
+
+// TestCheckImagePresentUndecided: an image inspection that failed after a good
+// ping stops the doctor as a missing image does, but advises no rebuild and
+// claims no cause — nothing showed the image missing, and the failure may be a
+// refusal or a server error from a daemon that is up.
+func TestCheckImagePresentUndecided(t *testing.T) {
+	cfg := config.Config{ProxyImage: "devpod-proxy"}
+	undecided := checkImagePresent(cfg, []docker.CheckResult{{Name: "Proxy image built", Skipped: true}})
+	if undecided.OK || strings.Contains(undecided.Fix, "rebuild") || !strings.Contains(undecided.Detail, "not known") {
+		t.Errorf("an undecided image check = %+v; want a stop that advises no rebuild", undecided)
+	}
+	if missing := checkImagePresent(cfg, []docker.CheckResult{{Name: "Proxy image built"}}); missing.OK || missing.Fix != "Build the proxy image: ws proxy rebuild" {
+		t.Errorf("a missing image = %+v; want the rebuild hint, as before", missing)
+	}
+}
+
+// softWord matches the words a doctor outcome writes into its Detail when it
+// is a soft finding (phase-5 §3.5) — ADVISORY, inconclusive, UNKNOWN, NOTE and
+// skipped — in any case, and SKIP, which CheckOutcome's earlier convention
+// wrote for an advisory leg.
+var softWord = regexp.MustCompile(`(?i)\b(advisory|inconclusive|unknown|note|skip(ped)?)\b`)
+
+// untieredSoftOutcomes reads Go source, files by name, and returns every
+// CheckOutcome literal that could be an untiered soft finding, as
+// "file:line", with the number of literals that do carry a tier. It fails
+// closed where it cannot read a literal:
+//   - a literal is found by its type, or by the element type of the slice,
+//     array or map literal it sits in when its own type is elided — a named
+//     slice, array or map type of CheckOutcome included;
+//   - an unkeyed literal is reported as it stands, its fields unread;
+//   - an OK set to anything but the constant false counts as possibly
+//     true (an absent OK is false);
+//   - a tier is Soft set to softDegraded or softUnknown, written as such;
+//     any other value — softNone, 0, a conversion, a call — is no tier;
+//   - every declaration is read, a package-level var — a function literal in
+//     it included — as well as a function;
+//   - a Detail's text is every string literal reachable from it: in its
+//     expression and in the values of the names in it, through any chain of
+//     names, a declaration's own definitions shadowing the package's — a
+//     slice's elements, append's and any call's arguments included. One
+//     variable reused for a soft branch and a pass is read through both, and
+//     the pass is flagged;
+//   - a Detail is reported as unreadable when its text cannot be seen: a call
+//     at its top to anything but fmt's Sprint family or strings.Join, a name
+//     there with no value to follow (a parameter), a field of a call's result,
+//     a Sprintf format or a Join slice that is itself unreadable, or a name in
+//     another package anywhere in it. A field of a value — cfg.ProxyImage,
+//     v.Note — is runtime data and is read as such: text authored elsewhere
+//     and carried in a field, or returned by a call whose result is stored in
+//     a variable, is out of the guard's reach.
+func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string, tiered int) {
+	t.Helper()
+	fset := token.NewFileSet()
+	var parsed []*ast.File
+	pkgValues := map[string][]ast.Expr{} // package-level constants and variables, by name
+	containers := map[string]bool{}      // named slice, array and map types of CheckOutcome
+	for _, name := range sortedKeys(files) {
+		file, err := parser.ParseFile(fset, name, files[name], 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed = append(parsed, file)
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				switch sp := spec.(type) {
+				case *ast.ValueSpec:
+					collectValues(pkgValues, sp)
+				case *ast.TypeSpec:
+					if isOutcome(elementType(sp.Type)) {
+						containers[sp.Name.Name] = true
+					}
+				}
+			}
+		}
+	}
+	for _, file := range parsed {
+		imported := map[string]bool{}
+		for _, im := range file.Imports {
+			path, _ := strconv.Unquote(im.Path.Value)
+			name := path[strings.LastIndex(path, "/")+1:]
+			if im.Name != nil {
+				name = im.Name.Name
+			}
+			imported[name] = true
+		}
+		for _, decl := range file.Decls {
+			// The declaration's own constants and variables, and what it assigns.
+			locals := map[string][]ast.Expr{}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.ValueSpec:
+					collectValues(locals, x)
+				case *ast.AssignStmt:
+					for i, lhs := range x.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok && i < len(x.Rhs) {
+							locals[id.Name] = append(locals[id.Name], x.Rhs[i])
+						}
+					}
+				}
+				return true
+			})
+			// values is what a name holds as far as the guard can follow it:
+			// the declaration's own definitions, else the package's.
+			values := func(name string) []ast.Expr {
+				if v := locals[name]; len(v) > 0 {
+					return v
+				}
+				return pkgValues[name]
+			}
+			// text is every string literal an expression can carry: in it,
+			// and in the values of the names in it, through any chain of them
+			// — a slice's elements, append's and any call's arguments
+			// included.
+			var text func(e ast.Expr, seen map[string]bool) string
+			text = func(e ast.Expr, seen map[string]bool) string {
+				var b strings.Builder
+				ast.Inspect(e, func(n ast.Node) bool {
+					switch x := n.(type) {
+					case *ast.BasicLit:
+						if x.Kind == token.STRING {
+							s, _ := strconv.Unquote(x.Value)
+							b.WriteString(" " + s)
+						}
+					case *ast.Ident:
+						if !seen[x.Name] {
+							seen[x.Name] = true
+							for _, v := range values(x.Name) {
+								b.WriteString(" " + text(v, seen))
+							}
+						}
+					}
+					return true
+				})
+				return b.String()
+			}
+			// unreadable reports a Detail whose text the guard cannot see: at
+			// its top — through parentheses and concatenation — a call to
+			// anything but fmt's Sprint family or strings.Join, a name with no
+			// value to follow (a parameter), a field of a call's result; a
+			// Sprintf's format or a Join's slice that is itself unreadable; and
+			// anywhere in it, a name in another package. A field of a value —
+			// cfg.ProxyImage — is data, not authored text, and is read as such.
+			var unreadable func(e ast.Expr) bool
+			unreadable = func(e ast.Expr) bool {
+				foreign := false
+				ast.Inspect(e, func(n ast.Node) bool {
+					if sel, ok := n.(*ast.SelectorExpr); ok {
+						if id, ok := sel.X.(*ast.Ident); ok && imported[id.Name] && id.Name != "fmt" && id.Name != "strings" {
+							foreign = true
+						}
+					}
+					return true
+				})
+				if foreign {
+					return true
+				}
+				switch x := ast.Unparen(e).(type) {
+				case *ast.BinaryExpr:
+					return unreadable(x.X) || unreadable(x.Y)
+				case *ast.Ident:
+					return len(values(x.Name)) == 0
+				case *ast.SelectorExpr:
+					_, ok := x.X.(*ast.Ident)
+					return !ok
+				case *ast.CallExpr:
+					if !formats(x.Fun) {
+						return true
+					}
+					sel := x.Fun.(*ast.SelectorExpr)
+					carries := sel.Sel.Name == "Sprintf" || sel.Sel.Name == "Join"
+					return carries && len(x.Args) > 0 && unreadable(x.Args[0])
+				}
+				return false
+			}
+			elided := map[*ast.CompositeLit]bool{}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				lit, ok := n.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				if id, ok := lit.Type.(*ast.Ident); ok && containers[id.Name] || isOutcome(elementType(lit.Type)) {
+					for _, e := range lit.Elts {
+						if kv, ok := e.(*ast.KeyValueExpr); ok {
+							e = kv.Value
+						}
+						if inner, ok := e.(*ast.CompositeLit); ok && inner.Type == nil {
+							elided[inner] = true
+						}
+					}
+				}
+				if lit.Type != nil && !isOutcome(lit.Type) || lit.Type == nil && !elided[lit] {
+					return true
+				}
+				at := fset.Position(lit.Pos())
+				where := fmt.Sprintf("%s:%d", filepath.Base(at.Filename), at.Line)
+				okFalse, soft, words, readable := true, false, "", true // an absent OK is false
+				for _, e := range lit.Elts {
+					kv, ok := e.(*ast.KeyValueExpr)
+					if !ok {
+						found = append(found, where+" (unkeyed)")
+						return true
+					}
+					switch kv.Key.(*ast.Ident).Name {
+					case "OK":
+						v, ok := kv.Value.(*ast.Ident)
+						okFalse = ok && v.Name == "false"
+					case "Soft":
+						v, ok := ast.Unparen(kv.Value).(*ast.Ident)
+						soft = ok && (v.Name == "softDegraded" || v.Name == "softUnknown")
+					case "Detail":
+						words, readable = text(kv.Value, map[string]bool{}), !unreadable(kv.Value)
+					}
+				}
+				switch {
+				case okFalse:
+				case soft:
+					tiered++
+				case !readable:
+					found = append(found, where+" (Detail unreadable)")
+				case softWord.MatchString(words):
+					found = append(found, where)
+				}
+				return true
+			})
+		}
+	}
+	return found, tiered
+}
+
+// isOutcome reports whether a type expression is CheckOutcome or a pointer to it.
+func isOutcome(e ast.Expr) bool {
+	if s, ok := e.(*ast.StarExpr); ok {
+		e = s.X
+	}
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == "CheckOutcome"
+}
+
+// elementType is the element type of a slice, array or map type expression,
+// or nil.
+func elementType(e ast.Expr) ast.Expr {
+	switch ty := e.(type) {
+	case *ast.ArrayType:
+		return ty.Elt
+	case *ast.MapType:
+		return ty.Value
+	}
+	return nil
+}
+
+// formats reports whether a called function is one that formats its
+// arguments into the text it returns: fmt's Sprint family and strings.Join.
+func formats(fun ast.Expr) bool {
+	sel, ok := fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && (pkg.Name == "fmt" && strings.HasPrefix(sel.Sel.Name, "Sprint") || pkg.Name == "strings" && sel.Sel.Name == "Join")
+}
+
+// collectValues adds a const or var spec's values to m, by name.
+func collectValues(m map[string][]ast.Expr, vs *ast.ValueSpec) {
+	for i, id := range vs.Names {
+		if i < len(vs.Values) {
+			m[id.Name] = append(m[id.Name], vs.Values[i])
+		}
+	}
+}
+
+// doctorTieredOutcomes is how many tiered outcomes §3.5's table names today:
+// the inbound check's three skipped branches and its missing sockopt, the
+// egress probe's inconclusive UDP/DNS leg, the IPv6 posture it could not read,
+// and the hy2 probe's inconclusive dial and its leaf that differs from the pin.
+const doctorTieredOutcomes = 8
+
+// TestDoctorSoftOutcomesAllCarryATier is the guard that keeps §3.5's table
+// whole: a soft outcome added later without a tier would render ok, which is
+// the defect the table exists to end. It reads every source file of the
+// package, so an outcome builder that moves to a file of its own stays under
+// it, and it must see at least the tiered outcomes the table names — a walk
+// that saw none of them would pass over anything.
+func TestDoctorSoftOutcomesAllCarryATier(t *testing.T) {
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if files[name], err = os.ReadFile(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found, tiered := untieredSoftOutcomes(t, files)
+	if len(found) > 0 {
+		t.Errorf("a soft CheckOutcome with no Soft tier, or one the guard cannot read, at %s", strings.Join(found, ", "))
+	}
+	if tiered < doctorTieredOutcomes {
+		t.Errorf("the guard saw %d tiered outcomes; §3.5's table names %d — it is not reading the doctor's checks", tiered, doctorTieredOutcomes)
+	}
+}
+
+// TestDoctorSoftTierGuardCanFail is the guard's control, over planted source.
+// Found: a soft word in a plain string, in a Sprintf format or argument, in a
+// constant or a chain of them, in a local assigned a string, in any case; a
+// literal with its type elided in a slice, a map of pointers or a named slice
+// type; an unkeyed literal, a literal in a package-level var or in a function
+// literal there; an OK computed at run time; a Soft that is no tier —
+// softNone, 0, softTier(0), (softNone); a Detail the guard cannot read — a
+// call, a field of a call's result, a name in another package, a parameter,
+// a parameter as a Sprintf format; text in a Join over a slice literal or a
+// local built with append.
+// Not found: a real tier (counted), OK false, a detail with no soft word, a
+// local constant of the same name as another function's, a local that
+// shadows a package constant, a value assigned from a call, and formatting
+// arguments that are data.
+func TestDoctorSoftTierGuardCanFail(t *testing.T) {
+	src := []byte(`package cmd
+import "example.invalid/other"
+const adv = "ADVISORY: x"
+const warning = "ADVISORY: x"
+const message = warning
+type outcomes []CheckOutcome
+func a() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x"} }
+func b() CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("probe inconclusive (%v)", 1)} }
+func c() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: softDegraded} }
+func d() CheckOutcome { return CheckOutcome{OK: false, Detail: "UNKNOWN"} }
+func e() CheckOutcome { return CheckOutcome{OK: true, Detail: "running, healthy"} }
+func f() []CheckOutcome { return []CheckOutcome{{OK: true, Detail: "posture UNKNOWN"}} }
+func g() CheckOutcome { return CheckOutcome{true, "ADVISORY", "", softNone} }
+func h() CheckOutcome { return CheckOutcome{OK: true, Detail: adv} }
+func i() CheckOutcome { detail := "no profile (skipped)"; return CheckOutcome{OK: true, Detail: detail} }
+func j() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: softNone} }
+func k() CheckOutcome { return CheckOutcome{OK: true, Detail: "UDP best-effort: SKIP"} }
+func l(n int) CheckOutcome { return CheckOutcome{OK: n > 0, Detail: "Advisory: x"} }
+func m() map[string]*CheckOutcome { return map[string]*CheckOutcome{"a": {OK: true, Detail: "Note: x"}} }
+func n() CheckOutcome { return CheckOutcome{OK: true, Detail: "probe Inconclusive", Soft: 0} }
+func o() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: softTier(0)} }
+func p() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: (softNone)} }
+func q() CheckOutcome { return CheckOutcome{OK: true, Detail: message} }
+func r() CheckOutcome { return CheckOutcome{OK: true, Detail: helper()} }
+func s() CheckOutcome { return CheckOutcome{OK: true, Detail: other.Advice} }
+func t() outcomes { return outcomes{{OK: true, Detail: "UNKNOWN posture"}} }
+func u() CheckOutcome { const said = "ADVISORY: x"; return CheckOutcome{OK: true, Detail: said, Soft: softDegraded} }
+func v() CheckOutcome { const said = "running, healthy"; return CheckOutcome{OK: true, Detail: said} }
+func w(c config) CheckOutcome { subnet, err := lookup(c); _ = err; return CheckOutcome{OK: true, Detail: subnet} }
+func x(c config) CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("%d of %s", len(c.names), c.Image)} }
+func y() CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("%s", adv)} }
+var shared = CheckOutcome{OK: true, Detail: "ADVISORY: x"}
+var checkFn = func() CheckOutcome { return CheckOutcome{OK: true, Detail: "probe inconclusive"} }
+func pass(detail string) CheckOutcome { return CheckOutcome{OK: true, Detail: detail} }
+func z(r result) CheckOutcome { return CheckOutcome{OK: true, Detail: verdictOf(r).Note} }
+const label = "posture UNKNOWN"
+func ab() CheckOutcome { label := "running"; return CheckOutcome{OK: true, Detail: label} }
+func ac(x string) CheckOutcome { return CheckOutcome{OK: true, Detail: strings.Join([]string{"UDP probe inconclusive", x}, "; ")} }
+func ad() CheckOutcome { var notes []string; notes = append(notes, "IPv6 posture UNKNOWN"); return CheckOutcome{OK: true, Detail: strings.Join(notes, ", ")} }
+func ae(format string, a ...any) CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf(format, a...)} }
+`)
+	found, tiered := untieredSoftOutcomes(t, map[string][]byte{"doctor.go": src})
+	want := "doctor.go:7,doctor.go:8,doctor.go:12,doctor.go:13 (unkeyed),doctor.go:14,doctor.go:15,doctor.go:16,doctor.go:17," +
+		"doctor.go:18,doctor.go:19,doctor.go:20,doctor.go:21,doctor.go:22,doctor.go:23,doctor.go:24 (Detail unreadable)," +
+		"doctor.go:25 (Detail unreadable),doctor.go:26,doctor.go:31,doctor.go:32,doctor.go:33,doctor.go:34 (Detail unreadable)," +
+		"doctor.go:35 (Detail unreadable),doctor.go:38,doctor.go:39,doctor.go:40 (Detail unreadable)"
+	if got := strings.Join(found, ","); got != want {
+		t.Errorf("found %q,\nwant %q", got, want)
+	}
+	if tiered != 2 {
+		t.Errorf("counted %d tiered outcomes, want 2", tiered)
+	}
+}
+
+// TestDoctorReport pins ws proxy doctor's report (phase-5 §3.5): a line for
+// every check in the list, in order — its outcome when it ran, unknown with no
+// note when the run stopped before it; a check's Detail as its note, and the
+// failed check's Fix as a second paragraph; soft findings degraded or unknown;
+// and the caption, which names the failed check out of the whole list, or
+// counts the rendered states when nothing failed.
+func TestDoctorReport(t *testing.T) {
+	checks := []Check{{Name: "first"}, {Name: "second"}, {Name: "third"}, {Name: "fourth"}}
+	ran := func(outs ...CheckOutcome) []checkResult {
+		r := make([]checkResult, len(outs))
+		for i, o := range outs {
+			r[i] = checkResult{Name: checks[i].Name, CheckOutcome: o}
+		}
+		return r
+	}
+	ok, adv, fail, unknown := output.StateOK, output.StateAdvisory, output.StateFail, output.StateUnknown
+	type line struct {
+		state output.State
+		note  string
+	}
+	for _, c := range []struct {
+		name    string
+		res     Result
+		want    []line
+		caption string
+	}{
+		{"every check passes", Result{OK: true, FailedAt: -1, Outcomes: ran(
+			CheckOutcome{OK: true}, CheckOutcome{OK: true, Detail: "devpod-proxy"}, CheckOutcome{OK: true}, CheckOutcome{OK: true})},
+			[]line{{ok, ""}, {ok, "devpod-proxy"}, {ok, ""}, {ok, ""}}, "4 of 4 checks passed"},
+		{"soft findings", Result{OK: true, FailedAt: -1, Outcomes: ran(
+			CheckOutcome{OK: true}, CheckOutcome{OK: true, Detail: "ADVISORY: a", Soft: softDegraded},
+			CheckOutcome{OK: true, Detail: "posture UNKNOWN", Soft: softUnknown}, CheckOutcome{OK: true})},
+			[]line{{ok, ""}, {adv, "ADVISORY: a"}, {unknown, "posture UNKNOWN"}, {ok, ""}},
+			"2 of 4 checks passed, 1 degraded, 1 unknown"},
+		{"the second check fails", Result{OK: false, FailedAt: 1, Outcomes: ran(
+			CheckOutcome{OK: true}, CheckOutcome{OK: false, Detail: "image datapath differs", Fix: "ws proxy rebuild"})},
+			[]line{{ok, ""}, {fail, "image datapath differs\nFix: ws proxy rebuild"}, {unknown, ""}, {unknown, ""}},
+			"Failed at check 2 of 4: second"},
+		{"the first fails with no detail", Result{OK: false, FailedAt: 0, Outcomes: ran(
+			CheckOutcome{OK: false, Fix: "Start Docker and retry."})},
+			[]line{{fail, "Fix: Start Docker and retry."}, {unknown, ""}, {unknown, ""}, {unknown, ""}},
+			"Failed at check 1 of 4: first"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := doctorReport(checks, c.res)
+			if got.Title != "Proxy doctor" {
+				t.Errorf("title %q, want %q", got.Title, "Proxy doctor")
+			}
+			if len(got.Items) != len(checks) {
+				t.Fatalf("%d lines, want one per check in the list, %d: %+v", len(got.Items), len(checks), got.Items)
+			}
+			for i, it := range got.Items {
+				if it.Name != checks[i].Name || it.State != c.want[i].state || it.Note != c.want[i].note {
+					t.Errorf("line %d = %+v, want %q in state %v with note %q", i+1, it, checks[i].Name, c.want[i].state, c.want[i].note)
+				}
+			}
+			if got.Caption != c.caption {
+				t.Errorf("caption %q, want %q", got.Caption, c.caption)
 			}
 		})
 	}

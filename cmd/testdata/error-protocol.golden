@@ -179,10 +179,8 @@ exit 1
 --- stderr (0 bytes)
 === silent/vault-status
 exit 2
---- stdout (37 bytes)
-|Vault Status
-|
-|
+--- stdout (35 bytes)
+|Vault status
 |Overall: red (exit 2)
 --- stderr (0 bytes)
 === helper/select-no-workspaces
@@ -223,12 +221,24 @@ exit 1
 |  3. Rebuild image      ws proxy rebuild
 === body-exit/proxy-doctor-unreachable
 exit 1
---- stdout (24 bytes)
-|  ✗ docker reachable
-|
---- stderr (104 bytes)
-|⚠ Failed at check 1/1: docker reachable
-|  Fix: Start Docker (Docker Desktop or the daemon) and retry.
+--- stdout (699 bytes)
+|Proxy doctor
+|  ✗ failed    docker reachable
+|              Fix: Start Docker (Docker Desktop or the daemon) and retry.
+|  ? unknown   proxy image present
+|  ? unknown   active profile valid (xray -test)
+|  ? unknown   datapath contract (image ↔ profile)
+|  ? unknown   proxy container running and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default route via proxy
+|  ? unknown   self-egress (proxy tunnel exit-IP)
+|  ? unknown   forwarding datapath (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy (advisory)
+|Failed at check 1 of 13: docker reachable
+--- stderr (0 bytes)
 === body-exit/proxy-doctor-json-unreachable
 exit 1
 --- stdout (189 bytes)
@@ -254,6 +264,49 @@ exit 1
 --- stdout (0 bytes)
 --- stderr (54 bytes)
 |✗ Proxy is not running. Start it first: ws proxy up
+=== runtime/proxy-check-unreachable
+exit 1
+--- stdout (198 bytes)
+|Proxy prerequisites
+|  ✗ failed    Docker running
+|  ✗ failed    Xray config exists
+|  ? unknown   Proxy image built
+|  ? unknown   Proxy container running
+|0 of 4 checks passed, 2 failed, 2 unknown
+--- stderr (0 bytes)
+=== runtime/proxy-status-unreachable
+exit 1
+--- stdout (0 bytes)
+--- stderr (143 bytes)
+|✗ inspect proxy: Cannot connect to the Docker daemon at
+|  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon
+|  running?
+=== silent/vault-doctor-red
+exit 2
+--- stdout (1118 bytes)
+|Vault doctor
+|  ✓ ok        orphan-mcp-subprocess
+|              0 orphan MCP subprocesses
+|  ⚠ degraded  stale-lock-files
+|              1 stale lock(s): /srv/vault-ai/_tooling/state/ingest.lock
+|              Fix: re-run with `ws vault doctor --clear-stale-locks --yes` to
+|              remove (operator-controlled per CONTEXT D-13)
+|  ✗ failed    vault-ai-token
+|              VAULT_AI_TOKEN unset or empty
+|              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles
+|              ADR-sec-02 for the age key flow
+|  ✗ failed    token-fd-pass
+|              stage=newclient: VAULT_AI_TOKEN not set
+|              Fix: see RESEARCH §Pitfall 7 + Plan 18-01 for fd-3 wiring; check
+|              `ws vault doctor` token check above
+|  ⚠ degraded  xrepo-contract-parity
+|              check-xrepo-contract.sh not found at
+|              /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: stat
+|              /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: no such file
+|              or directory
+|              Fix: verify Phase 17 deliverable is present in vault-ai checkout
+|Overall: red (exit 2)
+--- stderr (0 bytes)
 === body-exit/start-not-found
 exit 1
 --- stdout (0 bytes)

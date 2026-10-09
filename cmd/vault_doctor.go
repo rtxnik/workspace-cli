@@ -30,7 +30,8 @@ package cmd
 //   - 2 — at least one red (critical: orphans, missing token, fd-pass broken, xrepo drift)
 //
 // Output modes:
-//   - default (human) — table with ●/⚠/✗ band prefix per check
+//   - default (human) — a Checks block on stdout, one line per check, the
+//     worst band and its exit code as the caption
 //   - --json — NDJSON, one doctorCheck object per line
 
 import (
@@ -373,36 +374,35 @@ func worstBand(checks []*doctorCheck) statusBand {
 	return worst
 }
 
-// renderChecks writes the checks to w. JSON mode emits NDJSON (one
-// doctorCheck per line). Human mode emits a table with ●/⚠/✗ prefix.
-func renderChecks(w io.Writer, checks []*doctorCheck, jsonMode bool) error {
-	if jsonMode {
-		enc := json.NewEncoder(w)
-		for _, c := range checks {
-			if err := enc.Encode(c); err != nil {
-				return fmt.Errorf("encode check %q: %w", c.Name, err)
-			}
-		}
-		return nil
-	}
+// writeChecksNDJSON writes the checks to w as --json's NDJSON, one
+// doctorCheck per line.
+func writeChecksNDJSON(w io.Writer, checks []*doctorCheck) error {
+	enc := json.NewEncoder(w)
 	for _, c := range checks {
-		var prefix string
-		switch c.Band {
-		case bandGreen:
-			prefix = "✓"
-		case bandYellow:
-			prefix = "⚠"
-		case bandRed:
-			prefix = "✗"
-		default:
-			prefix = "?"
-		}
-		_, _ = fmt.Fprintf(w, "%s %-26s %s\n", prefix, c.Name, c.Detail)
-		if c.Remediation != "" {
-			_, _ = fmt.Fprintf(w, "  → %s\n", c.Remediation)
+		if err := enc.Encode(c); err != nil {
+			return fmt.Errorf("encode check %q: %w", c.Name, err)
 		}
 	}
 	return nil
+}
+
+// vaultDoctorReport is ws vault doctor's report (phase-5 §3.7): one line per
+// check, its band as its state (bandState), its detail as the note and its
+// remediation as a second paragraph, Fix: …; the caption is the worst band
+// and the exit code it maps to, the verdict the root used to print.
+func vaultDoctorReport(checks []*doctorCheck, worst statusBand, code int) output.Checks {
+	items := make([]output.Check, 0, len(checks))
+	for _, c := range checks {
+		note := c.Detail
+		if c.Remediation != "" {
+			if note != "" {
+				note += "\n"
+			}
+			note += "Fix: " + c.Remediation
+		}
+		items = append(items, output.Check{Name: c.Name, State: bandState(c.Band), Note: note})
+	}
+	return output.Checks{Title: "Vault doctor", Items: items, Caption: fmt.Sprintf("Overall: %s (exit %d)", worst, code)}
 }
 
 // applyMutations executes the opt-in mutations gated by --kill-orphans and
@@ -494,8 +494,14 @@ func newVaultDoctorCmd() *cobra.Command {
 			}
 
 			checks := runVaultChecks(ctx)
+			band := worstBand(checks)
+			code := mcp.HealthBandExitCode(string(band))
 			jsonFlag, _ := cmd.Flags().GetBool("json")
-			if err := renderChecks(cmd.OutOrStdout(), checks, jsonFlag); err != nil {
+			if jsonFlag {
+				if err := writeChecksNDJSON(cmd.OutOrStdout(), checks); err != nil {
+					return fmt.Errorf("doctor: render: %w", err)
+				}
+			} else if err := writeReport(cmd.OutOrStdout(), output.Out(), vaultDoctorReport(checks, band, code)); err != nil {
 				return fmt.Errorf("doctor: render: %w", err)
 			}
 
@@ -503,15 +509,12 @@ func newVaultDoctorCmd() *cobra.Command {
 			// detected state before any mutation fires.
 			applyMutations(cmd, checks)
 
-			band := worstBand(checks)
-			code := mcp.HealthBandExitCode(string(band))
 			if code == 0 {
 				return nil
 			}
-			return &cliErrorWithExit{
-				code: code,
-				msg:  fmt.Sprintf("doctor: worst band=%s (see %d check(s) above)", band, len(checks)),
-			}
+			// The verdict is in the report (its caption) or in the NDJSON's
+			// bands; the exit code is all the root has to add.
+			return &cliErrorWithExit{code: code, msg: ""}
 		},
 	}
 	cmd.Flags().Bool("kill-orphans", false, "Kill detected orphan MCP subprocesses (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)")

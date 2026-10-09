@@ -27,15 +27,31 @@ type Check struct {
 }
 
 // CheckOutcome is the result of running one Check. OK=false marks a HARD failure
-// that stops the runner. A SOFT/advisory finding is encoded as OK=true with a
-// human-readable Detail (e.g. "UDP best-effort: SKIP") so the run continues.
+// that stops the runner. A SOFT finding — one that does not stop the run but is
+// not a pass either — is OK=true with its Soft tier set and the finding in
+// Detail (phase-5 §3.5); TestDoctorSoftOutcomesAllCarryATier fails one without.
 // Fix is a remediation hint shown only on failure. Detail/Fix never contain
 // secrets — only a non-secret cert sha256 may be printed.
 type CheckOutcome struct {
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail,omitempty"`
-	Fix    string `json:"fix,omitempty"`
+	OK     bool     `json:"ok"`
+	Detail string   `json:"detail,omitempty"`
+	Fix    string   `json:"fix,omitempty"`
+	Soft   softTier `json:"-"`
 }
+
+// softTier is how a soft finding — an outcome that does not stop the run
+// (OK true) but is not a pass either — renders in the human report: degraded
+// for a finding that needs attention, unknown for a check that ran without
+// reaching a verdict. It is not part of the JSON, which keeps its shape; the
+// words in Detail say the same for a machine. TestDoctorSoftOutcomesAllCarryATier
+// fails a soft outcome that sets no tier.
+type softTier int
+
+const (
+	softNone     softTier = iota // a pass
+	softDegraded                 // ⚠ degraded
+	softUnknown                  // ? unknown
+)
 
 // checkResult pairs a Check's name with its outcome, for JSON output and
 // rendering.
@@ -92,14 +108,15 @@ var proxyDoctorCmd = &cobra.Command{
 		cfg := config.Load()
 		jsonFlag, _ := cmd.Flags().GetBool("json")
 
-		res := runChecks(proxyDoctorChecks(cfg, proxyengine.Default()))
+		checks := proxyDoctorChecks(cfg, proxyengine.Default())
+		res := runChecks(checks)
 
 		if jsonFlag {
 			if err := output.WriteJSON(cmd.OutOrStdout(), res); err != nil {
 				return err
 			}
-		} else {
-			renderDoctor(res)
+		} else if _, err := fmt.Fprintln(cmd.OutOrStdout(), doctorReport(checks, res).Render(output.Out())); err != nil {
+			return err
 		}
 		// The report is the output; the exit code carries the verdict.
 		if code := doctorExitCode(res); code != 0 {
@@ -109,30 +126,42 @@ var proxyDoctorCmd = &cobra.Command{
 	},
 }
 
-// renderDoctor prints a ✓/✗ line per check that ran, plus the failing check's
-// Detail and Fix hint, then a summary.
-func renderDoctor(res Result) {
-	for _, r := range res.Outcomes {
-		mark := output.StyleSuccess.Render("✓")
-		if !r.OK {
-			mark = output.StyleError.Render("✗")
+// doctorReport is ws proxy doctor's report: one line for every check in the
+// list, in order. A check that ran renders its outcome — ok, failed, or its
+// soft tier — with its Detail as the note, and the failed check adds its Fix
+// as a second paragraph; a check after the one that stopped the run renders
+// unknown with no note. The caption names the failed check out of the whole
+// list, or, when none failed, counts the states the report rendered.
+func doctorReport(checks []Check, res Result) output.Checks {
+	items := make([]output.Check, 0, len(checks))
+	for i, c := range checks {
+		if i >= len(res.Outcomes) {
+			items = append(items, output.Check{Name: c.Name, State: output.StateUnknown})
+			continue
 		}
-		line := fmt.Sprintf("  %s %s", mark, r.Name)
-		if r.Detail != "" {
-			line += output.StyleDim.Render(" — " + r.Detail)
+		o := res.Outcomes[i]
+		st, note := output.StateOK, o.Detail
+		switch {
+		case !o.OK:
+			st = output.StateFail
+			if o.Fix != "" {
+				if note != "" {
+					note += "\n"
+				}
+				note += "Fix: " + o.Fix
+			}
+		case o.Soft == softDegraded:
+			st = output.StateAdvisory
+		case o.Soft == softUnknown:
+			st = output.StateUnknown
 		}
-		fmt.Println(line)
+		items = append(items, output.Check{Name: c.Name, State: st, Note: note})
 	}
-	fmt.Println()
-	if res.OK {
-		output.Success("All proxy checks passed")
-		return
+	caption := checksCaption(items)
+	if !res.OK {
+		caption = fmt.Sprintf("Failed at check %d of %d: %s", res.FailedAt+1, len(checks), checks[res.FailedAt].Name)
 	}
-	failed := res.Outcomes[res.FailedAt]
-	output.Warn(fmt.Sprintf("Failed at check %d/%d: %s", res.FailedAt+1, len(res.Outcomes), failed.Name))
-	if failed.Fix != "" {
-		output.Detail("Fix: " + failed.Fix)
-	}
+	return output.Checks{Title: "Proxy doctor", Items: items, Caption: caption}
 }
 
 // doctorProxyCheckFn and proxyConnectedContainersFn are the injection seam for
@@ -239,13 +268,13 @@ func datapathModeFrom(p profileTproxyProbe) (string, error) {
 // not abort here — existing operators may not have migrated yet.
 func inboundTproxyOutcome(p profileTproxyProbe) CheckOutcome {
 	if p.nameErr != nil || p.name == "" {
-		return CheckOutcome{OK: true, Detail: "no active profile (skipped)"}
+		return CheckOutcome{OK: true, Detail: "no active profile (skipped)", Soft: softUnknown}
 	}
 	if p.readErr != nil {
-		return CheckOutcome{OK: true, Detail: "could not read active profile (skipped)"}
+		return CheckOutcome{OK: true, Detail: "could not read active profile (skipped)", Soft: softUnknown}
 	}
 	if p.parseErr != nil {
-		return CheckOutcome{OK: true, Detail: "could not parse active profile (skipped)"}
+		return CheckOutcome{OK: true, Detail: "could not parse active profile (skipped)", Soft: softUnknown}
 	}
 	if p.tproxy {
 		return CheckOutcome{OK: true, Detail: "sockopt.tproxy=tproxy present"}
@@ -254,6 +283,7 @@ func inboundTproxyOutcome(p profileTproxyProbe) CheckOutcome {
 		OK:     true,
 		Detail: "ADVISORY: active profile inbound missing sockopt.tproxy (TPROXY mode may not work)",
 		Fix:    "ws proxy upgrade-config",
+		Soft:   softDegraded,
 	}
 }
 
@@ -264,9 +294,11 @@ func inboundTproxyOutcome(p profileTproxyProbe) CheckOutcome {
 // are exercised live only.
 //
 // Soft/hard split: every check here is HARD (OK=false stops the run) EXCEPT the
-// UDP leg of the egress probe and the hy2 cert-pin observation, which are
-// advisory — they report SKIP / a note via Detail with OK=true so a QUIC-only
-// endpoint or a UDP-blocked sandbox does not block the operator.
+// soft findings of phase-5 §3.5 — the UDP leg of the egress probe, the hy2
+// probe's dial and cert-pin observation, an IPv6 posture that could not be
+// read, and the inbound sockopt.tproxy check — which return OK=true with a
+// Soft tier, so a QUIC-only endpoint or a UDP-blocked sandbox does not block
+// the operator.
 func proxyDoctorChecks(cfg config.Config, eng proxyengine.Engine) []Check {
 	// Run-once memos shared across the checks that need them. Lazy: nothing is
 	// computed here; each getter computes on first use, so an early HARD failure
@@ -318,6 +350,18 @@ func checkImagePresent(cfg config.Config, results []docker.CheckResult) CheckOut
 		if r.Name == "Proxy image built" {
 			if r.Passed {
 				return CheckOutcome{OK: true, Detail: cfg.ProxyImage}
+			}
+			if r.Skipped {
+				// The daemon answered the ping, but the inspection failed with
+				// something other than not-found — a timeout, a refusal, a
+				// server error: nothing shows the image missing, so no rebuild
+				// is advised and no cause is claimed. The check still stops the
+				// run, as any hard check that does not pass.
+				return CheckOutcome{
+					OK:     false,
+					Detail: "the image inspection failed after a good ping, so whether the image exists is not known",
+					Fix:    "Check the Docker daemon and its access to images (docker image inspect " + cfg.ProxyImage + "), then re-run: ws proxy doctor",
+				}
 			}
 			return CheckOutcome{
 				OK:  false,
@@ -476,6 +520,7 @@ func dnsEgressOutcome(probe proxyengine.ProbeResult, dnsExit string) CheckOutcom
 		return CheckOutcome{
 			OK:     true,
 			Detail: fmt.Sprintf("TCP exit-IP %s (direct %s); UDP/DNS: inconclusive (no UDP/DNS egress observed)", probe.ProxiedIP, probe.DirectIP),
+			Soft:   softDegraded,
 		}
 	default: // DNSTunneled
 		return CheckOutcome{
@@ -553,6 +598,7 @@ func v6FailClosedOutcome(names []string, verdicts []docker.WorkspaceV6Verdict) C
 		return CheckOutcome{
 			OK:     true,
 			Detail: fmt.Sprintf("IPv6 posture UNKNOWN for: %s (v6 route table unreadable)", strings.Join(unknown, ", ")),
+			Soft:   softUnknown,
 		}
 	}
 	return CheckOutcome{OK: true, Detail: fmt.Sprintf("%d workspace(s) IPv6 fail-closed", len(names))}
@@ -615,6 +661,7 @@ func hy2ProtocolSanity(dp xray.DetailedProfile) CheckOutcome {
 			OK: true,
 			Detail: fmt.Sprintf("hy2 %s:%d — TCP-TLS probe inconclusive (%v); hysteria2 is QUIC/UDP so a TCP refusal is expected",
 				dp.Address, dp.Port, err),
+			Soft: softUnknown,
 		}
 	}
 	switch {
@@ -627,6 +674,7 @@ func hy2ProtocolSanity(dp xray.DetailedProfile) CheckOutcome {
 			OK: true,
 			Detail: fmt.Sprintf("hy2 observed leaf sha256=%s != pin %s — NOTE: TCP-TLS leaf may differ from the QUIC leaf; verify against the endpoint",
 				observed, dp.PinSHA256),
+			Soft: softDegraded,
 		}
 	}
 }

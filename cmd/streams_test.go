@@ -172,6 +172,24 @@ type streamsRow struct {
 	// check replaces the byte comparison of stdout, for a row whose stdout
 	// the tables baseline pins.
 	check func(t *testing.T, stdout string)
+	// docker, when set, is the state of a fake Docker Engine API the row's
+	// child reaches through DOCKER_HOST, with the fake docker CLI on PATH for
+	// route lookups. Unset, the child's DOCKER_HOST reaches nothing.
+	docker *fakeDockerState
+}
+
+// reportCheck is the stdout check of a report row whose whole stdout the
+// reports baseline pins: the report is there, on stdout, and holds each of
+// lines.
+func reportCheck(lines ...string) func(t *testing.T, stdout string) {
+	return func(t *testing.T, stdout string) {
+		t.Helper()
+		for _, l := range lines {
+			if !strings.Contains(stdout, l+"\n") {
+				t.Errorf("stdout lacks the line %q:\n%s", l, stdout)
+			}
+		}
+	}
 }
 
 // runStreamsChild runs row in a child over fx.
@@ -207,6 +225,10 @@ func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int,
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 	}, row.env...)
+	if row.docker != nil {
+		cmd.Env = append(cmd.Env, "DOCKER_HOST="+startFakeDocker(t, *row.docker))
+		writeFakeDockerCLI(t, fx.bin)
+	}
 	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+v)
 	}
@@ -223,7 +245,7 @@ func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int,
 	default:
 		t.Fatalf("running %s: %v\n%s", row.name, err, errBuf.String())
 	}
-	return code, normaliseStepTimes(out.String()), normaliseStepTimes(errBuf.String())
+	return code, normaliseUptime(normaliseStepTimes(out.String())), normaliseStepTimes(errBuf.String())
 }
 
 // stepTime is the time at the end of a step's result line.
@@ -232,6 +254,27 @@ var stepTime = regexp.MustCompile(`(?m)  (\d+\.\ds|\d+m\d\ds|\d+h\d\dm)$`)
 // normaliseStepTimes replaces every step time with <t>: how long a step took
 // is the one thing in its line that moves from run to run.
 func normaliseStepTimes(s string) string { return stepTime.ReplaceAllString(s, "  <t>") }
+
+// uptime is the value of ws proxy status's Uptime pair, which the fake
+// daemon's fixed start time turns into a duration that grows from run to run:
+// a whole number of seconds as Duration.String prints it, so a value of any
+// other shape is left for the comparison to catch.
+var uptime = regexp.MustCompile(`(?m)^(  Uptime +)(?:[0-9]+h)?(?:[0-9]+m)?[0-9]+s$`)
+
+// normaliseUptime replaces the proxy's uptime with <uptime>.
+func normaliseUptime(s string) string { return uptime.ReplaceAllString(s, "${1}<uptime>") }
+
+func TestNormaliseUptime(t *testing.T) {
+	in := "Proxy\n  State    ✓ running\n  Uptime   24h31m5s\n  Image    devpod-proxy\n" +
+		"  Uptime   5m0s\n  Uptime   0s\n" +
+		"  Uptime   not a duration\nUptime   1h\n  Uptime   1hhh\n  Uptime   12\n  Uptime   1.5s\n  Uptime   1h2m\n"
+	want := "Proxy\n  State    ✓ running\n  Uptime   <uptime>\n  Image    devpod-proxy\n" +
+		"  Uptime   <uptime>\n  Uptime   <uptime>\n" +
+		"  Uptime   not a duration\nUptime   1h\n  Uptime   1hhh\n  Uptime   12\n  Uptime   1.5s\n  Uptime   1h2m\n"
+	if got := normaliseUptime(in); got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
 
 func TestNormaliseStepTimes(t *testing.T) {
 	in := "✓ Stopping workspace \"api\"  0.4s\n✗ Starting container  2m13s\n✓ Building  1h04m\n" +
@@ -273,6 +316,107 @@ var streamsRows = []streamsRow{
 				t.Errorf("the workspace directory is still there: %v", err)
 			}
 		}},
+	{name: "ws proxy check: no daemon", args: []string{"proxy", "check"}, code: 1,
+		stdout: "Proxy prerequisites\n" +
+			"  ✗ failed    Docker running\n" +
+			"  ✓ ok        Xray config exists\n" +
+			"  ? unknown   Proxy image built\n" +
+			"  ? unknown   Proxy container running\n" +
+			"1 of 4 checks passed, 1 failed, 2 unknown\n"},
+	{name: "ws proxy check: all ok", args: []string{"proxy", "check"}, docker: &fakeHealthyProxy,
+		stdout: "Proxy prerequisites\n" +
+			"  ✓ ok        Docker running\n" +
+			"  ✓ ok        Xray config exists\n" +
+			"  ✓ ok        Proxy image built\n" +
+			"  ✓ ok        Proxy container running\n" +
+			"4 of 4 checks passed\n"},
+	{name: "ws proxy status: no daemon", args: []string{"proxy", "status"}, code: 1,
+		stderr: "✗ inspect proxy: Cannot connect to the Docker daemon at\n" +
+			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
+			"  running?\n"},
+	{name: "ws proxy status: stopped and no network", args: []string{"proxy", "status"}, docker: &fakeDockerState{},
+		stdout: "Proxy\n" +
+			"  State    - stopped\n" +
+			"  Network  ws-proxy (172.28.0.2)\n" +
+			"\n" +
+			"Workspaces\n" +
+			"  Route protection  ? unknown\n" +
+			"protection scan failed: inspect network: Error response from daemon: No such\n" +
+			"network (workspace protection UNKNOWN)\n"},
+	{name: "ws proxy status: one workspace unprotected", args: []string{"proxy", "status"}, docker: &fakeHealthyProxy,
+		stdout: "Proxy\n" +
+			"  State    ✓ running\n" +
+			"  Health   ✓ healthy\n" +
+			"  Uptime   <uptime>\n" +
+			"  Image    devpod-proxy\n" +
+			"  Network  ws-proxy (172.28.0.2)\n" +
+			"\n" +
+			"Workspaces\n" +
+			"  unprot-ml-training  ✗ unprotected: default via 172.28.0.1 (not the proxy\n" +
+			"                      172.28.0.2)\n" +
+			"  web-frontend        ✓ protected\n" +
+			"1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)\n"},
+	{name: "ws proxy test: tunnel and DNS tunnelled", args: []string{"proxy", "test"}, stub: "tunnel-up",
+		docker: &fakeHealthyProxy,
+		stdout: "Tunnel\n" +
+			"  Direct IP   203.0.113.7\n" +
+			"  Proxied IP  198.51.100.9\n" +
+			"  Tunneled    ✓ yes\n" +
+			"  Latency     182ms\n" +
+			"  UDP/DNS     ✓ tunnelled (exit 198.51.100.9)\n" +
+			"Tunnel active — exit IPs differ\n",
+		stderr: proxyTestProgress + "Probing UDP/DNS...\n"},
+	{name: "ws proxy test: DNS leak", args: []string{"proxy", "test"}, stub: "tunnel-dns-leak", code: 1,
+		docker: &fakeHealthyProxy,
+		stdout: "Tunnel\n" +
+			"  Direct IP   203.0.113.7\n" +
+			"  Proxied IP  198.51.100.9\n" +
+			"  Tunneled    ✓ yes\n" +
+			"  Latency     182ms\n" +
+			"  UDP/DNS     ✗ leak (exit 203.0.113.7 is the direct IP)\n" +
+			"UDP/DNS LEAK -- resolver saw your real IP 203.0.113.7 (untunnelled)\n",
+		stderr: proxyTestProgress + "Probing UDP/DNS...\n"},
+	{name: "ws proxy test: tunnel down", args: []string{"proxy", "test"}, stub: "tunnel-down", code: 1,
+		docker: &fakeHealthyProxy,
+		stdout: "Tunnel\n" +
+			"  Direct IP   203.0.113.7\n" +
+			"  Proxied IP  203.0.113.7\n" +
+			"  Tunneled    ✗ no\n" +
+			"  Latency     95ms\n" +
+			"  UDP/DNS     - not probed\n" +
+			"Tunnel NOT active — direct and proxied exit IPs are the same\n",
+		stderr: proxyTestProgress},
+	{name: "ws proxy test --json: tunnel and DNS tunnelled", args: []string{"proxy", "test", "--json"}, stub: "tunnel-up",
+		docker: &fakeHealthyProxy,
+		stdout: "{\n  \"directIP\": \"203.0.113.7\",\n  \"proxiedIP\": \"198.51.100.9\",\n  \"tunneled\": true,\n" +
+			"  \"latencyMs\": 182,\n  \"dns\": \"tunneled\",\n  \"dnsExitIP\": \"198.51.100.9\"\n}\n"},
+	{name: "ws proxy doctor: no daemon", args: []string{"proxy", "doctor"}, code: 1,
+		check: reportCheck("✗ failed    docker reachable", "? unknown   inbound sockopt.tproxy (advisory)",
+			"Failed at check 1 of 13: docker reachable")},
+	{name: "ws proxy doctor: the image's datapath differs", args: []string{"proxy", "doctor"}, code: 4,
+		docker: &fakeHealthyProxy,
+		check: reportCheck("✓ ok        active profile valid (xray -test)", "✗ failed    datapath contract (image ↔ profile)",
+			"? unknown   proxy container running and healthy", "Failed at check 4 of 13: datapath contract (image ↔ profile)")},
+	{name: "ws proxy doctor --json: no daemon", args: []string{"proxy", "doctor", "--json"}, code: 1,
+		stdout: "{\n  \"ok\": false,\n  \"failedAt\": 0,\n  \"checks\": [\n    {\n      \"name\": \"docker reachable\",\n" +
+			"      \"ok\": false,\n      \"fix\": \"Start Docker (Docker Desktop or the daemon) and retry.\"\n    }\n  ]\n}\n"},
+	{name: "ws vault doctor: mixed bands", args: []string{"vault", "doctor"}, stub: "vault-doctor-mixed", code: 2,
+		check: reportCheck("Vault doctor", "  ⚠ degraded  stale-lock-files", "  ✗ failed    vault-ai-token",
+			"              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles", "Overall: red (exit 2)")},
+	{name: "ws vault status: mixed bands", args: []string{"vault", "status"}, stub: "vault-status-mixed", code: 1,
+		check: reportCheck("Vault status", "  ✓ ok        MCP liveness", "  ⚠ degraded  cost-tracker headroom",
+			"Overall: yellow (exit 1)")},
+	{name: "ws vault predict-bulk-load 40: a projection", args: []string{"vault", "predict-bulk-load", "40"}, stub: "predict-projection",
+		stdout: "Current rows\n" +
+			"  dedup   10\n" +
+			"  mcp     40\n" +
+			"  search  70\n" +
+			"  total   120\n" +
+			"\n" +
+			"Projection for 40 notes\n" +
+			"  Projected New Rows    200\n" +
+			"  Estimated Dedup Time  3.50s\n" +
+			"  Projected Segments    7\n"},
 	{name: "ws proxy up: no docker", args: []string{"proxy", "up"}, code: 1,
 		stderr: "~ Starting proxy\n" +
 			"✗ Starting proxy  <t>\n" +
@@ -389,6 +533,10 @@ var streamsRows = []streamsRow{
 	{name: "ws proxy profile list --reveal --json: none", args: []string{"proxy", "profile", "list", "--reveal", "--json"},
 		setup: withoutXrayProfiles, stdout: "[]\n"},
 }
+
+// proxyTestProgress is the progress line ws proxy test prints on stderr
+// before its first probe, in human mode only.
+const proxyTestProgress = "Probing tunnel (comparing direct vs proxied exit IP)...\n"
 
 // proxyProfilesEmpty is what ws proxy profile list answers with no profile.
 const proxyProfilesEmpty = "No proxy profiles yet.\n" +

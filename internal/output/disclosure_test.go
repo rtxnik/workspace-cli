@@ -297,6 +297,56 @@ func TestTableMutantsRedenTheBlockChecks(t *testing.T) {
 	}
 }
 
+// TestCaptionMutantReachesEveryBlockCaption proves that KV and Checks draw
+// their captions with the table's caption code (phase-5 §3.1), so that
+// caption_wrapped_too_wide stands for all three: with the caption's budget
+// widened by two cells, each long-caption fixture overflows somewhere in the
+// sweep, and with the switches clean none does. A block that drew its caption
+// with code of its own would keep inside the budget under the mutant, and its
+// row would fail here.
+func TestCaptionMutantReachesEveryBlockCaption(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	t.Cleanup(func() { mutants = mutantSwitches{} })
+
+	want := map[string]bool{"table/long-caption": false, "kv/caption-long": false, "checks/caption-long": false}
+	fxs := map[string]fixture{}
+	for _, fx := range fxCorpus() {
+		if _, ok := want[fx.name]; ok {
+			fxs[fx.name] = fx
+		}
+	}
+	over := func(fx fixture) int {
+		n := 0
+		for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+			for w := MinWidth; w <= 120; w++ {
+				for _, line := range newRenderCase(fx, w, mode).plain {
+					if ansi.StringWidth(line) > w {
+						n++
+					}
+				}
+			}
+		}
+		return n
+	}
+	for name := range want {
+		fx, ok := fxs[name]
+		if !ok {
+			t.Fatalf("the corpus has no fixture %s; the caption mutant's reach cannot be shown without it", name)
+		}
+		if n := over(fx); n != 0 {
+			t.Fatalf("%s overflows %d lines with the switches clean; the comparison below would mean nothing", name, n)
+		}
+		mutants.CaptionWidth = 2
+		n := over(fx)
+		mutants = mutantSwitches{}
+		if n == 0 {
+			t.Errorf("%s keeps inside the budget with the caption wrapped two cells wide: its caption is not drawn by the shared caption code", name)
+		}
+	}
+}
+
 // TestStyleIsAppliedAfterAllocation is §4.3's ordering clause, asserted.
 //
 // Read at ColourNone it is unobservable, so this renders at a real colour

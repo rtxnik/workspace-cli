@@ -7,12 +7,6 @@ import (
 // The five message helpers moved to message.go, where they resolve their
 // stream, their colour level and their width budget per file descriptor.
 // Confirm and ConfirmDestructive below are untouched by that move.
-//
-// Of the style aliases the helpers left behind, SectionStyle is the one with
-// a caller: cmd reads it (profile.go, vault_status.go), and §4.6 replaces it
-// in the phase that reaches those call sites. successStyle and errorStyle
-// went with the spinner, their last caller.
-var SectionStyle = StyleHeader
 
 // Confirm shows an interactive confirmation dialog. Returns true only if
 // the user explicitly confirms. Default is No (safe default).

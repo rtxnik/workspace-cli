@@ -25,15 +25,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/procx"
@@ -51,7 +50,8 @@ const (
 	bandRed    statusBand = "red"
 )
 
-// statusSignal is one row in the status table.
+// statusSignal is one signal of the report: a line of its human block, an
+// element of its JSON's signals.
 type statusSignal struct {
 	Label  string     `json:"label"`
 	Band   statusBand `json:"band"`
@@ -446,15 +446,32 @@ func assembleReport(signals []statusSignal) *statusReport {
 	}
 }
 
-// truncate caps a string at maxLen chars (with ellipsis suffix when cut).
+// truncate caps s at maxLen bytes. A longer string is cut at the last rune
+// boundary that leaves room for "...", which is then appended; a limit of 3
+// or less leaves no room for it, and the string is cut at the last rune
+// boundary at or below the limit. Either way the cut never lands inside a
+// UTF-8 sequence, and the result is never longer than the limit: a limit of 0
+// or less leaves nothing.
 func truncate(s string, maxLen int) string {
-	if maxLen <= 0 || len(s) <= maxLen {
+	if len(s) <= maxLen {
 		return s
 	}
-	if maxLen <= 3 {
-		return s[:maxLen]
+	if maxLen <= 0 {
+		return ""
 	}
-	return s[:maxLen-3] + "..."
+	if maxLen <= 3 {
+		return cutAtRune(s, maxLen)
+	}
+	return cutAtRune(s, maxLen-3) + "..."
+}
+
+// cutAtRune returns the longest prefix of s that is at most n bytes long and
+// ends on a rune boundary; n is less than len(s).
+func cutAtRune(s string, n int) string {
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // resolveVaultAIRepoRoot mirrors internal/mcp/client.go's NewClient
@@ -495,7 +512,12 @@ func newVaultStatusCmd() *cobra.Command {
 			}
 
 			jsonFlag, _ := cmd.Flags().GetBool("json")
-			if err := renderStatusReport(cmd.OutOrStdout(), rep, jsonFlag); err != nil {
+			if jsonFlag {
+				// One JSON object, not NDJSON: the report is one document.
+				if err := output.WriteJSON(cmd.OutOrStdout(), rep); err != nil {
+					return fmt.Errorf("status: render: %w", err)
+				}
+			} else if err := writeReport(cmd.OutOrStdout(), output.Out(), vaultStatusReport(rep)); err != nil {
 				return fmt.Errorf("status: render: %w", err)
 			}
 
@@ -507,44 +529,32 @@ func newVaultStatusCmd() *cobra.Command {
 	}
 }
 
-// renderStatusReport writes the report to out in either JSON mode
-// (single JSON object — not NDJSON because the report is one logical
-// document) or the human-readable table.
-func renderStatusReport(out io.Writer, rep *statusReport, jsonMode bool) error {
-	if jsonMode {
-		return output.WriteJSON(out, rep)
+// vaultStatusReport is ws vault status's report (phase-5 §3.8): one line per
+// signal, its label as the name, its band as its state (bandState) and its
+// detail as the note, and the overall band with the exit code it maps to as
+// the caption. A signal that could not be collected is yellow, so it renders
+// degraded, its note saying it was skipped. The builder cuts nothing: the
+// collectors have already truncated each detail.
+func vaultStatusReport(rep *statusReport) output.Checks {
+	items := make([]output.Check, 0, len(rep.Signals))
+	for _, sig := range rep.Signals {
+		items = append(items, output.Check{Name: sig.Label, State: bandState(sig.Band), Note: sig.Detail})
 	}
-	var b strings.Builder
-	b.WriteString(output.SectionStyle.Render("Vault Status"))
-	b.WriteString("\n\n")
-	for _, s := range rep.Signals {
-		fmt.Fprintf(&b, "  %s %s — %s\n", bandIcon(s.Band), output.StyleDim.Render(s.Label), s.Detail)
-	}
-	b.WriteString("\n")
-	fmt.Fprintf(&b, "Overall: %s (exit %d)\n",
-		bandLabel(rep.OverallBand), rep.ExitCode)
-	_, err := fmt.Fprint(out, b.String())
-	return err
+	return output.Checks{Title: "Vault status", Items: items, Caption: fmt.Sprintf("Overall: %s (exit %d)", rep.OverallBand, rep.ExitCode)}
 }
 
-func bandIcon(b statusBand) string {
+// bandState is a band's state in a report (phase-5 §3.7): green ok, yellow
+// degraded, red failed, and any other band unknown, never ok. It draws the
+// band and decides nothing: the exit code is mcp.HealthBandExitCode's.
+func bandState(b statusBand) output.State {
 	switch b {
 	case bandGreen:
-		return output.StyleSuccess.Render("●")
+		return output.StateOK
 	case bandYellow:
-		return output.StyleWarning.Render("●")
+		return output.StateAdvisory
+	case bandRed:
+		return output.StateFail
 	default:
-		return output.StyleError.Render("●")
-	}
-}
-
-func bandLabel(b statusBand) string {
-	switch b {
-	case bandGreen:
-		return lipgloss.NewStyle().Foreground(output.Green).Bold(true).Render("green")
-	case bandYellow:
-		return lipgloss.NewStyle().Foreground(output.Yellow).Bold(true).Render("yellow")
-	default:
-		return lipgloss.NewStyle().Foreground(output.Red).Bold(true).Render("red")
+		return output.StateUnknown
 	}
 }

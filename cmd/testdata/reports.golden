@@ -1,0 +1,447 @@
+=== ws proxy check: no daemon at COLUMNS=80
+exit 1
+--- stdout (198 bytes)
+|Proxy prerequisites
+|  ✗ failed    Docker running
+|  ✓ ok        Xray config exists
+|  ? unknown   Proxy image built
+|  ? unknown   Proxy container running
+|1 of 4 checks passed, 1 failed, 2 unknown
+--- stderr (0 bytes)
+=== ws proxy check: no daemon at COLUMNS=40
+exit 1
+--- stdout (198 bytes)
+|Proxy prerequisites
+|  ✗ failed    Docker running
+|  ✓ ok        Xray config exists
+|  ? unknown   Proxy image built
+|  ? unknown   Proxy container running
+|1 of 4 checks passed, 1 failed, 2
+|unknown
+--- stderr (0 bytes)
+=== ws proxy check: all ok at COLUMNS=80
+exit 0
+--- stdout (181 bytes)
+|Proxy prerequisites
+|  ✓ ok        Docker running
+|  ✓ ok        Xray config exists
+|  ✓ ok        Proxy image built
+|  ✓ ok        Proxy container running
+|4 of 4 checks passed
+--- stderr (0 bytes)
+=== ws proxy check: all ok at COLUMNS=40
+exit 0
+--- stdout (181 bytes)
+|Proxy prerequisites
+|  ✓ ok        Docker running
+|  ✓ ok        Xray config exists
+|  ✓ ok        Proxy image built
+|  ✓ ok        Proxy container running
+|4 of 4 checks passed
+--- stderr (0 bytes)
+=== ws proxy status: stopped and no network at COLUMNS=80
+exit 0
+--- stdout (218 bytes)
+|Proxy
+|  State    - stopped
+|  Network  ws-proxy (172.28.0.2)
+|
+|Workspaces
+|  Route protection  ? unknown
+|protection scan failed: inspect network: Error response from daemon: No such
+|network (workspace protection UNKNOWN)
+--- stderr (0 bytes)
+=== ws proxy status: stopped and no network at COLUMNS=40
+exit 0
+--- stdout (218 bytes)
+|Proxy
+|  State    - stopped
+|  Network  ws-proxy (172.28.0.2)
+|
+|Workspaces
+|  Route protection  ? unknown
+|protection scan failed: inspect network:
+|Error response from daemon: No such
+|network (workspace protection UNKNOWN)
+--- stderr (0 bytes)
+=== ws proxy status: one workspace unprotected at COLUMNS=80
+exit 0
+--- stdout (371 bytes)
+|Proxy
+|  State    ✓ running
+|  Health   ✓ healthy
+|  Uptime   <uptime>
+|  Image    devpod-proxy
+|  Network  ws-proxy (172.28.0.2)
+|
+|Workspaces
+|  unprot-ml-training  ✗ unprotected: default via 172.28.0.1 (not the proxy
+|                      172.28.0.2)
+|  web-frontend        ✓ protected
+|1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)
+--- stderr (0 bytes)
+=== ws proxy status: one workspace unprotected at COLUMNS=40
+exit 0
+--- stdout (437 bytes)
+|Proxy
+|  State    ✓ running
+|  Health   ✓ healthy
+|  Uptime   <uptime>
+|  Image    devpod-proxy
+|  Network  ws-proxy (172.28.0.2)
+|
+|Workspaces
+|  unprot-ml-training  ✗ unprotected:
+|                      default via
+|                      172.28.0.1 (not
+|                      the proxy
+|                      172.28.0.2)
+|  web-frontend        ✓ protected
+|1 of 2 workspace(s) UNPROTECTED — route
+|not via proxy (run: ws proxy fix-routes)
+--- stderr (0 bytes)
+=== ws proxy test: tunnel and DNS tunnelled at COLUMNS=80
+exit 0
+--- stdout (184 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  198.51.100.9
+|  Tunneled    ✓ yes
+|  Latency     182ms
+|  UDP/DNS     ✓ tunnelled (exit 198.51.100.9)
+|Tunnel active — exit IPs differ
+--- stderr (75 bytes)
+|Probing tunnel (comparing direct vs proxied exit IP)...
+|Probing UDP/DNS...
+=== ws proxy test: tunnel and DNS tunnelled at COLUMNS=40
+exit 0
+--- stdout (198 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  198.51.100.9
+|  Tunneled    ✓ yes
+|  Latency     182ms
+|  UDP/DNS     ✓ tunnelled (exit
+|              198.51.100.9)
+|Tunnel active — exit IPs differ
+--- stderr (75 bytes)
+|Probing tunnel (comparing direct vs
+|proxied exit IP)...
+|Probing UDP/DNS...
+=== ws proxy test: DNS leak at COLUMNS=80
+exit 1
+--- stdout (229 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  198.51.100.9
+|  Tunneled    ✓ yes
+|  Latency     182ms
+|  UDP/DNS     ✗ leak (exit 203.0.113.7 is the direct IP)
+|UDP/DNS LEAK -- resolver saw your real IP 203.0.113.7 (untunnelled)
+--- stderr (75 bytes)
+|Probing tunnel (comparing direct vs proxied exit IP)...
+|Probing UDP/DNS...
+=== ws proxy test: DNS leak at COLUMNS=40
+exit 1
+--- stdout (243 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  198.51.100.9
+|  Tunneled    ✓ yes
+|  Latency     182ms
+|  UDP/DNS     ✗ leak (exit 203.0.113.7
+|              is the direct IP)
+|UDP/DNS LEAK -- resolver saw your real
+|IP 203.0.113.7 (untunnelled)
+--- stderr (75 bytes)
+|Probing tunnel (comparing direct vs
+|proxied exit IP)...
+|Probing UDP/DNS...
+=== ws proxy test: tunnel down at COLUMNS=80
+exit 1
+--- stdout (189 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  203.0.113.7
+|  Tunneled    ✗ no
+|  Latency     95ms
+|  UDP/DNS     - not probed
+|Tunnel NOT active — direct and proxied exit IPs are the same
+--- stderr (56 bytes)
+|Probing tunnel (comparing direct vs proxied exit IP)...
+=== ws proxy test: tunnel down at COLUMNS=40
+exit 1
+--- stdout (189 bytes)
+|Tunnel
+|  Direct IP   203.0.113.7
+|  Proxied IP  203.0.113.7
+|  Tunneled    ✗ no
+|  Latency     95ms
+|  UDP/DNS     - not probed
+|Tunnel NOT active — direct and proxied
+|exit IPs are the same
+--- stderr (56 bytes)
+|Probing tunnel (comparing direct vs
+|proxied exit IP)...
+=== ws proxy doctor: no daemon at COLUMNS=80
+exit 1
+--- stdout (699 bytes)
+|Proxy doctor
+|  ✗ failed    docker reachable
+|              Fix: Start Docker (Docker Desktop or the daemon) and retry.
+|  ? unknown   proxy image present
+|  ? unknown   active profile valid (xray -test)
+|  ? unknown   datapath contract (image ↔ profile)
+|  ? unknown   proxy container running and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default route via proxy
+|  ? unknown   self-egress (proxy tunnel exit-IP)
+|  ? unknown   forwarding datapath (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy (advisory)
+|Failed at check 1 of 13: docker reachable
+--- stderr (0 bytes)
+=== ws proxy doctor: no daemon at COLUMNS=40
+exit 1
+--- stdout (825 bytes)
+|Proxy doctor
+|  ✗ failed    docker reachable
+|              Fix: Start Docker (Docker
+|              Desktop or the daemon) and
+|              retry.
+|  ? unknown   proxy image present
+|  ? unknown   active profile valid (xray
+|              -test)
+|  ? unknown   datapath contract (image ↔
+|              profile)
+|  ? unknown   proxy container running
+|              and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default
+|              route via proxy
+|  ? unknown   self-egress (proxy tunnel
+|              exit-IP)
+|  ? unknown   forwarding datapath
+|              (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy
+|              (advisory)
+|Failed at check 1 of 13: docker
+|reachable
+--- stderr (0 bytes)
+=== ws proxy doctor: the image's datapath differs at COLUMNS=80
+exit 4
+--- stdout (949 bytes)
+|Proxy doctor
+|  ✓ ok        docker reachable
+|  ✓ ok        proxy image present
+|              devpod-proxy
+|  ✓ ok        active profile valid (xray -test)
+|              profile "primary"
+|  ✗ failed    datapath contract (image ↔ profile)
+|              image datapath="tproxy" but active profile mode="redirect"
+|              (black-hole risk)
+|              Fix: Realign image and profile: ws proxy rebuild (and, if the
+|              profile is stale, ws proxy upgrade-config)
+|  ? unknown   proxy container running and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default route via proxy
+|  ? unknown   self-egress (proxy tunnel exit-IP)
+|  ? unknown   forwarding datapath (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy (advisory)
+|Failed at check 4 of 13: datapath contract (image ↔ profile)
+--- stderr (0 bytes)
+=== ws proxy doctor: the image's datapath differs at COLUMNS=40
+exit 4
+--- stdout (1117 bytes)
+|Proxy doctor
+|  ✓ ok        docker reachable
+|  ✓ ok        proxy image present
+|              devpod-proxy
+|  ✓ ok        active profile valid (xray
+|              -test)
+|              profile "primary"
+|  ✗ failed    datapath contract (image ↔
+|              profile)
+|              image datapath="tproxy"
+|              but active profile
+|              mode="redirect"
+|              (black-hole risk)
+|              Fix: Realign image and
+|              profile: ws proxy rebuild
+|              (and, if the profile is
+|              stale, ws proxy
+|              upgrade-config)
+|  ? unknown   proxy container running
+|              and healthy
+|  ? unknown   tproxy preconditions
+|  ? unknown   ws-proxy network + subnet
+|  ? unknown   dev-container default
+|              route via proxy
+|  ? unknown   self-egress (proxy tunnel
+|              exit-IP)
+|  ? unknown   forwarding datapath
+|              (dev-container exit-IP)
+|  ? unknown   workspace IPv6 fail-closed
+|  ? unknown   protocol sanity
+|  ? unknown   inbound sockopt.tproxy
+|              (advisory)
+|Failed at check 4 of 13: datapath
+|contract (image ↔ profile)
+--- stderr (0 bytes)
+=== ws vault doctor: mixed bands at COLUMNS=80
+exit 2
+--- stdout (1118 bytes)
+|Vault doctor
+|  ✓ ok        orphan-mcp-subprocess
+|              0 orphan MCP subprocesses
+|  ⚠ degraded  stale-lock-files
+|              1 stale lock(s): /srv/vault-ai/_tooling/state/ingest.lock
+|              Fix: re-run with `ws vault doctor --clear-stale-locks --yes` to
+|              remove (operator-controlled per CONTEXT D-13)
+|  ✗ failed    vault-ai-token
+|              VAULT_AI_TOKEN unset or empty
+|              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles
+|              ADR-sec-02 for the age key flow
+|  ✗ failed    token-fd-pass
+|              stage=newclient: VAULT_AI_TOKEN not set
+|              Fix: see RESEARCH §Pitfall 7 + Plan 18-01 for fd-3 wiring; check
+|              `ws vault doctor` token check above
+|  ⚠ degraded  xrepo-contract-parity
+|              check-xrepo-contract.sh not found at
+|              /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: stat
+|              /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: no such file
+|              or directory
+|              Fix: verify Phase 17 deliverable is present in vault-ai checkout
+|Overall: red (exit 2)
+--- stderr (0 bytes)
+=== ws vault doctor: mixed bands at COLUMNS=40
+exit 2
+--- stdout (1373 bytes)
+|Vault doctor
+|  ✓ ok        orphan-mcp-subprocess
+|              0 orphan MCP subprocesses
+|  ⚠ degraded  stale-lock-files
+|              1 stale lock(s):
+|              /srv/vault-ai/_tooling/sta
+|              te/ingest.lock
+|              Fix: re-run with `ws vault
+|              doctor --clear-stale-locks
+|              --yes` to remove
+|              (operator-controlled per
+|              CONTEXT D-13)
+|  ✗ failed    vault-ai-token
+|              VAULT_AI_TOKEN unset or
+|              empty
+|              Fix: provision via
+|              chezmoi+age per ADR-ai-06
+|              §Auth; see dotfiles
+|              ADR-sec-02 for the age key
+|              flow
+|  ✗ failed    token-fd-pass
+|              stage=newclient:
+|              VAULT_AI_TOKEN not set
+|              Fix: see RESEARCH §Pitfall
+|              7 + Plan 18-01 for fd-3
+|              wiring; check `ws vault
+|              doctor` token check above
+|  ⚠ degraded  xrepo-contract-parity
+|              check-xrepo-contract.sh
+|              not found at
+|              /srv/vault-ai/_tooling/lin
+|              t/check-xrepo-contract.sh:
+|              stat
+|              /srv/vault-ai/_tooling/lin
+|              t/check-xrepo-contract.sh:
+|              no such file or directory
+|              Fix: verify Phase 17
+|              deliverable is present in
+|              vault-ai checkout
+|Overall: red (exit 2)
+--- stderr (0 bytes)
+=== ws vault status: mixed bands at COLUMNS=80
+exit 1
+--- stdout (767 bytes)
+|Vault status
+|  ✓ ok        MCP liveness
+|              MCP responsive (25 tools advertised)
+|  ⚠ degraded  vault_health composite
+|              vault-health-score: 60 (yellow)
+|  ✓ ok        audit-chain integrity
+|              all 8 streams verified for current month
+|  ⚠ degraded  cost-tracker headroom
+|              no cost-*.jsonl found — Phase 21d daemon not yet shipped (fallback
+|              only)
+|  ✓ ok        dedup gate readiness
+|              create_note advertises check_dedup_before_create (Phase 17
+|              deployed)
+|  ⚠ degraded  last DR-drill age
+|              dr-drill-*.jsonl present but unreadable: open
+|              /srv/vault-ai/_tooling/logs/dr-drill-2026-09.jsonl: permission
+|              denied ...
+|Overall: yellow (exit 1)
+--- stderr (0 bytes)
+=== ws vault status: mixed bands at COLUMNS=40
+exit 1
+--- stdout (866 bytes)
+|Vault status
+|  ✓ ok        MCP liveness
+|              MCP responsive (25 tools
+|              advertised)
+|  ⚠ degraded  vault_health composite
+|              vault-health-score: 60
+|              (yellow)
+|  ✓ ok        audit-chain integrity
+|              all 8 streams verified for
+|              current month
+|  ⚠ degraded  cost-tracker headroom
+|              no cost-*.jsonl found —
+|              Phase 21d daemon not yet
+|              shipped (fallback only)
+|  ✓ ok        dedup gate readiness
+|              create_note advertises
+|              check_dedup_before_create
+|              (Phase 17 deployed)
+|  ⚠ degraded  last DR-drill age
+|              dr-drill-*.jsonl present
+|              but unreadable: open
+|              /srv/vault-ai/_tooling/log
+|              s/dr-drill-2026-09.jsonl:
+|              permission denied ...
+|Overall: yellow (exit 1)
+--- stderr (0 bytes)
+=== ws vault predict-bulk-load 40: a projection at COLUMNS=80
+exit 0
+--- stdout (175 bytes)
+|Current rows
+|  dedup   10
+|  mcp     40
+|  search  70
+|  total   120
+|
+|Projection for 40 notes
+|  Projected New Rows    200
+|  Estimated Dedup Time  3.50s
+|  Projected Segments    7
+--- stderr (0 bytes)
+=== ws vault predict-bulk-load 40: a projection at COLUMNS=40
+exit 0
+--- stdout (175 bytes)
+|Current rows
+|  dedup   10
+|  mcp     40
+|  search  70
+|  total   120
+|
+|Projection for 40 notes
+|  Projected New Rows    200
+|  Estimated Dedup Time  3.50s
+|  Projected Segments    7
+--- stderr (0 bytes)

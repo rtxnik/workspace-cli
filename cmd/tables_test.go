@@ -169,12 +169,7 @@ func TestTablesFitEveryWidth(t *testing.T) {
 	sweepTablesAndProblems(t, []bool{false, true})
 }
 
-// sweepTablesAndProblems measures with the layer's W. Its control re-checks
-// the same renders against a limit one cell smaller and counts, over all of
-// them, the lines that are then over it: at every width the count must be
-// non-zero, or the sweep could not see an overflow of one cell. A single
-// render narrower than the width proves nothing, which is why the count is
-// the corpus's: the token is hard-broken into lines exactly the width.
+// sweepTablesAndProblems sweeps every table and every Problem.
 func sweepTablesAndProblems(t *testing.T, modes []bool) {
 	t.Helper()
 	var renders []func(*output.Stream) string
@@ -184,6 +179,19 @@ func sweepTablesAndProblems(t *testing.T, modes []bool) {
 	for _, p := range sweepProblems(t) {
 		renders = append(renders, p.Render)
 	}
+	sweepRenders(t, renders, modes)
+}
+
+// sweepRenders renders each of renders at every width from MinWidth to 200
+// in each glyph mode of modes, on a terminal stream, and measures every line
+// with the layer's W. Its control re-checks the same renders against a limit
+// one cell smaller and counts, over all of them, the lines that are then over
+// it: at every width the count must be non-zero, or the sweep could not see
+// an overflow of one cell. A single render narrower than the width proves
+// nothing, which is why the count is the corpus's: the token is hard-broken
+// into lines exactly the width.
+func sweepRenders(t *testing.T, renders []func(*output.Stream) string, modes []bool) {
+	t.Helper()
 	n, lines, over := 0, 0, 0
 	for w := output.MinWidth; w <= 200; w++ {
 		control := 0
@@ -220,27 +228,43 @@ func sweepTablesAndProblems(t *testing.T, modes []bool) {
 const tablesAmbiWideEnv = "WS_TEST_TABLES_AMBIWIDE"
 
 // TestTablesFitEveryWidthAmbiguousWide runs the sweep under
-// RUNEWIDTH_EASTASIAN=1 in a child, since x/ansi reads the variable in
-// init(), in the glyph mode the layer selects there: ASCII, because the
-// UTF-8 borders, marks and truncation marker are Ambiguous. The child checks
-// both.
+// RUNEWIDTH_EASTASIAN=1.
 func TestTablesFitEveryWidthAmbiguousWide(t *testing.T) {
-	if os.Getenv(tablesAmbiWideEnv) == "1" {
+	ambiguousWide(t, tablesAmbiWideEnv, func(t *testing.T) {
+		sweepTablesAndProblems(t, []bool{true})
+	})
+}
+
+// ambiwideChild marks a child of ambiguousWide, whatever its sweep.
+const ambiwideChild = "WS_TEST_AMBIWIDE_CHILD"
+
+// ambiguousWide runs sweep under RUNEWIDTH_EASTASIAN=1 in a child — x/ansi
+// reads the variable in init() — that re-runs the calling test with env set to
+// 1, in the glyph mode the layer selects there: ASCII, because the UTF-8
+// borders, marks and truncation marker are Ambiguous. The child checks both,
+// then sweeps. A child that starts without env would spawn a child of its
+// own, and that one another, without end; it fails instead.
+func ambiguousWide(t *testing.T, env string, sweep func(t *testing.T)) {
+	t.Helper()
+	if os.Getenv(ambiwideChild) == "1" && os.Getenv(env) != "1" {
+		t.Fatalf("a child of the Ambiguous-wide sweep started without %s=1; it will not spawn another", env)
+	}
+	if os.Getenv(env) == "1" {
 		if n := output.W("…"); n != 2 {
 			t.Fatalf("U+2026 measures %d cells under RUNEWIDTH_EASTASIAN=1, want 2: the convention did not reach x/ansi", n)
 		}
 		if mode := output.Err().Mode(); mode != output.GlyphASCII {
 			t.Fatalf("the layer selected glyph mode %v on an Ambiguous-wide terminal; want ASCII", mode)
 		}
-		sweepTablesAndProblems(t, []bool{true})
+		sweep(t)
 		return
 	}
-	child := exec.Command(os.Args[0], "-test.run=^TestTablesFitEveryWidthAmbiguousWide$", "-test.v")
+	child := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
 	// The child's environment is its own: with a UTF-8 locale set, ASCII
 	// can only come from RUNEWIDTH_EASTASIAN, so the glyph-mode check above
 	// cannot pass on a host that sets no locale at all.
 	child.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "TMPDIR=" + os.TempDir(),
-		"LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8", "RUNEWIDTH_EASTASIAN=1", tablesAmbiWideEnv + "=1"}
+		"LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8", "RUNEWIDTH_EASTASIAN=1", env + "=1", ambiwideChild + "=1"}
 	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
 		child.Env = append(child.Env, "GOCOVERDIR="+v)
 	}
@@ -329,6 +353,9 @@ func TestTablesBaseline(t *testing.T) {
 	var got strings.Builder
 	var order []string
 	for _, c := range tablesCases() {
+		if strings.Contains(c.name, ",") {
+			t.Fatalf("case %q: a name with a comma cannot be named to -update-tables-baseline", c.name)
+		}
 		fx := newStreamsFixture(t)
 		if c.setup != nil {
 			c.setup(t, fx)

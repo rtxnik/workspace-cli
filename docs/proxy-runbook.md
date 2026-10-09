@@ -66,7 +66,7 @@ Runs the ordered, fail-fast diagnostic chain:
 12. Protocol sanity (hy2: leaf cert sha256 vs pin; VLESS: inbound socket)
 13. Inbound `sockopt.tproxy` (advisory)
 
-All thirteen checks must pass before proceeding (the UDP egress leg and the hy2 cert-pin observation are advisory — they report SKIP/notes without blocking). If any hard check fails, the command exits non-zero and prints a remediation hint. Fix the issue and re-run.
+The report lists all thirteen checks in order, each with its state — `✓ ok`, `✗ failed`, `⚠ degraded` or `? unknown` — and its finding beneath it. Proceed when it exits 0, with no check reading `✗ failed`; `13 of 13 checks passed` is the all-clear. The advisory findings (the UDP leg of the egress probe, the hy2 probe's dial and cert-pin observation, a missing `sockopt.tproxy`) do not stop the run: they read `⚠ degraded` or `? unknown` — read their notes; against a QUIC-only hysteria2 endpoint, protocol sanity reads `? unknown` as expected — and the last line counts them (`11 of 13 checks passed, 1 degraded, 1 unknown`). A hard failure stops the run: its check reads `✗ failed` with a `Fix:` line, the checks after it read `? unknown`, the last line names it (`Failed at check 4 of 13: datapath contract (image ↔ profile)`), and the command exits with the check's number (4 here). Fix the issue and re-run.
 
 For machine-readable output (CI or automated gates): `ws proxy doctor --json`.
 
@@ -78,25 +78,31 @@ If workspace containers lost their default route (e.g. after a host reboot), run
 ws proxy test
 ```
 
-Compares the direct exit IP (plain HTTP) against the proxied exit IP (via `docker exec curl` inside `dev-proxy`) and prints:
+Compares the direct exit IP (plain HTTP) against the proxied exit IP (via `docker exec curl` inside `dev-proxy`), then probes the UDP/DNS leg, and prints:
 
 ```
-Direct IP   <your-host-ip>
-Proxied IP  <tunnel-exit-ip>
-Tunneled    ✓
+Tunnel
+  Direct IP   <your-host-ip>
+  Proxied IP  <tunnel-exit-ip>
+  Tunneled    ✓ yes
+  Latency     182ms
+  UDP/DNS     ✓ tunnelled (exit <tunnel-exit-ip>)
+Tunnel active — exit IPs differ
 ```
 
-`ProxiedIP` must differ from `DirectIP`. If they are identical the tunnel is not carrying traffic — check the profile and container logs (`ws proxy logs`).
+The report goes to stdout; the two `Probing …` progress lines before it go to stderr.
 
-For machine-readable output: `ws proxy test --json` → `{"directIP":"…","proxiedIP":"…","tunneled":true,"latencyMs":12,"dns":"tunneled","dnsExitIP":"…"}` (exits 1 on `tunneled:false` or `dns:"leak"`; `dns` is one of `tunneled`, `leak`, `inconclusive`, or `skipped`, and `dnsExitIP` is omitted when `dns` is `inconclusive` or `skipped`).
+`Proxied IP` must differ from `Direct IP`. If they are identical the tunnel is not carrying traffic: `Tunneled` reads `✗ no`, the UDP/DNS leg is not probed (`- not probed`), the last line reads `Tunnel NOT active — direct and proxied exit IPs are the same`, and the command exits 1 — check the profile and container logs (`ws proxy logs`). `UDP/DNS  ✗ leak` means the resolver saw your real IP; the command exits 1 then too.
+
+For machine-readable output: `ws proxy test --json` → `{"directIP":"…","proxiedIP":"…","tunneled":true,"latencyMs":12,"dns":"tunneled","dnsExitIP":"…"}` (exits 1 on `tunneled:false` or `dns:"leak"`; `dns` is one of `tunneled`, `leak`, `inconclusive`, or `skipped`, and `dnsExitIP` is omitted when `dns` is `inconclusive` or `skipped`). Under `--json` the progress lines are not printed; an error — the proxy not running, a failed probe — is still reported on stderr, with exit 1.
 
 ### Step 6 — Rollback note
 
 If TPROXY misbehaves on the operator's kernel (e.g. the container lacks `CAP_NET_ADMIN` or the host kernel does not support TPROXY in Docker), fall back to REDIRECT-TCP mode:
 
-- Revert the entrypoint to use iptables REDIRECT instead of TPROXY (edit `dotfiles`; rebuild with `ws proxy rebuild --force`).
+- Revert the entrypoint to use iptables REDIRECT instead of TPROXY (edit `dotfiles`). The recipe then differs from the one `ws` pins, so rebuild with `ws proxy rebuild --allow-drift` (add `--force` to skip the confirmation for connected workspaces): without `--allow-drift` the rebuild refuses a drifted recipe.
 - Leave UDP fail-closed (no UDP forwarding rule) until TPROXY is confirmed working.
-- The `ws proxy doctor` advisory check (step 13, "inbound sockopt.tproxy") will report the missing field; that is expected in REDIRECT mode.
+- `ws proxy doctor` then stops at step 4, datapath contract: an image built from a drifted recipe is labelled `unverified`, which no profile's mode matches. The checks after it read `? unknown`, its advisory check (step 13) among them. That failure is expected while rolled back.
 
 ---
 

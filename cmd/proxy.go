@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/docker"
 	"github.com/rtxnik/workspace-cli/internal/hysteria2"
@@ -124,58 +123,12 @@ var proxyStatusCmd = &cobra.Command{
 			})
 		}
 
-		stateStatus := "stopped"
-		if st.Running {
-			stateStatus = "running"
-		}
-
-		label := output.StyleDim.Render
-		var lines []string
-		lines = append(lines, fmt.Sprintf("%s  %s", label("State"), output.StatusText(stateStatus)))
-		if st.Health != "" {
-			lines = append(lines, fmt.Sprintf("%s %s", label("Health"), output.StatusText(st.Health)))
-		}
-		if st.Uptime != "" {
-			lines = append(lines, fmt.Sprintf("%s %s", label("Uptime"), st.Uptime))
-		}
-		if st.Image != "" {
-			lines = append(lines, fmt.Sprintf("%s  %s", label("Image"), st.Image))
-		}
-		lines = append(lines, fmt.Sprintf("%s  %s (%s)",
-			label("Network"), cfg.ProxyNetwork, cfg.ProxyIP))
-
-		// Connected workspaces + route-protection summary (single read-only scan).
 		prot, perr := docker.WorkspaceRouteProtection(cfg)
-		if names := protectionNames(prot); len(names) > 0 {
-			lines = append(lines, "")
-			lines = append(lines, output.StyleHeader.Render("Connected Workspaces"))
-			for _, name := range names {
-				lines = append(lines, "  "+name)
-			}
+		var blocks []reportBlock
+		for _, kv := range proxyStatusReport(st, cfg, prot, perr) {
+			blocks = append(blocks, kv)
 		}
-		if perr != nil {
-			lines = append(lines, "")
-			lines = append(lines, output.StyleHeader.Render("Protection"))
-			lines = append(lines, "  "+output.StyleError.Render("✗ ")+"protection scan failed: "+perr.Error()+" (workspace protection UNKNOWN)")
-		} else if summary, anyUnprot := protectionSummary(prot); summary != "" {
-			lines = append(lines, "")
-			lines = append(lines, output.StyleHeader.Render("Protection"))
-			marked := summary
-			if anyUnprot {
-				marked = output.StyleError.Render("✗ ") + summary
-			}
-			lines = append(lines, "  "+marked)
-		}
-
-		box := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(output.Blue).
-			BorderTop(true).
-			Padding(0, 2).
-			Render(output.StyleHeader.Render("Proxy") + "\n\n" + strings.Join(lines, "\n"))
-
-		fmt.Println(box)
-		return nil
+		return writeReport(cmd.OutOrStdout(), output.Out(), blocks...)
 	},
 }
 
@@ -185,24 +138,16 @@ var proxyCheckCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		cfg := config.Load()
-		results := docker.ProxyCheck(cfg)
-
-		passed := 0
-		for _, r := range results {
-			if r.Passed {
-				fmt.Printf("  %s %s\n", output.StyleSuccess.Render("✓"), r.Name)
-				passed++
-			} else {
-				fmt.Printf("  %s %s\n", output.StyleError.Render("✗"), r.Name)
-			}
+		report := proxyCheckReport(docker.ProxyCheck(cfg))
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), report.Render(output.Out())); err != nil {
+			return err
 		}
-
-		fmt.Println()
-		total := len(results)
-		if passed == total {
-			output.Success(fmt.Sprintf("%d/%d checks passed", passed, total))
-		} else {
-			output.Warn(fmt.Sprintf("%d/%d checks passed", passed, total))
+		// A prerequisite that is not ok fails the command, so that
+		// `ws proxy check && ws proxy up` stops here. The report says why.
+		for _, it := range report.Items {
+			if it.State != output.StateOK {
+				return &cliErrorWithExit{code: 1, msg: ""}
+			}
 		}
 		return nil
 	},
@@ -261,36 +206,53 @@ var proxyRebuildCmd = &cobra.Command{
 	},
 }
 
+// proxyTestProbeFn and proxyTestProbeDNSFn are ws proxy test's two probes —
+// the TCP exit-IP comparison and the UDP/DNS leg — as package vars, so that a
+// test can run the command with a tunnel, a leak or a down tunnel and no
+// network.
+var (
+	proxyTestProbeFn    = func(cfg config.Config) (proxyengine.ProbeResult, error) { return proxyengine.Default().Probe(cfg) }
+	proxyTestProbeDNSFn = proxyengine.ProbeDNS
+)
+
 var proxyTestCmd = &cobra.Command{
 	Use:   "test",
 	Short: "Prove tunnel is active by comparing direct vs proxied exit IP",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		cfg := config.Load()
+		// --json is read first: its consumers parse stdout and may merge
+		// stderr into it, so it writes no progress line.
+		jsonFlag, _ := cmd.Flags().GetBool("json")
 		st, err := docker.ProxyStatus(cfg)
 		if err != nil || !st.Running {
 			return errors.New("proxy is not running — start it first: ws proxy up")
 		}
 
-		output.Info("Probing tunnel (comparing direct vs proxied exit IP)...")
+		if !jsonFlag {
+			output.Info("Probing tunnel (comparing direct vs proxied exit IP)...")
+		}
 
-		result, err := proxyengine.Default().Probe(cfg)
+		result, err := proxyTestProbeFn(cfg)
 		if err != nil {
 			return fmt.Errorf("probe failed: %s", err)
 		}
 
-		jsonFlag, _ := cmd.Flags().GetBool("json")
-		if jsonFlag {
-			// Run the same UDP/DNS-leak leg the human path runs, so automation
-			// keying on the JSON sees a leak the operator screen would catch
-			// (SEC2-02). DNS is probed only when the TCP tunnel holds, mirroring
-			// the human path.
-			var dnsExit string
-			if result.Tunneled {
-				dnsRes, _ := proxyengine.ProbeDNS(cfg)
-				dnsExit = dnsRes.ExitIP
+		// The UDP/DNS leg (H10) proves the non-TCP path is tunnelled too. It
+		// runs only when the TCP tunnel holds, under --json as on the screen,
+		// so that automation keying on the JSON sees a leak the operator
+		// would (SEC2-02); one decision, testDNSVerdict, sets the verdict
+		// of both and the exit code.
+		var dnsExit string
+		if result.Tunneled {
+			if !jsonFlag {
+				output.Info("Probing UDP/DNS...")
 			}
-			verdict, exitNonZero := testDNSVerdict(result, dnsExit)
+			dnsRes, _ := proxyTestProbeDNSFn(cfg)
+			dnsExit = dnsRes.ExitIP
+		}
+		verdict, exitNonZero := testDNSVerdict(result, dnsExit)
+		if jsonFlag {
 			if err := output.WriteJSON(cmd.OutOrStdout(), testJSONResult{
 				DirectIP:  result.DirectIP,
 				ProxiedIP: result.ProxiedIP,
@@ -301,37 +263,10 @@ var proxyTestCmd = &cobra.Command{
 			}); err != nil {
 				return err
 			}
-			if exitNonZero {
-				return &cliErrorWithExit{code: 1, msg: ""}
-			}
-			return nil
+		} else if err := writeReport(cmd.OutOrStdout(), output.Out(), tunnelReport(result, dnsExit)); err != nil {
+			return err
 		}
-
-		tunnelMark := "✗"
-		if result.Tunneled {
-			tunnelMark = "✓"
-		}
-		label := output.StyleDim.Render
-		fmt.Printf("%s  %s\n", label("Direct IP "), result.DirectIP)
-		fmt.Printf("%s %s\n", label("Proxied IP"), result.ProxiedIP)
-		fmt.Printf("%s   %s\n", label("Tunneled "), tunnelMark)
-		fmt.Printf("%s  %s\n", label("Latency  "), result.Latency.Truncate(time.Millisecond).String())
-
-		if result.Tunneled {
-			output.Success("Tunnel active — exit IPs differ")
-			// UDP/DNS leg (H10): prove the non-TCP path is tunnelled too.
-			dnsRes, _ := proxyengine.ProbeDNS(cfg)
-			switch proxyengine.ClassifyDNS(result.DirectIP, result.ProxiedIP, dnsRes.ExitIP) {
-			case proxyengine.DNSLeak:
-				output.Warn(fmt.Sprintf("UDP/DNS LEAK -- resolver saw your real IP %s (untunnelled)", dnsRes.ExitIP))
-				return &cliErrorWithExit{code: 1, msg: ""}
-			case proxyengine.DNSInconclusive:
-				output.Info("UDP/DNS: inconclusive (no UDP/DNS egress observed)")
-			default:
-				output.Success(fmt.Sprintf("UDP/DNS tunnelled -- exit %s", dnsRes.ExitIP))
-			}
-		} else {
-			output.Warn("Tunnel NOT active — direct and proxied exit IPs are the same")
+		if exitNonZero {
 			return &cliErrorWithExit{code: 1, msg: ""}
 		}
 		return nil
@@ -761,4 +696,111 @@ func testDNSVerdict(result proxyengine.ProbeResult, dnsExit string) (verdict str
 		// "tunneled" claim (this is a never-false-green security verdict).
 		return "inconclusive", false
 	}
+}
+
+// tunnelReport is ws proxy test's report (phase-5 §3.6): the two exit IPs,
+// whether they differ, the probe's latency and the UDP/DNS leg, with the
+// run's verdict as its caption. The UDP/DNS state comes from testDNSVerdict,
+// the decision the JSON and the exit code follow, so the screen cannot read
+// greener than either.
+func tunnelReport(r proxyengine.ProbeResult, dnsExit string) output.KV {
+	tunneled := output.StateFact("Tunneled", output.StateFail, "no")
+	caption := "Tunnel NOT active — direct and proxied exit IPs are the same"
+	if r.Tunneled {
+		tunneled = output.StateFact("Tunneled", output.StateOK, "yes")
+		caption = "Tunnel active — exit IPs differ"
+	}
+	var dns output.Fact
+	switch verdict, _ := testDNSVerdict(r, dnsExit); verdict {
+	case "skipped":
+		dns = output.StateFact("UDP/DNS", output.StateIdle, "not probed")
+	case "leak":
+		dns = output.StateFact("UDP/DNS", output.StateFail, fmt.Sprintf("leak (exit %s is the direct IP)", dnsExit))
+		caption = fmt.Sprintf("UDP/DNS LEAK -- resolver saw your real IP %s (untunnelled)", dnsExit)
+	case "tunneled":
+		dns = output.StateFact("UDP/DNS", output.StateOK, fmt.Sprintf("tunnelled (exit %s)", dnsExit))
+	default:
+		dns = output.StateFact("UDP/DNS", output.StateUnknown, "inconclusive")
+	}
+	return output.KV{Title: "Tunnel", Pairs: []output.Fact{
+		{K: "Direct IP", V: r.DirectIP},
+		{K: "Proxied IP", V: r.ProxiedIP},
+		tunneled,
+		{K: "Latency", V: r.Latency.Truncate(time.Millisecond).String()},
+		dns,
+	}, Caption: caption}
+}
+
+// proxyCheckReport is ws proxy check's report: one line per prerequisite, in
+// ProxyCheck's order — ok, failed, or unknown for a check the daemon was not
+// there to answer — closed by the count of what it rendered.
+func proxyCheckReport(results []docker.CheckResult) output.Checks {
+	items := make([]output.Check, 0, len(results))
+	for _, r := range results {
+		st := output.StateFail
+		switch {
+		case r.Skipped:
+			st = output.StateUnknown
+		case r.Passed:
+			st = output.StateOK
+		}
+		items = append(items, output.Check{Name: r.Name, State: st})
+	}
+	return output.Checks{Title: "Proxy prerequisites", Items: items, Caption: checksCaption(items)}
+}
+
+// proxyStatusReport is ws proxy status's report: the Proxy block, its state
+// and health carrying their mark and word, and — when a workspace is
+// connected or the route scan failed — a Workspaces block with one route
+// verdict per workspace, closed by the protection summary.
+func proxyStatusReport(st docker.Status, cfg config.Config, prot []docker.RouteProtection, perr error) []output.KV {
+	state := output.StateFact("State", output.StateIdle, "stopped")
+	if st.Running {
+		state = output.StateFact("State", output.StateOK, "running")
+	}
+	pairs := []output.Fact{state}
+	if st.Health != "" {
+		hs := output.StateUnknown
+		switch st.Health {
+		case "healthy":
+			hs = output.StateOK
+		case "unhealthy":
+			hs = output.StateFail
+		case "starting":
+			hs = output.StateBusy
+		}
+		pairs = append(pairs, output.StateFact("Health", hs, st.Health))
+	}
+	if st.Uptime != "" {
+		pairs = append(pairs, output.Fact{K: "Uptime", V: st.Uptime})
+	}
+	if st.Image != "" {
+		pairs = append(pairs, output.Fact{K: "Image", V: st.Image})
+	}
+	pairs = append(pairs, output.Fact{K: "Network", V: fmt.Sprintf("%s (%s)", cfg.ProxyNetwork, cfg.ProxyIP)})
+	blocks := []output.KV{{Title: "Proxy", Pairs: pairs}}
+
+	switch {
+	case perr != nil:
+		blocks = append(blocks, output.KV{
+			Title:   "Workspaces",
+			Pairs:   []output.Fact{output.StateFact("Route protection", output.StateUnknown, "")},
+			Caption: "protection scan failed: " + perr.Error() + " (workspace protection UNKNOWN)",
+		})
+	case len(prot) > 0:
+		ws := make([]output.Fact, 0, len(prot))
+		for _, p := range prot {
+			switch p.Verdict {
+			case docker.RouteProtected:
+				ws = append(ws, output.StateFact(p.Name, output.StateOK, "protected"))
+			case docker.RouteUnprotected:
+				ws = append(ws, output.StateFact(p.Name, output.StateFail, "unprotected: "+p.Detail))
+			default:
+				ws = append(ws, output.StateFact(p.Name, output.StateUnknown, "unknown: "+p.Detail))
+			}
+		}
+		summary, _ := protectionSummary(prot)
+		blocks = append(blocks, output.KV{Title: "Workspaces", Pairs: ws, Caption: summary})
+	}
+	return blocks
 }

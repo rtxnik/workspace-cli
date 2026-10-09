@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -144,6 +145,21 @@ var commonTools = []huh.Option[string]{
 	huh.NewOption("Helm", "helm"),
 }
 
+// profileSummary is the summary the profile-create wizard shows before it
+// asks for confirmation (phase-5 §3.10): the answers as a KV, Packages and
+// Tools only when given. A block of the prompt's, it is rendered for Err().
+func profileSummary(name, image, packages string, tools []string, dind bool) output.KV {
+	pairs := []output.Fact{{K: "Name", V: name}, {K: "Image", V: image}}
+	if packages != "" {
+		pairs = append(pairs, output.Fact{K: "Packages", V: packages})
+	}
+	if len(tools) > 0 {
+		pairs = append(pairs, output.Fact{K: "Tools", V: strings.Join(tools, ", ")})
+	}
+	pairs = append(pairs, output.Fact{K: "DinD", V: strconv.FormatBool(dind)})
+	return output.KV{Title: "Profile summary", Pairs: pairs}
+}
+
 // runProfileWizard walks the operator through a new profile's settings. ok is
 // false when the operator backed out or the form could not run — a blank
 // line after the first form, "Aborted" after the final confirmation — the
@@ -187,18 +203,10 @@ func runProfileWizard(name string) (profile.CreateOpts, bool) {
 		return profile.CreateOpts{}, false
 	}
 
-	// Build summary.
-	fmt.Fprintf(os.Stderr, "\n%s\n", output.SectionStyle.Render("Profile Summary"))
-	output.Detail(fmt.Sprintf("Name:    %s", name))
-	output.Detail(fmt.Sprintf("Image:   %s", baseImage))
-	if packages != "" {
-		output.Detail(fmt.Sprintf("Packages: %s", packages))
-	}
-	if len(selectedTools) > 0 {
-		output.Detail(fmt.Sprintf("Tools:   %s", strings.Join(selectedTools, ", ")))
-	}
-	output.Detail(fmt.Sprintf("DinD:    %v", dind))
-	fmt.Fprintln(os.Stderr)
+	// The summary belongs to the confirmation that follows, so it goes to
+	// stderr, a blank line before it and one after, apart from the prompt.
+	errs := output.Err()
+	_, _ = fmt.Fprintf(errs, "\n%s\n\n", profileSummary(name, baseImage, packages, selectedTools, dind).Render(errs))
 
 	if err := huh.NewConfirm().
 		Title("Create this profile?").

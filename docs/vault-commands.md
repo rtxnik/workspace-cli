@@ -100,7 +100,19 @@ Eleven sub-commands form the CLI surface (10 per ADR-int-03 + 1 diagnostic predi
 
 **Flags.** `--json` emits structured envelope for cron / dashboard consumers.
 
-**Output.** Composite line per signal + overall verdict; exit 0 (green), 1 (yellow), 2 (red).
+**Output.** A `Vault status` report on stdout: one line per signal, its band as a state — `✓ ok` (green), `⚠ degraded` (yellow), `✗ failed` (red) — and its detail beneath; a signal that could not be collected is yellow, its detail saying it was skipped. The last line is the overall band and the exit code it maps to: exit 0 (green), 1 (yellow), 2 (red).
+
+```
+Vault status
+  ✓ ok        MCP liveness
+              MCP responsive (25 tools advertised)
+  ⚠ degraded  vault_health composite
+              vault-health-score: 60 (yellow)
+  ✓ ok        audit-chain integrity
+              all 8 streams verified for current month
+  …
+Overall: yellow (exit 1)
+```
 
 ### ws vault search
 
@@ -162,6 +174,20 @@ Eleven sub-commands form the CLI surface (10 per ADR-int-03 + 1 diagnostic predi
 
 **Flags.** `--kill-orphans` (opt-in mutation; requires `--yes`); `--clear-stale-locks` (opt-in mutation; requires `--yes`); `--yes` (skip confirmation for the two mutation flags); `--json` (NDJSON, one check record per line). Without mutation flags, doctor diagnoses + prints remediation; doctor does not heal silently. Enforced by `TestVaultDoctorReadOnlyByDefault` tripwire.
 
+**Output.** A `Vault doctor` report on stdout: one line per check, its band as a state (`✓ ok`, `⚠ degraded`, `✗ failed`), its detail beneath and, when it has one, its remediation as a `Fix:` line. The last line is the worst band and the exit code it maps to; nothing goes to stderr unless a mutation flag acts.
+
+```
+Vault doctor
+  ✓ ok        orphan-mcp-subprocess
+              0 orphan MCP subprocesses
+  ✗ failed    vault-ai-token
+              VAULT_AI_TOKEN unset or empty
+              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles
+              ADR-sec-02 for the age key flow
+  …
+Overall: red (exit 2)
+```
+
 **Sample.**
 ```
 ws vault doctor               # read-only diagnosis
@@ -176,9 +202,24 @@ ws vault doctor --kill-orphans --yes  # opt-in cleanup of orphan vault-mcp-serve
 
 **Flags.** `--json` (structured envelope with all prediction fields).
 
+**Output.** Two key/value blocks: the current rows, one per audit stream in name order, then their total; and the projection for the count given.
+
+```
+Current rows
+  dedup   10
+  mcp     40
+  search  70
+  total   120
+
+Projection for 40 notes
+  Projected New Rows    200
+  Estimated Dedup Time  3.50s
+  Projected Segments    7
+```
+
 **Sample.**
 ```
-ws vault predict-bulk-load 40           # table output
+ws vault predict-bulk-load 40           # the two blocks above
 ws vault predict-bulk-load 40 --json    # JSON output
 ```
 

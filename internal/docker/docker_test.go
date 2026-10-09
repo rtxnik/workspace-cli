@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -297,21 +298,132 @@ func TestProxyCheck_AllPass(t *testing.T) {
 	if !results[3].Passed {
 		t.Error("expected container running check to pass")
 	}
+	for _, r := range results {
+		if r.Skipped {
+			t.Errorf("%q is marked not evaluated although the daemon answered", r.Name)
+		}
+	}
 }
 
+// TestProxyCheck_NoDaemon pins what ProxyCheck reports when it cannot reach
+// the daemon: Docker running fails, the image and container checks are not
+// evaluated — Skipped, not failed — and the xray config, which needs no
+// daemon, is still checked. Before phase 5 the three after the ping were all
+// reported failed, so `ws proxy check` printed "✗ Xray config exists" against
+// a config that exists. Both ways the daemon can be out of reach: the client
+// cannot be built, and the ping fails.
 func TestProxyCheck_NoDaemon(t *testing.T) {
-	mock := &mockClient{
-		pingFn: func(_ context.Context) (types.Ping, error) {
-			return types.Ping{}, errors.New("connection refused")
-		},
+	cfg := testCfg()
+	cfg.XrayConfig = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfg.XrayConfig, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	defer withMock(mock)()
+	for name, install := range map[string]func() func(){
+		"ping fails": func() func() {
+			return withMock(&mockClient{pingFn: func(_ context.Context) (types.Ping, error) {
+				return types.Ping{}, errors.New("connection refused")
+			}})
+		},
+		"no client": func() func() {
+			orig := newClientFunc
+			newClientFunc = func() (DockerClient, error) { return nil, errors.New("no DOCKER_HOST") }
+			return func() { newClientFunc = orig }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer install()()
+			got := ProxyCheck(cfg)
+			want := []CheckResult{
+				{Name: "Docker running"},
+				{Name: "Xray config exists", Passed: true},
+				{Name: "Proxy image built", Skipped: true},
+				{Name: "Proxy container running", Skipped: true},
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("ProxyCheck =\n%+v\nwant\n%+v", got, want)
+			}
+		})
+	}
+}
 
-	results := ProxyCheck(testCfg())
-	for _, r := range results {
-		if r.Passed {
-			t.Errorf("expected check %q to fail when daemon is down", r.Name)
-		}
+// TestProxyCheck_UndecidedChecks: a check that ran and could not decide is
+// not evaluated, Skipped, as one the daemon was not there for: an image or
+// container inspection that failed other than with not-found — the daemon
+// went away after the ping, or the shared deadline ran out — and a stat of
+// the config that failed other than with not-exist. An absent image,
+// container or config still fails its check, and so does one whose name the
+// daemon rejects or whose path runs through a regular file.
+func TestProxyCheck_UndecidedChecks(t *testing.T) {
+	cfg := testCfg()
+	dir := filepath.Join(t.TempDir(), "xray")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg.XrayConfig = filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfg.XrayConfig, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ping := func(_ context.Context) (types.Ping, error) { return types.Ping{}, nil }
+
+	defer withMock(&mockClient{
+		pingFn: ping,
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, errors.New("Cannot connect to the Docker daemon")
+		},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, context.DeadlineExceeded
+		},
+	})()
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	got := ProxyCheck(cfg)
+	want := []CheckResult{
+		{Name: "Docker running", Passed: true},
+		{Name: "Xray config exists", Skipped: true},
+		{Name: "Proxy image built", Skipped: true},
+		{Name: "Proxy container running", Skipped: true},
+	}
+	if os.Geteuid() == 0 {
+		want[1] = CheckResult{Name: "Xray config exists", Passed: true} // root stats through a mode-0 directory
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("errors that decide nothing: ProxyCheck =\n%+v\nwant\n%+v", got, want)
+	}
+
+	// Absent: the mock's default inspections answer not-found.
+	defer withMock(&mockClient{pingFn: ping})()
+	cfg.XrayConfig = filepath.Join(t.TempDir(), "absent.json")
+	got = ProxyCheck(cfg)
+	want = []CheckResult{
+		{Name: "Docker running", Passed: true},
+		{Name: "Xray config exists"},
+		{Name: "Proxy image built"},
+		{Name: "Proxy container running"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("absent objects: ProxyCheck =\n%+v\nwant\n%+v", got, want)
+	}
+
+	// Absent too: a config path that runs through a regular file, and an
+	// image and a container whose names the daemon rejects.
+	defer withMock(&mockClient{
+		pingFn: ping,
+		imageInspFn: func(_ context.Context, _ string) (image.InspectResponse, []byte, error) {
+			return image.InspectResponse{}, nil, errdefs.InvalidParameter(errors.New("invalid reference format"))
+		},
+		inspectFn: func(_ context.Context, _ string) (container.InspectResponse, error) {
+			return container.InspectResponse{}, errdefs.InvalidParameter(errors.New("invalid container name"))
+		},
+	})()
+	regular := filepath.Join(t.TempDir(), "xray")
+	if err := os.WriteFile(regular, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.XrayConfig = filepath.Join(regular, "config.json")
+	if got = ProxyCheck(cfg); !reflect.DeepEqual(got, want) {
+		t.Errorf("a config path through a file, rejected names: ProxyCheck =\n%+v\nwant\n%+v", got, want)
 	}
 }
 

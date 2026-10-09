@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
+	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 	"github.com/spf13/cobra"
 )
 
@@ -167,6 +168,13 @@ var errorCases = []errorCase{
 	{name: "body-exit/proxy-doctor-json-unreachable", args: []string{"proxy", "doctor", "--json"}},
 	{name: "runtime/proxy-test-not-running", args: []string{"proxy", "test"}},
 	{name: "runtime/proxy-fix-routes-not-running", args: []string{"proxy", "fix-routes"}},
+	// ws proxy check reports and exits 1; ws proxy status's first docker call
+	// fails, and the root prints the error.
+	{name: "runtime/proxy-check-unreachable", args: []string{"proxy", "check"}},
+	{name: "runtime/proxy-status-unreachable", args: []string{"proxy", "status"}},
+	// ws vault doctor's verdict is its report's caption: the root prints
+	// nothing of its own for a red band, and the exit code is the band's.
+	{name: "silent/vault-doctor-red", args: []string{"vault", "doctor"}, stub: "vault-doctor-mixed"},
 
 	// A body that refuses with the Problem it returns, exit 1; it rendered
 	// its own error box before phase 3.
@@ -201,6 +209,74 @@ func installExecuteStub(name string) {
 		warnConfirmFn = func(string, string) bool { return false }
 	case "health-yellow":
 		vaultHealthScoreComputeFn = func(context.Context, *cobra.Command) (int, error) { return 55, nil }
+	case "tunnel-up":
+		proxyTestProbeFn = func(config.Config) (proxyengine.ProbeResult, error) {
+			return proxyengine.ProbeResult{DirectIP: "203.0.113.7", ProxiedIP: "198.51.100.9", Tunneled: true, Latency: 182 * time.Millisecond}, nil
+		}
+		proxyTestProbeDNSFn = func(config.Config) (proxyengine.DNSProbeResult, error) {
+			return proxyengine.DNSProbeResult{ExitIP: "198.51.100.9"}, nil
+		}
+	case "tunnel-dns-leak":
+		proxyTestProbeFn = func(config.Config) (proxyengine.ProbeResult, error) {
+			return proxyengine.ProbeResult{DirectIP: "203.0.113.7", ProxiedIP: "198.51.100.9", Tunneled: true, Latency: 182 * time.Millisecond}, nil
+		}
+		proxyTestProbeDNSFn = func(config.Config) (proxyengine.DNSProbeResult, error) {
+			return proxyengine.DNSProbeResult{ExitIP: "203.0.113.7"}, nil
+		}
+	case "tunnel-down":
+		proxyTestProbeFn = func(config.Config) (proxyengine.ProbeResult, error) {
+			return proxyengine.ProbeResult{DirectIP: "203.0.113.7", ProxiedIP: "203.0.113.7", Latency: 95 * time.Millisecond}, nil
+		}
+		proxyTestProbeDNSFn = func(config.Config) (proxyengine.DNSProbeResult, error) {
+			panic("stub: the UDP/DNS leg runs with the tunnel down")
+		}
+	case "vault-doctor-mixed":
+		// The five checks of ws vault doctor in three bands, as a host
+		// without a token and with an old vault-ai checkout answers them.
+		doctorOrphanCheckFn = func(context.Context) *doctorCheck {
+			return &doctorCheck{Name: "orphan-mcp-subprocess", Band: bandGreen, Detail: "0 orphan MCP subprocesses"}
+		}
+		doctorStaleLockCheckFn = func(context.Context) *doctorCheck {
+			return &doctorCheck{Name: "stale-lock-files", Band: bandYellow,
+				Detail:      "1 stale lock(s): /srv/vault-ai/_tooling/state/ingest.lock",
+				Remediation: "re-run with `ws vault doctor --clear-stale-locks --yes` to remove (operator-controlled per CONTEXT D-13)"}
+		}
+		doctorTokenCheckFn = func() *doctorCheck {
+			return &doctorCheck{Name: "vault-ai-token", Band: bandRed, Detail: "VAULT_AI_TOKEN unset or empty",
+				Remediation: "provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles ADR-sec-02 for the age key flow"}
+		}
+		doctorFDPassCheckFn = func(context.Context) *doctorCheck {
+			return &doctorCheck{Name: "token-fd-pass", Band: bandRed, Detail: "stage=newclient: VAULT_AI_TOKEN not set",
+				Remediation: "see RESEARCH §Pitfall 7 + Plan 18-01 for fd-3 wiring; check `ws vault doctor` token check above"}
+		}
+		doctorXrepoCheckFn = func(context.Context) *doctorCheck {
+			return &doctorCheck{Name: "xrepo-contract-parity", Band: bandYellow,
+				Detail:      "check-xrepo-contract.sh not found at /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: stat /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: no such file or directory",
+				Remediation: "verify Phase 17 deliverable is present in vault-ai checkout"}
+		}
+	case "vault-status-mixed":
+		// Six signals as a host with no cost or DR-drill logs yet answers
+		// them, one detail cut by truncate: yellow overall, exit 1.
+		vaultStatusRunFn = func(context.Context, *cobra.Command) (*statusReport, error) {
+			return assembleReport([]statusSignal{
+				{Label: "MCP liveness", Band: bandGreen, Detail: "MCP responsive (25 tools advertised)"},
+				{Label: "vault_health composite", Band: bandYellow, Detail: "vault-health-score: 60 (yellow)"},
+				{Label: "audit-chain integrity", Band: bandGreen, Detail: "all 8 streams verified for current month"},
+				{Label: "cost-tracker headroom", Band: bandYellow, Detail: "no cost-*.jsonl found — Phase 21d daemon not yet shipped (fallback only)"},
+				{Label: "dedup gate readiness", Band: bandGreen, Detail: "create_note advertises check_dedup_before_create (Phase 17 deployed)"},
+				{Label: "last DR-drill age", Band: bandYellow, Detail: "dr-drill-*.jsonl present but unreadable: " +
+					truncate("open /srv/vault-ai/_tooling/logs/dr-drill-2026-09.jsonl: permission denied — проверьте права доступа", 80)},
+			}), nil
+		}
+	case "predict-projection":
+		predictMCPCallFn = func(count int) (*predictResult, error) {
+			return &predictResult{
+				CurrentRowsPerStream:  map[string]int{"search": 70, "mcp": 40, "dedup": 10},
+				ProjectedNewRows:      5 * count,
+				EstimatedDedupSeconds: 3.5,
+				ProjectedSegmentCount: 7,
+			}, nil
+		}
 	case "vault-status-red":
 		vaultStatusRunFn = func(context.Context, *cobra.Command) (*statusReport, error) {
 			return &statusReport{OverallBand: bandRed, ExitCode: 2}, nil

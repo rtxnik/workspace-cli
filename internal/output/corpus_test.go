@@ -83,15 +83,15 @@ const fxCJKNote = "拨号失败：连接超时（30 秒），代理配置文件 
 // title rewrite behind. Two ESC bytes, zero cells to ansi.StringWidth, and a
 // payload — "pwned" — that must never reach the terminal as text.
 //
-// It exists because D-13 sanitises ELEVEN surfaces across blocks.go and, until
+// It exists because D-13 sanitises FOURTEEN surfaces across blocks.go and, until
 // this corpus, only one of them (Problem.Cause) had a fixture carrying an
 // escape at all. A surface that silently stopped sanitising would have kept
-// the whole suite green. The other ten are covered by the four fixtures at the
+// the whole suite green. The other thirteen are covered by the four fixtures at the
 // end of fxCorpusBuild, and assertESCContainment asserts both halves over the
 // corpus: zero ESC bytes out, and no "pwned" surviving as text.
 //
-// Each of the ten was proved, one deleted Sanitise at a time, every one
-// restored — eight plants, because renderPairs covers Fact.K with Fact.V and
+// Each of the thirteen was proved, one deleted Sanitise at a time, every one
+// restored — eleven plants, because renderPairs covers Fact.K with Fact.V and
 // renderRemedies covers Remedy.Label with Remedy.Cmd:
 //
 //	Problem.Title        12 violations, first problem/esc-surfaces @ 29
@@ -102,6 +102,9 @@ const fxCJKNote = "拨号失败：连接超时（30 秒），代理配置文件 
 //	Checks.Title         12, first checks/esc-surfaces @ 29
 //	Check.Name           12, first checks/esc-surfaces @ 29
 //	Check.Note           12, first checks/esc-surfaces @ 29
+//	KV.Caption           12, first kv/esc-surfaces @ 29
+//	Checks.Caption       12, first checks/esc-surfaces @ 29
+//	StateFact label      12, first kv/esc-surfaces @ 29
 func fxEsc(text string) string { return "\x1b[2K" + text + "\x1b]0;pwned\x07" }
 
 // fxTaskTailProblem is the Problem of a failed devpod up whose log tail is
@@ -191,6 +194,9 @@ func fxKVSources(k KV) []string {
 	for _, f := range k.Pairs {
 		out = append(out, f.K, f.V)
 	}
+	if k.Caption != "" {
+		out = append(out, k.Caption)
+	}
 	return out
 }
 
@@ -204,6 +210,9 @@ func fxChecksSources(c Checks) []string {
 		if it.Note != "" {
 			out = append(out, it.Note)
 		}
+	}
+	if c.Caption != "" {
+		out = append(out, c.Caption)
 	}
 	return out
 }
@@ -592,37 +601,37 @@ func fxCorpusBuild() []fixture {
 		{"problem/degraded", "§6.1 problem", Problem{
 			Title: "Proxy is up, but 2 of 3 workspace routes are degraded",
 			Cause: "iptables: no chain/target/match by that name (exit 1)",
-			Facts: []Fact{{"stage", "post-start route fix"}, {"proxy", "devpod-proxy at 172.31.0.2"},
-				{"failed", "ws-vault-ai, ws-lazyray"}},
+			Facts: []Fact{{K: "stage", V: "post-start route fix"}, {K: "proxy", V: "devpod-proxy at 172.31.0.2"},
+				{K: "failed", V: "ws-vault-ai, ws-lazyray"}},
 			Steps: []Remedy{{"Retry the route fix", "ws proxy fix-routes"}, {"Diagnose the stack", "ws proxy doctor"}},
 		}, nil},
 		{"problem/multiline-cause", "§6.2 multi-line upstream error", Problem{
 			Title: "Could not start workspace \"api\"",
 			Cause: fxMultilineErr,
-			Facts: []Fact{{"command", "devpod up api --ide none"}, {"exit", "1"}},
+			Facts: []Fact{{K: "command", V: "devpod up api --ide none"}, {K: "exit", V: "1"}},
 			Steps: []Remedy{{"Check the daemon", "systemctl --user status docker"}, {"Retry", "ws up api"}},
 		}, nil},
 		{"problem/name64", "§6.2 64-character name", Problem{
 			Title: "Workspace \"" + fxName64 + "\" not found",
-			Facts: []Fact{{"searched", "~/projects"}, {"endpoint", fxIPv6}},
+			Facts: []Fact{{K: "searched", V: "~/projects"}, {K: "endpoint", V: fxIPv6}},
 			Steps: []Remedy{{"List workspaces", "ws list"}, {"Create it", "ws new " + fxName64}},
 		}, nil},
 		{"problem/unbreakable-200", "§6.2 200-character unbreakable token", Problem{
 			Title: "Image pull failed for " + fxToken200,
 			Cause: "manifest unknown: " + fxToken200,
-			Facts: []Fact{{"digest", fxToken200}},
+			Facts: []Fact{{K: "digest", V: fxToken200}},
 			Steps: []Remedy{{"Retry with the digest", "ws profile add x --image " + fxToken200}},
 		}, nil},
 		{"problem/cjk", "§6.2 CJK-only text", Problem{
 			Title: "工作区启动失败：网络不可达",
 			Cause: fxCJKNote,
-			Facts: []Fact{{"阶段", "启动后路由修复"}, {"代理", "devpod-proxy 位于 172.31.0.2"}},
+			Facts: []Fact{{K: "阶段", V: "启动后路由修复"}, {K: "代理", V: "devpod-proxy 位于 172.31.0.2"}},
 			Steps: []Remedy{{"重试", "ws proxy fix-routes"}},
 		}, nil},
 		{"problem/emoji-presentation", "§6.2 emoji-presentation sequences (base + U+FE0F)", Problem{
 			Title: "⚠️ Could not rebuild profile \"go\"",
 			Cause: fxEmojiCause + "\n" + fxEmojiRun,
-			Facts: []Fact{{"stage", "buildkit export"}, {"markers", fxEmojiRun}},
+			Facts: []Fact{{K: "stage", V: "buildkit export"}, {K: "markers", V: fxEmojiRun}},
 			Steps: []Remedy{{"Retry the build", "ws profile rebuild go"}},
 		}, nil},
 		// The Problem a failed task renders as, with the most its tail holds:
@@ -631,7 +640,7 @@ func fxCorpusBuild() []fixture {
 		{"problem/esc-cause", "§6.7 Cause containing control sequences", Problem{
 			Title: "Could not pull the base image",
 			Cause: fxEscCause,
-			Facts: []Fact{{"image", fxBaseImage}, {"registry", fxIPv6}},
+			Facts: []Fact{{K: "image", V: fxBaseImage}, {K: "registry", V: fxIPv6}},
 			Steps: []Remedy{{"Retry", "ws profile rebuild default"}},
 		}, append([]string{fxBaseImage, fxIPv6, "Retry", "ws profile rebuild default"}, fxEscSurvivors...)},
 	}
@@ -677,20 +686,23 @@ func fxCorpusBuild() []fixture {
 		k          KV
 	}{
 		{"kv/proxy-status", "§6.1 KV", KV{Title: "Proxy", Pairs: []Fact{
-			{"state", "running"}, {"profile", "de-fra-01"},
-			{"endpoint", "de-fra-01.example-vpn.net:443"},
-			{"uptime", "4h 12m"}, {"routes", "3 of 3 healthy"}}}},
+			{K: "state", V: "running"}, {K: "profile", V: "de-fra-01"},
+			{K: "endpoint", V: "de-fra-01.example-vpn.net:443"},
+			{K: "uptime", V: "4h 12m"}, {K: "routes", V: "3 of 3 healthy"}}}},
 		{"kv/key64", "§6.2 64-character key, IPv6 value, multi-line value", KV{
 			Title: "Workspace " + fxName64, Pairs: []Fact{
-				{fxName64, "present"}, {"endpoint", fxIPv6}, {"note", fxMultilineErr}}}},
+				{K: fxName64, V: "present"}, {K: "endpoint", V: fxIPv6}, {K: "note", V: fxMultilineErr}}}},
 		{"kv/unbreakable-200", "§6.2 200-character unbreakable token", KV{
-			Title: "Image", Pairs: []Fact{{"digest", fxToken200}, {fxToken200, "value"}}}},
+			Title: "Image", Pairs: []Fact{{K: "digest", V: fxToken200}, {K: fxToken200, V: "value"}}}},
 		{"kv/emoji-presentation", "§6.2 emoji-presentation sequences (base + U+FE0F)", KV{
 			Title: "⚠️ Build report", Pairs: []Fact{
-				{"buildkit", fxEmojiCause}, {"markers", fxEmojiRun}, {fxEmojiRun, "key side"}}}},
+				{K: "buildkit", V: fxEmojiCause}, {K: "markers", V: fxEmojiRun}, {K: fxEmojiRun, V: "key side"}}}},
 		{"kv/cjk", "§6.2 CJK-only text", KV{Title: "代理状态", Pairs: []Fact{
-			{"状态", "运行中"}, {"配置文件", "de-fra-01"}, {"端点", fxIPv6},
-			{"运行时间", "四小时十二分钟，自上次路由修复以来"}}}},
+			{K: "状态", V: "运行中"}, {K: "配置文件", V: "de-fra-01"}, {K: "端点", V: fxIPv6},
+			{K: "运行时间", V: "四小时十二分钟，自上次路由修复以来"}}}},
+		{"kv/caption-long", "§6.2 caption longer than the budget (phase-5 §3.1)", KV{
+			Title: "Workspaces", Pairs: []Fact{{K: "api", V: "protected"}, {K: fxName64, V: fxIPv6}},
+			Caption: "protection scan failed: " + fxMultilineErr + " " + fxToken200}},
 	}
 	for _, kf := range kvs {
 		k := kf.k
@@ -699,6 +711,23 @@ func fxCorpusBuild() []fixture {
 			render: func(s *Stream) string { return k.Render(s) },
 		})
 	}
+
+	// A KV whose values carry states (phase-5 §3.1). The declared states are
+	// the short ones: the long label wraps, and the assertion looks for each
+	// badge on one line.
+	stateKV := KV{Title: "Proxy", Pairs: []Fact{
+		StateFact("State", StateOK, "running"),
+		StateFact("Health", StateFail, "unhealthy"),
+		StateFact("代理", StateBusy, "启动中"),
+		StateFact(fxName64, StateUnknown, "unknown: route unreadable: "+fxToken200),
+		{K: "Image", V: fxBaseImage},
+	}}
+	out = append(out, fixture{
+		name: "kv/state-facts", kind: "kv", spec: "phase-5 §3.1 StateFact: marks, CJK, a 64-character key, a 200-character label",
+		states:   []fxState{{StateOK, "running"}, {StateFail, "unhealthy"}, {StateBusy, "启动中"}},
+		fidelity: fxKVSources(stateKV),
+		render:   func(s *Stream) string { return stateKV.Render(s) },
+	})
 
 	// Checks never abbreviates a badge: it pads to the vocabulary's widest
 	// mark and word (§4.4), so every state it renders must appear in full.
@@ -737,6 +766,11 @@ func fxCorpusBuild() []fixture {
 			{"路由表是最新的", StateAdvisory, fxCJKNote},
 			{"上游可达性", StateFail, "拨号失败：连接被拒绝"}}},
 			[]fxState{{StateOK, ""}, {StateAdvisory, ""}, {StateFail, ""}}},
+		{"checks/caption-long", "§6.2 caption longer than the budget (phase-5 §3.1)", Checks{
+			Title: "Proxy doctor", Items: []Check{
+				{fxName64, StateFail, fxToken200}, {"protocol sanity", StateUnknown, ""}},
+			Caption: "Failed at check 1 of 13: " + fxName64 + " " + fxToken200},
+			[]fxState{{StateFail, ""}, {StateUnknown, ""}}},
 	}
 	for _, cf := range checks {
 		c := cf.c
@@ -785,7 +819,7 @@ func fxCorpusBuild() []fixture {
 	// whole would assert the opposite of what §6.7 requires.
 	escProblem := Problem{
 		Title: fxEsc("Could not reconcile the go profile"),
-		Facts: []Fact{{fxEsc("stage"), fxEsc("buildkit export")}},
+		Facts: []Fact{{K: fxEsc("stage"), V: fxEsc("buildkit export")}},
 		Steps: []Remedy{{fxEsc("Retry"), fxEsc("ws profile rebuild go")}},
 	}
 	out = append(out, fixture{
@@ -809,24 +843,27 @@ func fxCorpusBuild() []fixture {
 
 	escKV := KV{
 		Title: fxEsc("Build report"),
-		Pairs: []Fact{{fxEsc("buildkit"), fxEsc("3 of 5 layers cached")}},
+		Pairs: []Fact{{K: fxEsc("buildkit"), V: fxEsc("3 of 5 layers cached")},
+			StateFact(fxEsc("route"), StateFail, fxEsc("unprotected"))},
+		Caption: fxEsc("2 layers rebuilt"),
 	}
 	out = append(out, fixture{
 		name: "kv/esc-surfaces", kind: "kv",
-		spec:     "§6.7 / D-13: escapes in Title and in a pair",
-		fidelity: []string{"Build report", "buildkit", "3 of 5 layers cached"},
+		spec:     "§6.7 / D-13: escapes in Title, in a pair, in a StateFact label and in the Caption",
+		fidelity: []string{"Build report", "buildkit", "3 of 5 layers cached", "route", "unprotected", "2 layers rebuilt"},
 		render:   func(s *Stream) string { return escKV.Render(s) },
 	})
 
 	escChecks := Checks{
-		Title: fxEsc("Build doctor"),
-		Items: []Check{{fxEsc("buildkit cache"), StateAdvisory, fxEsc("2 of 5 layers reused")}},
+		Title:   fxEsc("Build doctor"),
+		Items:   []Check{{fxEsc("buildkit cache"), StateAdvisory, fxEsc("2 of 5 layers reused")}},
+		Caption: fxEsc("1 of 1 checks passed, 1 degraded"),
 	}
 	out = append(out, fixture{
 		name: "checks/esc-surfaces", kind: "checks",
-		spec:     "§6.7 / D-13: escapes in Title, an item Name and an item Note",
+		spec:     "§6.7 / D-13: escapes in Title, an item Name, an item Note and the Caption",
 		states:   []fxState{{StateAdvisory, ""}},
-		fidelity: []string{"Build doctor", "buildkit cache", "2 of 5 layers reused"},
+		fidelity: []string{"Build doctor", "buildkit cache", "2 of 5 layers reused", "1 of 1 checks passed, 1 degraded"},
 		render:   func(s *Stream) string { return escChecks.Render(s) },
 	})
 

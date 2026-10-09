@@ -336,20 +336,24 @@ var assertAntiDrift = globalAssertion{
 // Measured on this tree, REPO-WIDE and not merely in this package:
 //
 //	$ grep -rn 'lipgloss.Color("#' --include='*.go' . | grep -v _test.go | sed 's/:[0-9]*:.*//' | sort | uniq -c
-//	     19 ./internal/output/theme.go
+//	      6 ./internal/output/theme.go
 //	$ find . -name theme.go -not -path './.git/*'
 //	./internal/output/theme.go
 //
-// 19 matches, all in the permitted file, zero outside it, and exactly one file
-// in the tree called theme.go. (An earlier draft pinned 18; the palette gained
-// a value since.) Five further matches are in TEST files — one in
-// mutation_test.go and four in this one — and the scanner skips every one of
-// them by the `_test.go` suffix. The assertion is therefore GREEN before any
+// 6 matches, all in the permitted file, zero outside it, and exactly one file
+// in the tree called theme.go: the true-colour literals of roleColours, the
+// palette the layer paints with, and nothing else — the exported palette and
+// a comment that named the pattern went in phase 5, so the inPermitted half
+// below now fails when roleColours stops naming its colours. (Earlier drafts
+// pinned 18, 19 and 25.) Six further matches are in TEST files — one in
+// mutation_test.go, one in the control of cmd/style_ratchet_test.go and four
+// in this one — and the scanner skips every one of them by the `_test.go`
+// suffix. The assertion is therefore GREEN before any
 // of this work happens. Without this control it would be an assertion that
 // cannot fail — and while it was rooted at "." (the package directory inside a
 // Go test) it was also an assertion that could not SEE the drift, because §6.8
-// and §7 both speak about the repository, where the ten direct-style sites
-// under cmd/ live.
+// and §7 both speak about the repository, where the direct-style sites under
+// cmd/ lived until phase 5 migrated the last of them.
 func TestAntiDriftGuardCanFail(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {

@@ -208,6 +208,12 @@ func corpusMutants() []mutant {
 			apply:  func(m *mutantSwitches) { m.CaptionWidth = 2 },
 		},
 		{
+			name:   "state_fact_ignores_glyph_mode",
+			spec:   "phase-5 §3.1 / §4.5",
+			defect: "a StateFact value is drawn with the UTF-8 mark whatever the stream's glyph mode",
+			apply:  func(m *mutantSwitches) { m.StateFactUTF8 = true },
+		},
+		{
 			name:   "message_wrapping_disabled",
 			spec:   "§6.1 (the message call sites)",
 			defect: "the message helpers emit one unwrapped line, which is what they did before this layer existed",

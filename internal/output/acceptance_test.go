@@ -562,7 +562,7 @@ func fxProblem() Problem {
 	return Problem{
 		Title: "cannot start workspace \"api\"",
 		Cause: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
-		Facts: []Fact{{"workspace", "api"}, {"profile", "go"}, {"proxy", "de-fra-01"}},
+		Facts: []Fact{{K: "workspace", V: "api"}, {K: "profile", V: "go"}, {K: "proxy", V: "de-fra-01"}},
 		Steps: []Remedy{{"start docker", "sudo systemctl start docker"}, {"check", "ws proxy check"}},
 	}
 }
@@ -921,7 +921,7 @@ func TestKVStacksBelowTwelve(t *testing.T) {
 	}
 	key := strings.Repeat("k", 20) // valueIndent = 2 + 20 + 2 = 24
 	const value = "de-fra-01.example-vpn.net:443"
-	k := KV{Title: "Report", Pairs: []Fact{{key, value}}}
+	k := KV{Title: "Report", Pairs: []Fact{{K: key, V: value}}}
 	const valueIndent = 24
 
 	// The pair lines start at index 1 only while the title occupies exactly one
@@ -969,8 +969,8 @@ func TestKVPlainKeys(t *testing.T) {
 	if mutants != (mutantSwitches{}) {
 		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
 	}
-	muted := fxSGR(t, roleColours[RoleMuted].trueColour, ColourTrue)
-	accent := fxSGR(t, roleColours[RoleAccent].trueColour, ColourTrue)
+	muted := fxSGR(t, string(roleColours[RoleMuted].trueColour), ColourTrue)
+	accent := fxSGR(t, string(roleColours[RoleAccent].trueColour), ColourTrue)
 	key := strings.Repeat("k", 20) // valueIndent = 2 + 20 + 2 = 24
 	const value, valueIndent = "on", 24
 
@@ -986,7 +986,7 @@ func TestKVPlainKeys(t *testing.T) {
 		{"stacked, PlainKeys", valueIndent + 11, true, "  " + key},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			out := KV{Title: "Report", Pairs: []Fact{{key, value}}, PlainKeys: c.plain}.Render(blockStream(c.budget))
+			out := KV{Title: "Report", Pairs: []Fact{{K: key, V: value}}, PlainKeys: c.plain}.Render(blockStream(c.budget))
 			lines := strings.Split(out, "\n")
 			if len(lines) < 2 {
 				t.Fatalf("want a title line and a key line, got %q", out)
@@ -1000,7 +1000,7 @@ func TestKVPlainKeys(t *testing.T) {
 		})
 	}
 
-	p := Problem{Title: "pull failed", Facts: []Fact{{"image", "ws:dev"}}}
+	p := Problem{Title: "pull failed", Facts: []Fact{{K: "image", V: "ws:dev"}}}
 	if out := p.Render(blockStream(80)); !strings.Contains(out, "\n  "+muted+"image"+fxReset+"  ws:dev") {
 		t.Errorf("Problem.Facts no longer paints its keys RoleMuted: %q", out)
 	}
@@ -1076,6 +1076,227 @@ func TestChecksFloorIsVocabularyWide(t *testing.T) {
 		if got := ansi.StringWidth(l); got > MinWidth {
 			t.Fatalf("@%d line %d is %d cells: %q", MinWidth, i+1, got, l)
 		}
+	}
+}
+
+// TestStateFactDrawsMarkAndLabel pins phase-5 §3.1's StateFact by the exact
+// bytes of each pair's line, colour on: the value is "<mark> <label>" in the
+// stream's glyph mode, painted with the state's role on the aligned path and on
+// the stacked one; an empty label is the state's default word; a newline in the
+// label is folded to a space, as Mark folds it; a plain pair beside them stays
+// unpainted. The keys pad to "Health", six cells.
+func TestStateFactDrawsMarkAndLabel(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	ok := fxSGR(t, string(roleColours[RoleOK].trueColour), ColourTrue)
+	fail := fxSGR(t, string(roleColours[RoleFail].trueColour), ColourTrue)
+	muted := fxSGR(t, string(roleColours[RoleMuted].trueColour), ColourTrue)
+	k := KV{Title: "Proxy", Pairs: []Fact{
+		StateFact("State", StateOK, "running"),
+		StateFact("Health", StateFail, ""),
+		StateFact("Route", StateUnknown, "unreadable\nexec failed"),
+		{K: "Image", V: "devpod-proxy"},
+	}}
+	for _, c := range []struct {
+		name string
+		s    *Stream
+		want []string // lines 2 to 5, raw
+	}{
+		{"utf-8", blockStream(80), []string{
+			"  " + muted + "State " + fxReset + "  " + ok + "✓ running" + fxReset,
+			"  " + muted + "Health" + fxReset + "  " + fail + "✗ failed" + fxReset,
+			"  " + muted + "Route " + fxReset + "  " + muted + "? unreadable exec failed" + fxReset,
+			"  " + muted + "Image " + fxReset + "  devpod-proxy",
+		}},
+		{"ascii", sweepStream(80, GlyphASCII), []string{
+			"  " + muted + "State " + fxReset + "  " + ok + "+ running" + fxReset,
+			"  " + muted + "Health" + fxReset + "  " + fail + "x failed" + fxReset,
+			"  " + muted + "Route " + fxReset + "  " + muted + "? unreadable exec failed" + fxReset,
+			"  " + muted + "Image " + fxReset + "  devpod-proxy",
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			lines := strings.Split(k.Render(c.s), "\n")
+			if len(lines) != 1+len(c.want) {
+				t.Fatalf("want a title and %d pair lines, got %d:\n%s", len(c.want), len(lines), strings.Join(lines, "\n"))
+			}
+			for i, want := range c.want {
+				if lines[1+i] != want {
+					t.Errorf("pair line %d = %q, want %q", i+1, lines[1+i], want)
+				}
+			}
+		})
+	}
+
+	// Stacked: a 20-cell key puts the value column at 24, and at 35 columns it
+	// is 11 cells wide, under §4.4's 12, so the value goes under its key at an
+	// indent of 4 — painted as on the aligned path.
+	key := strings.Repeat("k", 20)
+	stacked := KV{Title: "Report", Pairs: []Fact{
+		StateFact(key, StateOK, "running"),
+		{K: key, V: "plain"},
+	}}
+	lines := strings.Split(stacked.Render(blockStream(35)), "\n")
+	want := []string{
+		muted + "  " + key + fxReset,
+		ok + "    ✓ running" + fxReset,
+		muted + "  " + key + fxReset,
+		"    plain",
+	}
+	if len(lines) != 1+len(want) {
+		t.Fatalf("stacked: want a title and %d lines, got %d:\n%s", len(want), len(lines), strings.Join(lines, "\n"))
+	}
+	for i, w := range want {
+		if lines[1+i] != w {
+			t.Errorf("stacked line %d = %q, want %q", i+1, lines[1+i], w)
+		}
+	}
+}
+
+// TestStateFactKeepsItsMarkWithItsWord: a state's mark and the first word of
+// its label are one unit (§4.5) — at every width from MinWidth to 200, in
+// both glyph modes, on the line that carries the mark the word follows it.
+// The blocks are ws proxy status's Workspaces in miniature: a 64-character key
+// and a short one, each beside a verdict whose first word is 12 cells. Wrapped
+// as one string in a column of 12 or 13 cells, "✗ unprotected: …" would leave
+// the ✗ alone; such a column stacks the block instead.
+func TestStateFactKeepsItsMarkWithItsWord(t *testing.T) {
+	verdict := "unprotected: default via 172.28.0.1 (not the proxy 172.28.0.2)"
+	blocks := []KV{
+		{Title: "Workspaces", Pairs: []Fact{
+			StateFact(strings.Repeat("payments-", 7)+"x", StateFail, verdict),
+			StateFact("web-frontend", StateOK, "protected"),
+		}},
+		{Title: "Workspaces", Pairs: []Fact{StateFact("ml-training-gpu", StateUnknown, verdict)}},
+		// A first word wider than any column, stacked or not: the mark keeps
+		// the head of it.
+		{Title: "Route", Pairs: []Fact{StateFact("api", StateFail, strings.Repeat("9f86d081", 8)+" unreadable")}},
+	}
+	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+		for w := MinWidth; w <= 200; w++ {
+			s := sweepStream(w, mode)
+			for i, k := range blocks {
+				for _, f := range k.Pairs {
+					mark := stateMark(f.state, mode)
+					word := strings.Fields(f.V)[0]
+					if len(word) > 20 {
+						word = word[:8] // the head of a word that must break
+					}
+					want := mark + " " + word
+					var marked, held bool
+					for _, line := range strings.Split(ansi.Strip(k.Render(s)), "\n") {
+						if strings.Contains(" "+line+" ", " "+mark+" ") {
+							marked = true
+							held = held || strings.Contains(line, want)
+						}
+					}
+					if !marked || !held {
+						t.Fatalf("block %d at %d columns (%v): no line holds %q:\n%s", i, w, mode, want, ansi.Strip(k.Render(s)))
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestStateFactPaintsEveryLineAligned: on the aligned path a state value that
+// wraps carries its role's colour on every line, as it does when stacked
+// (TestStateFactDrawsMarkAndLabel).
+func TestStateFactPaintsEveryLineAligned(t *testing.T) {
+	fail := fxSGR(t, string(roleColours[RoleFail].trueColour), ColourTrue)
+	k := KV{Pairs: []Fact{StateFact("Route", StateFail, "unprotected: default via 172.28.0.1 (not the proxy 172.28.0.2)")}}
+	lines := strings.Split(k.Render(blockStream(40)), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("the value did not wrap at 40 columns:\n%s", strings.Join(lines, "\n"))
+	}
+	for i, line := range lines {
+		value := line
+		if i == 0 {
+			_, value, _ = strings.Cut(line, fxReset+"  ")
+		}
+		if !strings.HasPrefix(strings.TrimLeft(value, " "), fail) || !strings.HasSuffix(value, fxReset) {
+			t.Errorf("value line %d is not painted with the fail role: %q", i+1, line)
+		}
+	}
+}
+
+// TestBlankCaptionsAddNothing: a caption that is whitespace alone, or that
+// sanitising empties, adds no line to a KV or a Checks — on a terminal it
+// would otherwise leave lines of bare SGR under the block.
+func TestBlankCaptionsAddNothing(t *testing.T) {
+	piped := NewStreamAt(io.Discard, WidthUnbounded, false, ColourNone, false)
+	for _, caption := range []string{" ", "\n", " \n\t ", "\x1b[31m\x1b[0m"} {
+		for _, s := range []*Stream{blockStream(40), piped} {
+			kv := KV{Title: "Proxy", Pairs: []Fact{{K: "Image", V: "devpod-proxy"}}}
+			ch := Checks{Title: "Proxy prerequisites", Items: []Check{{Name: "Docker running", State: StateOK}}}
+			bare, bareChecks := kv.Render(s), ch.Render(s)
+			kv.Caption, ch.Caption = caption, caption
+			if got := kv.Render(s); got != bare {
+				t.Errorf("KV with caption %q:\n%q\nwant\n%q", caption, got, bare)
+			}
+			if got := ch.Render(s); got != bareChecks {
+				t.Errorf("Checks with caption %q:\n%q\nwant\n%q", caption, got, bareChecks)
+			}
+		}
+	}
+}
+
+// TestBlockCaptionsCloseTheirBlock pins the phase-5 caption of KV and Checks:
+// it closes the block the way a table's closes the grid — directly under the
+// last line, with no blank line between, wrapped at the budget, every line
+// painted RoleMuted on the block's own stream. The expected wrap is worked out
+// by hand at 40 columns: the first line ends at "route", 39 cells, because
+// "not" would take it to 43; the second line is exactly 40.
+func TestBlockCaptionsCloseTheirBlock(t *testing.T) {
+	if mutants != (mutantSwitches{}) {
+		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
+	}
+	muted := fxSGR(t, string(roleColours[RoleMuted].trueColour), ColourTrue)
+	const caption = "1 of 2 workspace(s) UNPROTECTED — route not via proxy (run: ws proxy fix-routes)"
+	wantCaption := []string{
+		"1 of 2 workspace(s) UNPROTECTED — route",
+		"not via proxy (run: ws proxy fix-routes)",
+	}
+	for _, c := range []struct {
+		name     string
+		captured func(*Stream) string
+		bare     func(*Stream) string
+		last     string // the block's last line, plain
+	}{
+		{"kv",
+			KV{Title: "Workspaces", Pairs: []Fact{{K: "api", V: "protected"}}, Caption: caption}.Render,
+			KV{Title: "Workspaces", Pairs: []Fact{{K: "api", V: "protected"}}}.Render,
+			"  api  protected"},
+		{"checks",
+			Checks{Title: "Proxy prerequisites", Items: []Check{{Name: "Docker running", State: StateOK}}, Caption: caption}.Render,
+			Checks{Title: "Proxy prerequisites", Items: []Check{{Name: "Docker running", State: StateOK}}}.Render,
+			"  ✓ ok        Docker running"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := blockStream(40)
+			bare := plainLines(c.bare(s))
+			if bare[len(bare)-1] != c.last {
+				t.Fatalf("without a caption the block must end on its last line %q; got %q", c.last, bare[len(bare)-1])
+			}
+			raw := strings.Split(c.captured(s), "\n")
+			plain := plainLines(c.captured(s))
+			if len(plain) != len(bare)+len(wantCaption) {
+				t.Fatalf("want the block's %d lines and the caption's %d directly under them, got %d lines:\n%s",
+					len(bare), len(wantCaption), len(plain), strings.Join(plain, "\n"))
+			}
+			if got := plain[len(bare)-1]; got != c.last {
+				t.Errorf("the caption must follow the block's last line with no blank line between; line %d is %q", len(bare), got)
+			}
+			for i, want := range wantCaption {
+				if got := plain[len(bare)+i]; got != want {
+					t.Errorf("caption line %d = %q, want %q (wrapped at the budget)", i+1, got, want)
+				}
+				if got := raw[len(bare)+i]; got != muted+want+fxReset {
+					t.Errorf("caption line %d is not painted RoleMuted on the block's stream: %q", i+1, got)
+				}
+			}
+		})
 	}
 }
 
@@ -1621,7 +1842,7 @@ var assertESCContainment = globalAssertion{
 		problem := Problem{
 			Title: "Could not pull the base image",
 			Cause: fxEscCause,
-			Facts: []Fact{{"image", fxBaseImage}},
+			Facts: []Fact{{K: "image", V: fxBaseImage}},
 			Steps: []Remedy{{"Retry", "ws profile rebuild default"}},
 		}
 		for _, w := range []int{MinWidth, 80, sweepMaxWidth} {
@@ -1891,7 +2112,7 @@ func TestAcceptanceGlobals(t *testing.T) {
 // reviewer must be told about rather than have absorbed silently. Record in
 // this comment what moved it and by how much, every time.
 //
-// Measured over 59 fixtures, 19 of them tables: 543 overflowing lines of 1399.
+// Measured over 62 fixtures, 19 of them tables: 641 overflowing lines of 1569.
 // The pair has moved with every fixture set the corpus gained, and each move
 // is that set's worth of geometry at the floor:
 //
@@ -1913,13 +2134,20 @@ func TestAcceptanceGlobals(t *testing.T) {
 //	                                      glyph modes, 70 of them over the
 //	                                      floor: the tail's lines under the
 //	                                      cause's indent)
+//	+ kv/caption-long, checks/caption-long 619 of 1521 (122 lines, 76 of them
+//	  and the captions of the two block   over the floor: the captions'
+//	  escape fixtures (phase-5 §3.1)      200-character tokens and 64-character
+//	                                      names, hard-broken at the budget)
+//	+ kv/state-facts and a StateFact in   641 of 1569 (48 lines, 22 of them
+//	  kv/esc-surfaces (phase-5 §3.1)      over the floor: the 64-character key
+//	                                      and the 200-character label)
 //
 // The sweep's own line count moved the other way across the tab fix, 111464 to
 // 111120, because expanded tabs are wider than the zero cells the layer used
 // to measure them at and the wraps land differently. It has grown with the
 // corpus since: 117,700 lines over 49 fixtures, 120,482 over 50, 125,452 over
 // 57.
-const control28Overflows = 543
+const control28Overflows = 641
 
 func TestControlBudget28(t *testing.T) {
 	if mutants != (mutantSwitches{}) {

@@ -20,7 +20,64 @@ import (
 // a slice and not a map: Go randomises map iteration, so a map would print
 // the same failure's context in a different order every run, as the error box
 // the Problem replaced did.
-type Fact struct{ K, V string }
+type Fact struct {
+	K, V string
+
+	state   State
+	isState bool
+}
+
+// StateFact builds a pair whose value renders as "<mark> <label>" in the
+// stream's glyph mode, painted with the state's role after wrapping; an empty
+// label uses the state's default word (§4.5). It is to a KV pair what Mark is
+// to a table cell: `ws proxy status` renders `State  ✓ running`. The glyph is
+// resolved when the block is rendered, for the stream it is rendered for, so a
+// pair cannot carry the glyph of another stream. V holds the label.
+func StateFact(k string, st State, label string) Fact {
+	return Fact{K: k, V: label, state: st, isState: true}
+}
+
+// display is the value this pair renders and the role it is painted with. A
+// state's label is sanitised exactly as Mark's is, newlines folded, because a
+// mark and its word are one line; a plain value keeps its newlines as
+// paragraph breaks and is not painted.
+func (f Fact) display(mode GlyphMode) (string, Role) {
+	if f.isState {
+		if mutants.StateFactUTF8 {
+			mode = GlyphUTF8
+		}
+		return stateText(f.state, SanitiseInline(f.V), mode), stateRole(f.state)
+	}
+	return Sanitise(f.V), RoleDefault
+}
+
+// leadWidth is the width of what a pair's value must keep on its first line:
+// for a state, its mark, a space and the first word of its label; for a plain
+// value, nothing.
+func (f Fact) leadWidth(mode GlyphMode) int {
+	if !f.isState {
+		return 0
+	}
+	value, _ := f.display(mode)
+	mark, rest, _ := strings.Cut(value, " ")
+	first, _, _ := strings.Cut(rest, " ")
+	return W(mark + " " + first)
+}
+
+// wrapValue wraps a pair's displayed value at width. A state whose mark and
+// first word do not fit together — a first word wider than the column, which
+// stacking cannot widen further — keeps its mark at the head of the word's
+// first piece: the label is wrapped at the width less the mark's, and the
+// mark leads its first line, rather than standing on a line of its own.
+func (f Fact) wrapValue(value string, mode GlyphMode, width int) []string {
+	if !f.isState || f.leadWidth(mode) <= width {
+		return Wrap(value, width)
+	}
+	mark, label, _ := strings.Cut(value, " ")
+	lines := Wrap(label, width-W(mark)-1)
+	lines[0] = mark + " " + lines[0]
+	return lines
+}
 
 // Remedy is a next step: a short label and a copy-pasteable command.
 type Remedy struct {
@@ -69,15 +126,27 @@ func (t Table) Render(s *Stream) string {
 	}
 	// Termination at n = 0 (§4.3): the table renders as its caption alone
 	// with no box, because the chrome formula 3(n−1)+4 is undefined there.
+	return closeWithCaption(s, out, t.captionText(a))
+}
 
-	if caption := t.captionText(a); caption != "" {
-		width := budget + mutants.CaptionWidth
-		for _, line := range Wrap(caption, width) {
-			if out != "" {
-				out += "\n"
-			}
-			out += s.paint(RoleMuted, line)
+// closeWithCaption appends a block's caption to its render: directly under the
+// last line, wrapped at the stream's budget, every line painted RoleMuted.
+// Table, KV and Checks all close through it, so a caption has one geometry
+// whichever block it belongs to, and the caption_wrapped_too_wide mutant stands
+// for all three (TestCaptionMutantReachesEveryBlockCaption). The caption must
+// already be sanitised; an empty one adds nothing.
+func closeWithCaption(s *Stream, out, caption string) string {
+	// A caption of whitespace alone says nothing and would leave lines of
+	// bare SGR under the block on a terminal.
+	if strings.TrimSpace(caption) == "" {
+		return out
+	}
+	width := s.budget() + mutants.CaptionWidth
+	for _, line := range Wrap(caption, width) {
+		if out != "" {
+			out += "\n"
 		}
+		out += s.paint(RoleMuted, line)
 	}
 	return out
 }
@@ -204,17 +273,23 @@ type Empty struct {
 	Steps   []Remedy
 }
 
-// KV is a titled list of ordered pairs. A report body: Out() (§4.7).
+// KV is a titled list of ordered pairs. It goes to the stream of what it
+// belongs to (§4.7): a report to Out(), a summary that belongs to a prompt —
+// the profile-create wizard's — to Err().
 //
 // Keys are painted RoleMuted unless PlainKeys is set, which renders them with
 // no role and so with no SGR at all. The zero value is the muted form every
 // KV and Problem.Facts rendered before the field existed, byte for byte; the
 // help document sets it, because there the section titles are the only text
 // that carries colour.
+//
+// Caption closes the block as a table's caption closes its grid — a report's
+// verdict or summary line, on the block's stream (closeWithCaption).
 type KV struct {
 	Title     string
 	Pairs     []Fact
 	PlainKeys bool
+	Caption   string
 }
 
 // Check is one line of a Checks block. It carries no word of its own: the
@@ -227,10 +302,12 @@ type Check struct {
 	Note  string
 }
 
-// Checks is a titled list of state lines. A report body: Out() (§4.7).
+// Checks is a titled list of state lines. A report body: Out() (§4.7). Its
+// Caption closes it as KV's does: the report's verdict, `3 of 4 checks passed`.
 type Checks struct {
-	Title string
-	Items []Check
+	Title   string
+	Items   []Check
+	Caption string
 }
 
 // D-13, as the blocks below apply it: a caller's string is read exactly ONCE,
@@ -263,14 +340,15 @@ type Checks struct {
 // RAW string instead (planted, one match) leaves the whole package green. What
 // sanitising actually buys is the CONTENT half above — the sequences never
 // reach the terminal — and that half is covered: removing Sanitise from
-// Problem.Cause reddens TestProblemCauseIsSanitised. The other ten now have
+// Problem.Cause reddens TestProblemCauseIsSanitised. The other thirteen now have
 // escape-bearing fixtures of their own in corpus_test.go — problem, empty, kv
 // and checks /esc-surfaces — and assertESCContainment is their detector:
 // deleting the Sanitise from any one of the call sites below reddens it,
 // measured 12 violations each and 24 where renderPairs or renderRemedies
-// covers two surfaces at once. Counted at this append: 11 caller surfaces read through
-// Sanitise across 13 call sites, the Fact key and the Remedy label being read
-// once in their width pass and once in their render pass.
+// covers two surfaces at once. Counted at this append: 14 caller surfaces read through
+// Sanitise across 16 call sites, the Fact key and the Remedy label being read
+// once in their width pass and once in their render pass, and a StateFact's
+// label through SanitiseInline in Fact.display.
 
 // ----------------------------------------------------------------- Problem
 
@@ -347,7 +425,8 @@ func (p Problem) Render(s *Stream) string {
 // 2sp + key padded to the widest key + 2sp + value, the value wrapped at a
 // hanging indent aligned to the value column (§4.4). Every key is painted
 // keyRole, on the aligned path and on the stacked one; RoleDefault paints
-// nothing.
+// nothing. A StateFact's value is painted its state's role on both paths, a
+// plain value never (Fact.display).
 func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 	const indent, gap = 2, 2
 	keyWidth := 0
@@ -362,18 +441,28 @@ func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 	// §4.4: when budget − valueIndent < 12 the pair stacks — key on its own
 	// line, value indented beneath. The 12 is a readability threshold for the
 	// value column, and is NOT the Checks floor of the same size, which is set
-	// by the widest word in §4.5's vocabulary.
-	stacked := budget-valueIndent < 12
+	// by the widest word in §4.5's vocabulary. A state's mark and the first
+	// word of its label are one unit (§4.5), so a column too narrow for the
+	// widest of them stacks too: wrapped as one string, "✗ unprotected: …" in
+	// a column of 13 cells would leave the ✗ on a line of its own.
+	columnFloor := 12
+	for _, f := range pairs {
+		if w := f.leadWidth(s.mode); w > columnFloor {
+			columnFloor = w
+		}
+	}
+	stacked := budget-valueIndent < columnFloor
 
 	var b strings.Builder
 	for _, f := range pairs {
-		key, value := Sanitise(f.K), Sanitise(f.V)
+		key := Sanitise(f.K)
+		value, valueRole := f.display(s.mode)
 		if stacked {
 			for _, line := range wrapIndent(key, indent, budget) {
 				b.WriteString(s.paint(keyRole, line) + "\n")
 			}
-			for _, line := range wrapIndent(value, indent+2, budget) {
-				b.WriteString(line + "\n")
+			for _, line := range f.wrapValue(value, s.mode, budget-(indent+2)) {
+				b.WriteString(s.paint(valueRole, strings.Repeat(" ", indent+2)+line) + "\n")
 			}
 			continue
 		}
@@ -384,12 +473,12 @@ func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 			// by the width of the key column.
 			valueWidth = budget
 		}
-		lines := Wrap(value, valueWidth)
+		lines := f.wrapValue(value, s.mode, valueWidth)
 		b.WriteString(strings.Repeat(" ", indent) +
 			s.paint(keyRole, Pad(key, keyWidth)) +
-			strings.Repeat(" ", gap) + lines[0] + "\n")
+			strings.Repeat(" ", gap) + s.paint(valueRole, lines[0]) + "\n")
 		for _, line := range lines[1:] {
-			b.WriteString(strings.Repeat(" ", valueIndent) + line + "\n")
+			b.WriteString(strings.Repeat(" ", valueIndent) + s.paint(valueRole, line) + "\n")
 		}
 	}
 	return b.String()
@@ -487,7 +576,7 @@ func (k KV) Render(s *Stream) string {
 		keyRole = RoleDefault
 	}
 	b.WriteString(renderPairs(s, k.Pairs, budget, keyRole))
-	return strings.TrimRight(b.String(), "\n")
+	return closeWithCaption(s, strings.TrimRight(b.String(), "\n"), Sanitise(k.Caption))
 }
 
 // ------------------------------------------------------------------ Checks
@@ -531,5 +620,5 @@ func (c Checks) Render(s *Stream) string {
 			}
 		}
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return closeWithCaption(s, strings.TrimRight(b.String(), "\n"), Sanitise(c.Caption))
 }

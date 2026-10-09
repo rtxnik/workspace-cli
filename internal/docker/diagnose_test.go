@@ -3,6 +3,8 @@ package docker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/docker/docker/api/types/network"
@@ -82,5 +84,39 @@ func TestWorkspaceRouteProtection_PropagatesEnumerationError(t *testing.T) {
 	defer withMock(mock)()
 	if _, err := WorkspaceRouteProtection(testCfg()); err == nil {
 		t.Fatal("enumeration failure must surface as an error, not a silent empty result")
+	}
+}
+
+// TestWorkspaceRouteProtection_NameOrder: the result is in name order, the
+// proxy left out, whatever order the daemon's endpoint map iterates in — the
+// order ws proxy status lists the workspaces in, and its --json arrays. No
+// docker is on PATH, so every route is unreadable; the order is what is
+// measured. The scan runs repeatedly because one unsorted run can come out
+// sorted by chance.
+func TestWorkspaceRouteProtection_NameOrder(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	names := []string{"web", "api", "ws-proxy", "ops", "ml-training", "billing", "docs", "search", "auth", "cache", "queue"}
+	endpoints := map[string]network.EndpointResource{}
+	for i, n := range names {
+		endpoints[fmt.Sprintf("%064d", i)] = network.EndpointResource{Name: n}
+	}
+	mock := &mockClient{networkInspFn: func(_ context.Context, _ string, _ network.InspectOptions) (network.Inspect, error) {
+		return network.Inspect{Containers: endpoints}, nil
+	}}
+	defer withMock(mock)()
+
+	const want = "api,auth,billing,cache,docs,ml-training,ops,queue,search,web"
+	for run := 1; run <= 20; run++ {
+		prot, err := WorkspaceRouteProtection(testCfg())
+		if err != nil {
+			t.Fatalf("run %d: %v", run, err)
+		}
+		got := make([]string, len(prot))
+		for i, p := range prot {
+			got[i] = p.Name
+		}
+		if strings.Join(got, ",") != want {
+			t.Fatalf("run %d: workspaces %s; want %s", run, strings.Join(got, ","), want)
+		}
 	}
 }
