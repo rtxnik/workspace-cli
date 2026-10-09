@@ -574,12 +574,17 @@ var softWord = regexp.MustCompile(`(?i)\b(advisory|inconclusive|unknown|note|ski
 //     true (an absent OK is false);
 //   - a tier is Soft set to softDegraded or softUnknown, written as such;
 //     any other value — softNone, 0, a conversion, a call — is no tier;
+//   - every declaration is read, a package-level var — a function literal in
+//     it included — as well as a function;
 //   - a Detail is read through string literals, concatenation, fmt's and
 //     strings.Join's formatting, and names: a name is followed to its
-//     constants and variables, in the package and in the function, through
-//     any chain of them. A Detail that calls anything else, or names a value
-//     in another package, cannot be read and is reported. What a function the
-//     Detail does not call directly returns is out of the guard's reach.
+//     constants and variables through any chain of them, the declaration's
+//     own definitions shadowing the package's. A Detail that calls anything
+//     else, takes a field of a call's result, names a value in another
+//     package, or names what has no value the guard can follow — a parameter
+//     — cannot be read and is reported. One variable reused for a soft branch
+//     and a pass is read through both, and the pass is flagged. What a
+//     function the Detail does not call directly returns is out of reach.
 func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string, tiered int) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -620,13 +625,9 @@ func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string
 			imported[name] = true
 		}
 		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
-			// The function's own constants and variables, and what it assigns.
+			// The declaration's own constants and variables, and what it assigns.
 			locals := map[string][]ast.Expr{}
-			ast.Inspect(fn, func(n ast.Node) bool {
+			ast.Inspect(decl, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.ValueSpec:
 					collectValues(locals, x)
@@ -660,15 +661,25 @@ func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string
 						return "", true
 					}
 					seen[x.Name] = true
+					values := locals[x.Name]
+					if len(values) == 0 {
+						values = pkgValues[x.Name]
+					}
+					if len(values) == 0 {
+						return "", !top
+					}
 					text, all := "", true
-					for _, v := range append(locals[x.Name], pkgValues[x.Name]...) {
+					for _, v := range values {
 						s, ok := read(v, false, seen)
 						text, all = text+" "+s, all && ok
 					}
 					return text, all
 				case *ast.SelectorExpr:
 					id, ok := x.X.(*ast.Ident)
-					return "", !ok || !imported[id.Name] || id.Name == "fmt" || id.Name == "strings"
+					if !ok {
+						return "", !top
+					}
+					return "", !imported[id.Name] || id.Name == "fmt" || id.Name == "strings"
 				case *ast.CallExpr:
 					if !formats(x.Fun) {
 						return "", !top
@@ -684,7 +695,7 @@ func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string
 				}
 			}
 			elided := map[*ast.CompositeLit]bool{}
-			ast.Inspect(fn, func(n ast.Node) bool {
+			ast.Inspect(decl, func(n ast.Node) bool {
 				lit, ok := n.(*ast.CompositeLit)
 				if !ok {
 					return true
@@ -818,12 +829,14 @@ func TestDoctorSoftOutcomesAllCarryATier(t *testing.T) {
 // Found: a soft word in a plain string, in a Sprintf format or argument, in a
 // constant or a chain of them, in a local assigned a string, in any case; a
 // literal with its type elided in a slice, a map of pointers or a named slice
-// type; an unkeyed literal; an OK computed at run time; a Soft that is no
-// tier — softNone, 0, softTier(0), (softNone); a Detail the guard cannot read
-// — a call, a name in another package. Not found: a real tier (counted), OK
-// false, a detail with no soft word, a local constant of the same name as
-// another function's, a value assigned from a call, and formatting arguments
-// that are data.
+// type; an unkeyed literal, a literal in a package-level var or in a function
+// literal there; an OK computed at run time; a Soft that is no tier —
+// softNone, 0, softTier(0), (softNone); a Detail the guard cannot read — a
+// call, a field of a call's result, a name in another package, a parameter.
+// Not found: a real tier (counted), OK false, a detail with no soft word, a
+// local constant of the same name as another function's, a local that
+// shadows a package constant, a value assigned from a call, and formatting
+// arguments that are data.
 func TestDoctorSoftTierGuardCanFail(t *testing.T) {
 	src := []byte(`package cmd
 import "example.invalid/other"
@@ -856,11 +869,18 @@ func v() CheckOutcome { const said = "running, healthy"; return CheckOutcome{OK:
 func w(c config) CheckOutcome { subnet, err := lookup(c); _ = err; return CheckOutcome{OK: true, Detail: subnet} }
 func x(c config) CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("%d of %s", len(c.names), c.Image)} }
 func y() CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("%s", adv)} }
+var shared = CheckOutcome{OK: true, Detail: "ADVISORY: x"}
+var checkFn = func() CheckOutcome { return CheckOutcome{OK: true, Detail: "probe inconclusive"} }
+func pass(detail string) CheckOutcome { return CheckOutcome{OK: true, Detail: detail} }
+func z(r result) CheckOutcome { return CheckOutcome{OK: true, Detail: verdictOf(r).Note} }
+const label = "posture UNKNOWN"
+func ab() CheckOutcome { label := "running"; return CheckOutcome{OK: true, Detail: label} }
 `)
 	found, tiered := untieredSoftOutcomes(t, map[string][]byte{"doctor.go": src})
 	want := "doctor.go:7,doctor.go:8,doctor.go:12,doctor.go:13 (unkeyed),doctor.go:14,doctor.go:15,doctor.go:16,doctor.go:17," +
 		"doctor.go:18,doctor.go:19,doctor.go:20,doctor.go:21,doctor.go:22,doctor.go:23,doctor.go:24 (Detail unreadable)," +
-		"doctor.go:25 (Detail unreadable),doctor.go:26,doctor.go:31"
+		"doctor.go:25 (Detail unreadable),doctor.go:26,doctor.go:31,doctor.go:32,doctor.go:33,doctor.go:34 (Detail unreadable)," +
+		"doctor.go:35 (Detail unreadable)"
 	if got := strings.Join(found, ","); got != want {
 		t.Errorf("found %q,\nwant %q", got, want)
 	}
