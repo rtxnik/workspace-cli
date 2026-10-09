@@ -590,15 +590,20 @@ var softWord = regexp.MustCompile(`(?i)\b(advisory|inconclusive|unknown|note|ski
 //     any other value — softNone, 0, a conversion, a call — is no tier;
 //   - every declaration is read, a package-level var — a function literal in
 //     it included — as well as a function;
-//   - a Detail is read through string literals, concatenation, fmt's and
-//     strings.Join's formatting, and names: a name is followed to its
-//     constants and variables through any chain of them, the declaration's
-//     own definitions shadowing the package's. A Detail that calls anything
-//     else, takes a field of a call's result, names a value in another
-//     package, or names what has no value the guard can follow — a parameter
-//     — cannot be read and is reported. One variable reused for a soft branch
-//     and a pass is read through both, and the pass is flagged. What a
-//     function the Detail does not call directly returns is out of reach.
+//   - a Detail's text is every string literal reachable from it: in its
+//     expression and in the values of the names in it, through any chain of
+//     names, a declaration's own definitions shadowing the package's — a
+//     slice's elements, append's and any call's arguments included. One
+//     variable reused for a soft branch and a pass is read through both, and
+//     the pass is flagged;
+//   - a Detail is reported as unreadable when its text cannot be seen: a call
+//     at its top to anything but fmt's Sprint family or strings.Join, a name
+//     there with no value to follow (a parameter), a field of a call's result,
+//     a Sprintf format or a Join slice that is itself unreadable, or a name in
+//     another package anywhere in it. A field of a value — cfg.ProxyImage,
+//     v.Note — is runtime data and is read as such: text authored elsewhere
+//     and carried in a field, or returned by a call whose result is stored in
+//     a variable, is out of the guard's reach.
 func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string, tiered int) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -654,59 +659,78 @@ func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string
 				}
 				return true
 			})
-			// read returns the text of a Detail and whether all of it could be
-			// read. Inside a name's value or a formatting call's arguments a
-			// call is data, not text, and is skipped; at the Detail's top it
-			// is reported.
-			var read func(e ast.Expr, top bool, seen map[string]bool) (string, bool)
-			read = func(e ast.Expr, top bool, seen map[string]bool) (string, bool) {
-				switch x := e.(type) {
-				case *ast.BasicLit:
-					s, _ := strconv.Unquote(x.Value)
-					return s, true
-				case *ast.ParenExpr:
-					return read(x.X, top, seen)
+			// values is what a name holds as far as the guard can follow it:
+			// the declaration's own definitions, else the package's.
+			values := func(name string) []ast.Expr {
+				if v := locals[name]; len(v) > 0 {
+					return v
+				}
+				return pkgValues[name]
+			}
+			// text is every string literal an expression can carry: in it,
+			// and in the values of the names in it, through any chain of them
+			// — a slice's elements, append's and any call's arguments
+			// included.
+			var text func(e ast.Expr, seen map[string]bool) string
+			text = func(e ast.Expr, seen map[string]bool) string {
+				var b strings.Builder
+				ast.Inspect(e, func(n ast.Node) bool {
+					switch x := n.(type) {
+					case *ast.BasicLit:
+						if x.Kind == token.STRING {
+							s, _ := strconv.Unquote(x.Value)
+							b.WriteString(" " + s)
+						}
+					case *ast.Ident:
+						if !seen[x.Name] {
+							seen[x.Name] = true
+							for _, v := range values(x.Name) {
+								b.WriteString(" " + text(v, seen))
+							}
+						}
+					}
+					return true
+				})
+				return b.String()
+			}
+			// unreadable reports a Detail whose text the guard cannot see: at
+			// its top — through parentheses and concatenation — a call to
+			// anything but fmt's Sprint family or strings.Join, a name with no
+			// value to follow (a parameter), a field of a call's result; a
+			// Sprintf's format or a Join's slice that is itself unreadable; and
+			// anywhere in it, a name in another package. A field of a value —
+			// cfg.ProxyImage — is data, not authored text, and is read as such.
+			var unreadable func(e ast.Expr) bool
+			unreadable = func(e ast.Expr) bool {
+				foreign := false
+				ast.Inspect(e, func(n ast.Node) bool {
+					if sel, ok := n.(*ast.SelectorExpr); ok {
+						if id, ok := sel.X.(*ast.Ident); ok && imported[id.Name] && id.Name != "fmt" && id.Name != "strings" {
+							foreign = true
+						}
+					}
+					return true
+				})
+				if foreign {
+					return true
+				}
+				switch x := ast.Unparen(e).(type) {
 				case *ast.BinaryExpr:
-					a, okA := read(x.X, top, seen)
-					b, okB := read(x.Y, top, seen)
-					return a + " " + b, okA && okB
+					return unreadable(x.X) || unreadable(x.Y)
 				case *ast.Ident:
-					if seen[x.Name] {
-						return "", true
-					}
-					seen[x.Name] = true
-					values := locals[x.Name]
-					if len(values) == 0 {
-						values = pkgValues[x.Name]
-					}
-					if len(values) == 0 {
-						return "", !top
-					}
-					text, all := "", true
-					for _, v := range values {
-						s, ok := read(v, false, seen)
-						text, all = text+" "+s, all && ok
-					}
-					return text, all
+					return len(values(x.Name)) == 0
 				case *ast.SelectorExpr:
-					id, ok := x.X.(*ast.Ident)
-					if !ok {
-						return "", !top
-					}
-					return "", !imported[id.Name] || id.Name == "fmt" || id.Name == "strings"
+					_, ok := x.X.(*ast.Ident)
+					return !ok
 				case *ast.CallExpr:
 					if !formats(x.Fun) {
-						return "", !top
+						return true
 					}
-					text, all := "", true
-					for _, a := range x.Args {
-						s, ok := read(a, false, seen)
-						text, all = text+" "+s, all && ok
-					}
-					return text, all
-				default:
-					return "", !top
+					sel := x.Fun.(*ast.SelectorExpr)
+					carries := sel.Sel.Name == "Sprintf" || sel.Sel.Name == "Join"
+					return carries && len(x.Args) > 0 && unreadable(x.Args[0])
 				}
+				return false
 			}
 			elided := map[*ast.CompositeLit]bool{}
 			ast.Inspect(decl, func(n ast.Node) bool {
@@ -744,7 +768,7 @@ func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string
 						v, ok := ast.Unparen(kv.Value).(*ast.Ident)
 						soft = ok && (v.Name == "softDegraded" || v.Name == "softUnknown")
 					case "Detail":
-						words, readable = read(kv.Value, true, map[string]bool{})
+						words, readable = text(kv.Value, map[string]bool{}), !unreadable(kv.Value)
 					}
 				}
 				switch {
@@ -846,7 +870,9 @@ func TestDoctorSoftOutcomesAllCarryATier(t *testing.T) {
 // type; an unkeyed literal, a literal in a package-level var or in a function
 // literal there; an OK computed at run time; a Soft that is no tier —
 // softNone, 0, softTier(0), (softNone); a Detail the guard cannot read — a
-// call, a field of a call's result, a name in another package, a parameter.
+// call, a field of a call's result, a name in another package, a parameter,
+// a parameter as a Sprintf format; text in a Join over a slice literal or a
+// local built with append.
 // Not found: a real tier (counted), OK false, a detail with no soft word, a
 // local constant of the same name as another function's, a local that
 // shadows a package constant, a value assigned from a call, and formatting
@@ -889,12 +915,15 @@ func pass(detail string) CheckOutcome { return CheckOutcome{OK: true, Detail: de
 func z(r result) CheckOutcome { return CheckOutcome{OK: true, Detail: verdictOf(r).Note} }
 const label = "posture UNKNOWN"
 func ab() CheckOutcome { label := "running"; return CheckOutcome{OK: true, Detail: label} }
+func ac(x string) CheckOutcome { return CheckOutcome{OK: true, Detail: strings.Join([]string{"UDP probe inconclusive", x}, "; ")} }
+func ad() CheckOutcome { var notes []string; notes = append(notes, "IPv6 posture UNKNOWN"); return CheckOutcome{OK: true, Detail: strings.Join(notes, ", ")} }
+func ae(format string, a ...any) CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf(format, a...)} }
 `)
 	found, tiered := untieredSoftOutcomes(t, map[string][]byte{"doctor.go": src})
 	want := "doctor.go:7,doctor.go:8,doctor.go:12,doctor.go:13 (unkeyed),doctor.go:14,doctor.go:15,doctor.go:16,doctor.go:17," +
 		"doctor.go:18,doctor.go:19,doctor.go:20,doctor.go:21,doctor.go:22,doctor.go:23,doctor.go:24 (Detail unreadable)," +
 		"doctor.go:25 (Detail unreadable),doctor.go:26,doctor.go:31,doctor.go:32,doctor.go:33,doctor.go:34 (Detail unreadable)," +
-		"doctor.go:35 (Detail unreadable)"
+		"doctor.go:35 (Detail unreadable),doctor.go:38,doctor.go:39,doctor.go:40 (Detail unreadable)"
 	if got := strings.Join(found, ","); got != want {
 		t.Errorf("found %q,\nwant %q", got, want)
 	}
