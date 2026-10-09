@@ -202,7 +202,7 @@ ws proxy test --json       # JSON: {"directIP","proxiedIP","tunneled","latencyMs
 
 Exits 0 when `tunneled=true` and `dns` is not `leak` (an `inconclusive` DNS leg is advisory and does not fail the command). Exits 1 when `tunneled=false` (the exit IPs are identical) or when `dns:"leak"` (the DNS query escaped the tunnel).
 
-Without `--json` the same verdicts are a report on stdout, its last line the verdict; the `Probing …` progress lines go to stderr, and under `--json` nothing does:
+Without `--json` the same verdicts are a report on stdout, its last line the verdict; the `Probing …` progress lines go to stderr, and under `--json` they are not printed (an error, such as the proxy not running, is still reported on stderr):
 
 ```
 Tunnel
