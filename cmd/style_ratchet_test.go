@@ -24,16 +24,17 @@ import (
 // inventory. It is empty: it is now the render layer's standing guard that
 // no such line exists outside internal/output.
 //
-// The pattern counts the import of lipgloss too, any of its packages. No file
-// outside the layer needs it once none builds a style, and a ban on the
-// import closes the routes the other alternatives cannot see — a border, a
-// renderer, a style reached through an alias.
+// The pattern counts the import of lipgloss too, any of its packages, under
+// its v1 path and its v2 one (charm.land/lipgloss), in double quotes or back
+// quotes. No file outside the layer needs it once none builds a style, and a
+// ban on the import closes the routes the other alternatives cannot see — a
+// border, a renderer, a style reached through an alias.
 
 // directStylePattern matches a line that builds a style outside the layer.
 var directStylePattern = regexp.MustCompile(
 	`lipgloss\.NewStyle|lipgloss\.Color\(|output\.Style[A-Z]|output\.SectionStyle|` +
 		`output\.(Red|Green|Yellow|Blue|Purple|Aqua|Orange|Gray)\b|` +
-		`"github\.com/charmbracelet/lipgloss[/"]`)
+		"[\"`](github\\.com/charmbracelet|charm\\.land)/lipgloss[/\"`]")
 
 // directStyleInventory is the count of matching lines per non-test file
 // outside internal/output: none, since phase 5 migrated the last.
@@ -118,8 +119,9 @@ func TestDirectStyleRatchet(t *testing.T) {
 
 // TestDirectStyleRatchetCanFail is the ratchet's own control, over a planted
 // repository: every alternative of the pattern is counted, once per line —
-// the lipgloss import under an alias and from a subpackage included, a module
-// whose path merely starts like lipgloss's not; test files, internal/output
+// the lipgloss import under an alias, from a subpackage, in back quotes and
+// under its v2 path included, a module whose path merely starts like
+// lipgloss's not; test files, internal/output
 // and vendor are not read; and a count above or below the inventory is
 // reported.
 func TestDirectStyleRatchetCanFail(t *testing.T) {
@@ -152,6 +154,7 @@ import (
 )
 var border = lg.RoundedBorder()
 `)
+	write("cmd/d.go", "package cmd\nimport (\n\tlg `github.com/charmbracelet/lipgloss`\n\tl2 \"charm.land/lipgloss/v2\"\n\t\"charm.land/lipglossy\"\n)\n")
 	write("cmd/a_test.go", "package cmd\nvar i = lipgloss.NewStyle()\n")
 	write("internal/output/theme.go", "package output\nvar j = lipgloss.NewStyle()\n")
 	write("vendor/v.go", "package v\nvar k = lipgloss.NewStyle()\n")
@@ -160,7 +163,7 @@ var border = lg.RoundedBorder()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]int{"cmd/a.go": 5, "cmd/c.go": 2, "tools/b.go": 1}; fmt.Sprint(counts) != fmt.Sprint(want) {
+	if want := map[string]int{"cmd/a.go": 5, "cmd/c.go": 2, "cmd/d.go": 2, "tools/b.go": 1}; fmt.Sprint(counts) != fmt.Sprint(want) {
 		t.Fatalf("counted %v, want %v", counts, want)
 	}
 
@@ -168,6 +171,7 @@ var border = lg.RoundedBorder()
 	want := []string{
 		"cmd/a.go: 5 direct-style lines, the inventory says 6; lower directStyleInventory with the migration",
 		"cmd/c.go: 2 direct-style lines, the inventory allows 0; style through a Stream role instead",
+		"cmd/d.go: 2 direct-style lines, the inventory allows 0; style through a Stream role instead",
 		"tools/b.go: 1 direct-style lines, the inventory allows 0; style through a Stream role instead",
 	}
 	if strings.Join(diff, "\n") != strings.Join(want, "\n") {
