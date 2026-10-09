@@ -246,7 +246,7 @@ const reportsAmbiWideEnv = "WS_TEST_REPORTS_AMBIWIDE"
 // TestReportsFitEveryWidthAmbiguousWide runs the sweep under
 // RUNEWIDTH_EASTASIAN=1.
 func TestReportsFitEveryWidthAmbiguousWide(t *testing.T) {
-	ambiguousWide(t, "TestReportsFitEveryWidthAmbiguousWide", reportsAmbiWideEnv, func(t *testing.T) {
+	ambiguousWide(t, reportsAmbiWideEnv, func(t *testing.T) {
 		sweepReportsIn(t, []bool{true})
 	})
 }
@@ -428,6 +428,9 @@ func TestReportsBaseline(t *testing.T) {
 	var got strings.Builder
 	var order []string
 	for _, c := range reportsCases() {
+		if strings.Contains(c.name, ",") {
+			t.Fatalf("case %q: a name with a comma cannot be named to -update-reports-baseline", c.name)
+		}
 		fx := newStreamsFixture(t)
 		if c.setup != nil {
 			c.setup(t, fx)

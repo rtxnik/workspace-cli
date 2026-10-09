@@ -230,17 +230,25 @@ const tablesAmbiWideEnv = "WS_TEST_TABLES_AMBIWIDE"
 // TestTablesFitEveryWidthAmbiguousWide runs the sweep under
 // RUNEWIDTH_EASTASIAN=1.
 func TestTablesFitEveryWidthAmbiguousWide(t *testing.T) {
-	ambiguousWide(t, "TestTablesFitEveryWidthAmbiguousWide", tablesAmbiWideEnv, func(t *testing.T) {
+	ambiguousWide(t, tablesAmbiWideEnv, func(t *testing.T) {
 		sweepTablesAndProblems(t, []bool{true})
 	})
 }
 
+// ambiwideChild marks a child of ambiguousWide, whatever its sweep.
+const ambiwideChild = "WS_TEST_AMBIWIDE_CHILD"
+
 // ambiguousWide runs sweep under RUNEWIDTH_EASTASIAN=1 in a child — x/ansi
-// reads the variable in init() — that re-runs test with env set to 1, in the
-// glyph mode the layer selects there: ASCII, because the UTF-8 borders, marks
-// and truncation marker are Ambiguous. The child checks both, then sweeps.
-func ambiguousWide(t *testing.T, test, env string, sweep func(t *testing.T)) {
+// reads the variable in init() — that re-runs the calling test with env set to
+// 1, in the glyph mode the layer selects there: ASCII, because the UTF-8
+// borders, marks and truncation marker are Ambiguous. The child checks both,
+// then sweeps. A child that starts without env would spawn a child of its
+// own, and that one another, without end; it fails instead.
+func ambiguousWide(t *testing.T, env string, sweep func(t *testing.T)) {
 	t.Helper()
+	if os.Getenv(ambiwideChild) == "1" && os.Getenv(env) != "1" {
+		t.Fatalf("a child of the Ambiguous-wide sweep started without %s=1; it will not spawn another", env)
+	}
 	if os.Getenv(env) == "1" {
 		if n := output.W("…"); n != 2 {
 			t.Fatalf("U+2026 measures %d cells under RUNEWIDTH_EASTASIAN=1, want 2: the convention did not reach x/ansi", n)
@@ -251,12 +259,12 @@ func ambiguousWide(t *testing.T, test, env string, sweep func(t *testing.T)) {
 		sweep(t)
 		return
 	}
-	child := exec.Command(os.Args[0], "-test.run=^"+test+"$", "-test.v")
+	child := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
 	// The child's environment is its own: with a UTF-8 locale set, ASCII
 	// can only come from RUNEWIDTH_EASTASIAN, so the glyph-mode check above
 	// cannot pass on a host that sets no locale at all.
 	child.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "TMPDIR=" + os.TempDir(),
-		"LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8", "RUNEWIDTH_EASTASIAN=1", env + "=1"}
+		"LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8", "RUNEWIDTH_EASTASIAN=1", env + "=1", ambiwideChild + "=1"}
 	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
 		child.Env = append(child.Env, "GOCOVERDIR="+v)
 	}
@@ -345,6 +353,9 @@ func TestTablesBaseline(t *testing.T) {
 	var got strings.Builder
 	var order []string
 	for _, c := range tablesCases() {
+		if strings.Contains(c.name, ",") {
+			t.Fatalf("case %q: a name with a comma cannot be named to -update-tables-baseline", c.name)
+		}
 		fx := newStreamsFixture(t)
 		if c.setup != nil {
 			c.setup(t, fx)
