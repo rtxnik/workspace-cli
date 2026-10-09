@@ -256,17 +256,21 @@ var stepTime = regexp.MustCompile(`(?m)  (\d+\.\ds|\d+m\d\ds|\d+h\d\dm)$`)
 func normaliseStepTimes(s string) string { return stepTime.ReplaceAllString(s, "  <t>") }
 
 // uptime is the value of ws proxy status's Uptime pair, which the fake
-// daemon's fixed start time turns into a duration that grows from run to run.
-var uptime = regexp.MustCompile(`(?m)^(  Uptime +)[0-9][0-9hms.]*$`)
+// daemon's fixed start time turns into a duration that grows from run to run:
+// a whole number of seconds as Duration.String prints it, so a value of any
+// other shape is left for the comparison to catch.
+var uptime = regexp.MustCompile(`(?m)^(  Uptime +)(?:[0-9]+h)?(?:[0-9]+m)?[0-9]+s$`)
 
 // normaliseUptime replaces the proxy's uptime with <uptime>.
 func normaliseUptime(s string) string { return uptime.ReplaceAllString(s, "${1}<uptime>") }
 
 func TestNormaliseUptime(t *testing.T) {
 	in := "Proxy\n  State    ✓ running\n  Uptime   24h31m5s\n  Image    devpod-proxy\n" +
-		"  Uptime   not a duration\nUptime   1h\n"
+		"  Uptime   5m0s\n  Uptime   0s\n" +
+		"  Uptime   not a duration\nUptime   1h\n  Uptime   1hhh\n  Uptime   12\n  Uptime   1.5s\n  Uptime   1h2m\n"
 	want := "Proxy\n  State    ✓ running\n  Uptime   <uptime>\n  Image    devpod-proxy\n" +
-		"  Uptime   not a duration\nUptime   1h\n"
+		"  Uptime   <uptime>\n  Uptime   <uptime>\n" +
+		"  Uptime   not a duration\nUptime   1h\n  Uptime   1hhh\n  Uptime   12\n  Uptime   1.5s\n  Uptime   1h2m\n"
 	if got := normaliseUptime(in); got != want {
 		t.Errorf("got\n%q\nwant\n%q", got, want)
 	}
