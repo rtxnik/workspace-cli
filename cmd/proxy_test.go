@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -206,6 +207,7 @@ func TestChecksCaption(t *testing.T) {
 		{[]output.State{output.StateOK, output.StateAdvisory, output.StateUnknown, output.StateOK}, "2 of 4 checks passed, 1 degraded, 1 unknown"},
 		{[]output.State{output.StateAdvisory, output.StateFail, output.StateUnknown, output.StateOK}, "1 of 4 checks passed, 1 failed, 1 degraded, 1 unknown"},
 		{[]output.State{output.StateUnknown}, "0 of 1 checks passed, 1 unknown"},
+		{[]output.State{output.StateOK, output.StateBusy, output.StateIdle}, "1 of 3 checks passed, 2 unknown"},
 	} {
 		items := make([]output.Check, 0, len(c.states))
 		for _, st := range c.states {
@@ -381,7 +383,7 @@ func TestProxyStatusReport(t *testing.T) {
 }
 
 // TestReportBlocksAreSeparated pins writeReport's composition: one blank line
-// between two blocks, none after the last, one write.
+// between two blocks, none after the last.
 func TestReportBlocksAreSeparated(t *testing.T) {
 	var b strings.Builder
 	s := output.NewStreamAt(&b, 80, false, output.ColourNone, false)
@@ -391,5 +393,35 @@ func TestReportBlocksAreSeparated(t *testing.T) {
 	}
 	if want := "A\n  k  v\n\nB\n"; b.String() != want {
 		t.Errorf("got %q; want one blank line between the blocks, %q", b.String(), want)
+	}
+}
+
+// writes counts the writes it receives and fails each one when err is set.
+type writes struct {
+	n   int
+	err error
+}
+
+func (w *writes) Write(p []byte) (int, error) {
+	w.n++
+	if w.err != nil {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
+// TestWriteReportWritesOnceAndReturnsItsError pins the rest of writeReport's
+// contract (phase-5 §3.2): the whole report is one write, and a failed write
+// is returned, for the root to render — it outranks the verdict's exit code.
+func TestWriteReportWritesOnceAndReturnsItsError(t *testing.T) {
+	s := output.NewStreamAt(io.Discard, 80, false, output.ColourNone, false)
+	blocks := []reportBlock{output.KV{Title: "A", Pairs: []output.Fact{{K: "k", V: "v"}}}, output.Checks{Title: "B"}}
+	w := &writes{}
+	if err := writeReport(w, s, blocks...); err != nil || w.n != 1 {
+		t.Errorf("writeReport made %d writes, err %v; want one, and no error", w.n, err)
+	}
+	failed := errors.New("write /dev/stdout: no space left on device")
+	if err := writeReport(&writes{err: failed}, s, blocks...); !errors.Is(err, failed) {
+		t.Errorf("writeReport returned %v; want the write's error", err)
 	}
 }

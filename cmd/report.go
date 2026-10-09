@@ -30,7 +30,9 @@ func writeReport(w io.Writer, s *output.Stream, blocks ...reportBlock) error {
 // states it renders: "N of M checks passed", N counting the ok lines only,
 // then the failed, degraded and unknown counts in that order, each only when
 // it is not zero. An unknown — a check that was not run, or ran without
-// reaching a verdict — is never counted as passed.
+// reaching a verdict — is never counted as passed, and neither is a state
+// that is no verdict at all (busy, idle): it counts as unknown, so the counts
+// always add up to M.
 func checksCaption(items []output.Check) string {
 	var ok, failed, degraded, unknown int
 	for _, it := range items {
@@ -41,7 +43,7 @@ func checksCaption(items []output.Check) string {
 			failed++
 		case output.StateAdvisory:
 			degraded++
-		case output.StateUnknown:
+		default:
 			unknown++
 		}
 	}
