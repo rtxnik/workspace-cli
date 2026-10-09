@@ -27,8 +27,9 @@ type Check struct {
 }
 
 // CheckOutcome is the result of running one Check. OK=false marks a HARD failure
-// that stops the runner. A SOFT/advisory finding is encoded as OK=true with a
-// human-readable Detail (e.g. "UDP best-effort: SKIP") so the run continues.
+// that stops the runner. A SOFT finding — one that does not stop the run but is
+// not a pass either — is OK=true with its Soft tier set and the finding in
+// Detail (phase-5 §3.5); TestDoctorSoftOutcomesAllCarryATier fails one without.
 // Fix is a remediation hint shown only on failure. Detail/Fix never contain
 // secrets — only a non-secret cert sha256 may be printed.
 type CheckOutcome struct {
@@ -293,9 +294,11 @@ func inboundTproxyOutcome(p profileTproxyProbe) CheckOutcome {
 // are exercised live only.
 //
 // Soft/hard split: every check here is HARD (OK=false stops the run) EXCEPT the
-// UDP leg of the egress probe and the hy2 cert-pin observation, which are
-// advisory — they report SKIP / a note via Detail with OK=true so a QUIC-only
-// endpoint or a UDP-blocked sandbox does not block the operator.
+// soft findings of phase-5 §3.5 — the UDP leg of the egress probe, the hy2
+// probe's dial and cert-pin observation, an IPv6 posture that could not be
+// read, and the inbound sockopt.tproxy check — which return OK=true with a
+// Soft tier, so a QUIC-only endpoint or a UDP-blocked sandbox does not block
+// the operator.
 func proxyDoctorChecks(cfg config.Config, eng proxyengine.Engine) []Check {
 	// Run-once memos shared across the checks that need them. Lazy: nothing is
 	// computed here; each getter computes on first use, so an early HARD failure

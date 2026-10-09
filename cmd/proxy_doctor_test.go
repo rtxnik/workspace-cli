@@ -14,6 +14,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -86,7 +89,9 @@ func TestDoctorAllPass(t *testing.T) {
 func TestDoctorSoftCheckDoesNotStop(t *testing.T) {
 	ran := false
 	checks := []Check{
-		{Name: "soft-warn", Run: func() CheckOutcome { return CheckOutcome{OK: true, Detail: "UDP best-effort: SKIP"} }},
+		{Name: "soft-warn", Run: func() CheckOutcome {
+			return CheckOutcome{OK: true, Detail: "UDP best-effort: SKIP", Soft: softDegraded}
+		}},
 		{Name: "after", Run: func() CheckOutcome { ran = true; return CheckOutcome{OK: true} }},
 	}
 	res := runChecks(checks)
@@ -540,93 +545,223 @@ func TestSoftTierOfEachSoftOutcome(t *testing.T) {
 	}
 }
 
-// softWords are the words a doctor outcome writes into its Detail when it is
-// a soft finding (phase-5 §3.5).
-var softWords = []string{"ADVISORY", "inconclusive", "UNKNOWN", "NOTE", "skipped"}
+// softWord matches the words a doctor outcome writes into its Detail when it
+// is a soft finding (phase-5 §3.5) — ADVISORY, inconclusive, UNKNOWN, NOTE and
+// skipped — in any case, and SKIP, which CheckOutcome's earlier convention
+// wrote for an advisory leg.
+var softWord = regexp.MustCompile(`(?i)\b(advisory|inconclusive|unknown|note|skip(ped)?)\b`)
 
-// untieredSoftOutcomes returns, for Go source, every CheckOutcome literal with
-// OK: true whose Detail spells a soft word and that sets no Soft, as
-// "line N". The Detail's words are read from every string literal inside its
-// expression, so a fmt.Sprintf format counts as much as a plain string.
-func untieredSoftOutcomes(t *testing.T, src []byte) []string {
+// untieredSoftOutcomes reads Go source, files by name, and returns every
+// CheckOutcome literal that could be an untiered soft finding, as
+// "file:line", with the number of literals that do carry a tier. It fails
+// closed where it cannot read a literal:
+//   - a literal is found by its type, or by the element type of the slice,
+//     array or map literal it sits in when its own type is elided;
+//   - an unkeyed literal is reported as it stands, its fields unread;
+//   - an OK set to anything but the constant false counts as possibly
+//     true (an absent OK is false);
+//   - Soft carries a tier only when it is set to something other than
+//     softNone or 0;
+//   - a Detail's words are read from every string literal in its
+//     expression — a fmt.Sprintf format among them — and, for a name in it,
+//     from the package's string constants of that name and every string
+//     literal assigned to the name in the enclosing function.
+func untieredSoftOutcomes(t *testing.T, files map[string][]byte) (found []string, tiered int) {
 	t.Helper()
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "doctor.go", src, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var found []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
+	var parsed []*ast.File
+	consts := map[string][]string{}
+	for _, name := range sortedKeys(files) {
+		file, err := parser.ParseFile(fset, name, files[name], 0)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if id, ok := lit.Type.(*ast.Ident); !ok || id.Name != "CheckOutcome" {
-			return true
-		}
-		okTrue, soft, detail := false, false, ""
-		for _, e := range lit.Elts {
-			kv, ok := e.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
-			switch kv.Key.(*ast.Ident).Name {
-			case "OK":
-				if v, ok := kv.Value.(*ast.Ident); ok && v.Name == "true" {
-					okTrue = true
-				}
-			case "Soft":
-				soft = true
-			case "Detail":
-				ast.Inspect(kv.Value, func(m ast.Node) bool {
-					if b, ok := m.(*ast.BasicLit); ok && b.Kind == token.STRING {
-						detail += b.Value
+		parsed = append(parsed, file)
+		ast.Inspect(file, func(n ast.Node) bool {
+			if vs, ok := n.(*ast.ValueSpec); ok {
+				for i, id := range vs.Names {
+					if i < len(vs.Values) {
+						consts[id.Name] = append(consts[id.Name], stringLits(vs.Values[i])...)
 					}
-					return true
-				})
+				}
 			}
-		}
-		if !okTrue || soft {
 			return true
+		})
+	}
+	isOutcome := func(e ast.Expr) bool {
+		if s, ok := e.(*ast.StarExpr); ok {
+			e = s.X
 		}
-		for _, w := range softWords {
-			if strings.Contains(detail, w) {
-				found = append(found, fmt.Sprintf("line %d", fset.Position(lit.Pos()).Line))
-				break
+		id, ok := e.(*ast.Ident)
+		return ok && id.Name == "CheckOutcome"
+	}
+	for _, file := range parsed {
+		for _, decl := range file.Decls {
+			// Names assigned in this declaration — a function, or a var
+			// block — and the string literals assigned to them.
+			assigned := map[string][]string{}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				if as, ok := n.(*ast.AssignStmt); ok {
+					for i, lhs := range as.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok && i < len(as.Rhs) {
+							assigned[id.Name] = append(assigned[id.Name], stringLits(as.Rhs[i])...)
+						}
+					}
+				}
+				return true
+			})
+			elided := map[*ast.CompositeLit]bool{}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				lit, ok := n.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				var elem ast.Expr
+				switch ty := lit.Type.(type) {
+				case *ast.ArrayType:
+					elem = ty.Elt
+				case *ast.MapType:
+					elem = ty.Value
+				}
+				if elem != nil && isOutcome(elem) {
+					for _, e := range lit.Elts {
+						if kv, ok := e.(*ast.KeyValueExpr); ok {
+							e = kv.Value
+						}
+						if inner, ok := e.(*ast.CompositeLit); ok && inner.Type == nil {
+							elided[inner] = true
+						}
+					}
+				}
+				if lit.Type != nil && !isOutcome(lit.Type) || lit.Type == nil && !elided[lit] {
+					return true
+				}
+				at := fset.Position(lit.Pos())
+				where := fmt.Sprintf("%s:%d", filepath.Base(at.Filename), at.Line)
+				okFalse, soft, words := true, false, "" // an absent OK is false
+				for _, e := range lit.Elts {
+					kv, ok := e.(*ast.KeyValueExpr)
+					if !ok {
+						found = append(found, where+" (unkeyed)")
+						return true
+					}
+					switch kv.Key.(*ast.Ident).Name {
+					case "OK":
+						v, ok := kv.Value.(*ast.Ident)
+						okFalse = ok && v.Name == "false"
+					case "Soft":
+						switch v := kv.Value.(type) {
+						case *ast.Ident:
+							soft = v.Name != "softNone"
+						case *ast.BasicLit:
+							soft = v.Value != "0"
+						default:
+							soft = true
+						}
+					case "Detail":
+						words += strings.Join(stringLits(kv.Value), " ")
+						ast.Inspect(kv.Value, func(m ast.Node) bool {
+							if id, ok := m.(*ast.Ident); ok {
+								words += " " + strings.Join(consts[id.Name], " ") + " " + strings.Join(assigned[id.Name], " ")
+							}
+							return true
+						})
+					}
+				}
+				switch {
+				case okFalse:
+				case soft:
+					tiered++
+				case softWord.MatchString(words):
+					found = append(found, where)
+				}
+				return true
+			})
+		}
+	}
+	return found, tiered
+}
+
+// stringLits returns the string literals in an expression, unquoted.
+func stringLits(e ast.Expr) []string {
+	var out []string
+	ast.Inspect(e, func(n ast.Node) bool {
+		if b, ok := n.(*ast.BasicLit); ok && b.Kind == token.STRING {
+			if s, err := strconv.Unquote(b.Value); err == nil {
+				out = append(out, s)
 			}
 		}
 		return true
 	})
-	return found
+	return out
 }
+
+// doctorTieredOutcomes is how many tiered outcomes §3.5's table names today:
+// the inbound check's three skipped branches and its missing sockopt, the
+// egress probe's inconclusive UDP/DNS leg, the IPv6 posture it could not read,
+// and the hy2 probe's inconclusive dial and its leaf that differs from the pin.
+const doctorTieredOutcomes = 8
 
 // TestDoctorSoftOutcomesAllCarryATier is the guard that keeps §3.5's table
 // whole: a soft outcome added later without a tier would render ok, which is
-// the defect the table exists to end.
+// the defect the table exists to end. It reads every source file of the
+// package, so an outcome builder that moves to a file of its own stays under
+// it, and it must see at least the tiered outcomes the table names — a walk
+// that saw none of them would pass over anything.
 func TestDoctorSoftOutcomesAllCarryATier(t *testing.T) {
-	src, err := os.ReadFile("proxy_doctor.go")
+	names, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if found := untieredSoftOutcomes(t, src); len(found) > 0 {
-		t.Errorf("proxy_doctor.go: a soft CheckOutcome with no Soft tier at %s", strings.Join(found, ", "))
+	files := map[string][]byte{}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if files[name], err = os.ReadFile(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found, tiered := untieredSoftOutcomes(t, files)
+	if len(found) > 0 {
+		t.Errorf("a soft CheckOutcome with no Soft tier, or one the guard cannot read, at %s", strings.Join(found, ", "))
+	}
+	if tiered < doctorTieredOutcomes {
+		t.Errorf("the guard saw %d tiered outcomes; §3.5's table names %d — it is not reading the doctor's checks", tiered, doctorTieredOutcomes)
 	}
 }
 
-// TestDoctorSoftTierGuardCanFail is the guard's control, over planted source:
-// a soft word in a plain string or in a Sprintf format, with OK: true and no
-// tier, is found; the same with a tier, with OK: false, or with no soft word,
-// is not.
+// TestDoctorSoftTierGuardCanFail is the guard's control, over planted source.
+// Found: a soft word in a plain string, in a Sprintf format, in a constant,
+// in a local assigned a string, in any case; a literal with its type elided in
+// a slice or a map of pointers; an unkeyed literal; an OK computed at run
+// time; a Soft set to softNone or 0. Not found: a real tier (counted), OK
+// false, and a detail with no soft word.
 func TestDoctorSoftTierGuardCanFail(t *testing.T) {
 	src := []byte(`package cmd
+const adv = "ADVISORY: x"
 func a() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x"} }
 func b() CheckOutcome { return CheckOutcome{OK: true, Detail: fmt.Sprintf("probe inconclusive (%v)", 1)} }
 func c() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: softDegraded} }
 func d() CheckOutcome { return CheckOutcome{OK: false, Detail: "UNKNOWN"} }
 func e() CheckOutcome { return CheckOutcome{OK: true, Detail: "running, healthy"} }
+func f() []CheckOutcome { return []CheckOutcome{{OK: true, Detail: "posture UNKNOWN"}} }
+func g() CheckOutcome { return CheckOutcome{true, "ADVISORY", "", softNone} }
+func h() CheckOutcome { return CheckOutcome{OK: true, Detail: adv} }
+func i() CheckOutcome { detail := "no profile (skipped)"; return CheckOutcome{OK: true, Detail: detail} }
+func j() CheckOutcome { return CheckOutcome{OK: true, Detail: "ADVISORY: x", Soft: softNone} }
+func k() CheckOutcome { return CheckOutcome{OK: true, Detail: "UDP best-effort: SKIP"} }
+func l(n int) CheckOutcome { return CheckOutcome{OK: n > 0, Detail: "Advisory: x"} }
+func m() map[string]*CheckOutcome { return map[string]*CheckOutcome{"a": {OK: true, Detail: "Note: x"}} }
+func n() CheckOutcome { return CheckOutcome{OK: true, Detail: "probe Inconclusive", Soft: 0} }
 `)
-	if got := strings.Join(untieredSoftOutcomes(t, src), ","); got != "line 2,line 3" {
-		t.Errorf("found %q, want %q", got, "line 2,line 3")
+	found, tiered := untieredSoftOutcomes(t, map[string][]byte{"doctor.go": src})
+	want := "doctor.go:3,doctor.go:4,doctor.go:8,doctor.go:9 (unkeyed),doctor.go:10,doctor.go:11,doctor.go:12,doctor.go:13,doctor.go:14,doctor.go:15,doctor.go:16"
+	if got := strings.Join(found, ","); got != want {
+		t.Errorf("found %q,\nwant %q", got, want)
+	}
+	if tiered != 1 {
+		t.Errorf("counted %d tiered outcomes, want 1", tiered)
 	}
 }
 
