@@ -178,9 +178,14 @@ esac
 // returns the DOCKER_HOST that reaches it. The socket lives in a directory of
 // its own under the system temporary directory, not under t.TempDir(): a unix
 // socket's path is limited to 108 bytes, and a test's directory carries its
-// name.
+// name. In the test's own process it also names the proxy's objects as the
+// fake knows them, so config.Load finds them whatever WS_PROXY_* the
+// developer's shell sets; a subprocess row builds its environment anyway.
 func startFakeDocker(t *testing.T, st fakeDockerState) string {
 	t.Helper()
+	t.Setenv("WS_PROXY_CONTAINER", fakeProxyContainer)
+	t.Setenv("WS_PROXY_IMAGE", fakeProxyImage)
+	t.Setenv("WS_PROXY_NETWORK", fakeProxyNetwork)
 	dir, err := os.MkdirTemp("", "wsdock")
 	if err != nil {
 		t.Fatal(err)
