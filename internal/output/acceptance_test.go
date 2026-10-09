@@ -1154,6 +1154,66 @@ func TestStateFactDrawsMarkAndLabel(t *testing.T) {
 	}
 }
 
+// TestStateFactKeepsItsMarkWithItsWord: a state's mark and the first word of
+// its label are one unit (§4.5) — at every width from MinWidth to 200, in
+// both glyph modes, on the line that carries the mark the word follows it.
+// The blocks are ws proxy status's Workspaces in miniature: a 64-character key
+// and a short one, each beside a verdict whose first word is 12 cells. Wrapped
+// as one string in a column of 12 or 13 cells, "✗ unprotected: …" would leave
+// the ✗ alone; such a column stacks the block instead.
+func TestStateFactKeepsItsMarkWithItsWord(t *testing.T) {
+	verdict := "unprotected: default via 172.28.0.1 (not the proxy 172.28.0.2)"
+	blocks := []KV{
+		{Title: "Workspaces", Pairs: []Fact{
+			StateFact(strings.Repeat("payments-", 7)+"x", StateFail, verdict),
+			StateFact("web-frontend", StateOK, "protected"),
+		}},
+		{Title: "Workspaces", Pairs: []Fact{StateFact("ml-training-gpu", StateUnknown, verdict)}},
+	}
+	for _, mode := range []GlyphMode{GlyphUTF8, GlyphASCII} {
+		for w := MinWidth; w <= 200; w++ {
+			s := sweepStream(w, mode)
+			for i, k := range blocks {
+				for _, f := range k.Pairs {
+					mark := stateMark(f.state, mode)
+					want := mark + " " + strings.Fields(f.V)[0]
+					var marked, held bool
+					for _, line := range strings.Split(ansi.Strip(k.Render(s)), "\n") {
+						if strings.Contains(" "+line+" ", " "+mark+" ") {
+							marked = true
+							held = held || strings.Contains(line, want)
+						}
+					}
+					if !marked || !held {
+						t.Fatalf("block %d at %d columns (%v): no line holds %q:\n%s", i, w, mode, want, ansi.Strip(k.Render(s)))
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestStateFactPaintsEveryLineAligned: on the aligned path a state value that
+// wraps carries its role's colour on every line, as it does when stacked
+// (TestStateFactDrawsMarkAndLabel).
+func TestStateFactPaintsEveryLineAligned(t *testing.T) {
+	fail := fxSGR(t, string(roleColours[RoleFail].trueColour), ColourTrue)
+	k := KV{Pairs: []Fact{StateFact("Route", StateFail, "unprotected: default via 172.28.0.1 (not the proxy 172.28.0.2)")}}
+	lines := strings.Split(k.Render(blockStream(40)), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("the value did not wrap at 40 columns:\n%s", strings.Join(lines, "\n"))
+	}
+	for i, line := range lines {
+		value := line
+		if i == 0 {
+			_, value, _ = strings.Cut(line, fxReset+"  ")
+		}
+		if !strings.HasPrefix(strings.TrimLeft(value, " "), fail) || !strings.HasSuffix(value, fxReset) {
+			t.Errorf("value line %d is not painted with the fail role: %q", i+1, line)
+		}
+	}
+}
+
 // TestBlockCaptionsCloseTheirBlock pins the phase-5 caption of KV and Checks:
 // it closes the block the way a table's closes the grid — directly under the
 // last line, with no blank line between, wrapped at the budget, every line

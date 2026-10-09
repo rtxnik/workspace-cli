@@ -51,6 +51,19 @@ func (f Fact) display(mode GlyphMode) (string, Role) {
 	return Sanitise(f.V), RoleDefault
 }
 
+// leadWidth is the width of what a pair's value must keep on its first line:
+// for a state, its mark, a space and the first word of its label; for a plain
+// value, nothing.
+func (f Fact) leadWidth(mode GlyphMode) int {
+	if !f.isState {
+		return 0
+	}
+	value, _ := f.display(mode)
+	mark, rest, _ := strings.Cut(value, " ")
+	first, _, _ := strings.Cut(rest, " ")
+	return W(mark + " " + first)
+}
+
 // Remedy is a next step: a short label and a copy-pasteable command.
 type Remedy struct {
 	Label string
@@ -411,8 +424,17 @@ func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 	// §4.4: when budget − valueIndent < 12 the pair stacks — key on its own
 	// line, value indented beneath. The 12 is a readability threshold for the
 	// value column, and is NOT the Checks floor of the same size, which is set
-	// by the widest word in §4.5's vocabulary.
-	stacked := budget-valueIndent < 12
+	// by the widest word in §4.5's vocabulary. A state's mark and the first
+	// word of its label are one unit (§4.5), so a column too narrow for the
+	// widest of them stacks too: wrapped as one string, "✗ unprotected: …" in
+	// a column of 13 cells would leave the ✗ on a line of its own.
+	columnFloor := 12
+	for _, f := range pairs {
+		if w := f.leadWidth(s.mode); w > columnFloor {
+			columnFloor = w
+		}
+	}
+	stacked := budget-valueIndent < columnFloor
 
 	var b strings.Builder
 	for _, f := range pairs {
