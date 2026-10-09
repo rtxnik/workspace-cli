@@ -556,6 +556,20 @@ func TestSoftTierOfEachSoftOutcome(t *testing.T) {
 	}
 }
 
+// TestCheckImagePresentUndecided: an image inspection that did not complete
+// after a good ping stops the doctor as a missing image does, but advises no
+// rebuild — nothing showed the image missing.
+func TestCheckImagePresentUndecided(t *testing.T) {
+	cfg := config.Config{ProxyImage: "devpod-proxy"}
+	undecided := checkImagePresent(cfg, []docker.CheckResult{{Name: "Proxy image built", Skipped: true}})
+	if undecided.OK || strings.Contains(undecided.Fix, "rebuild") || !strings.Contains(undecided.Detail, "did not complete") {
+		t.Errorf("an undecided image check = %+v; want a stop that advises no rebuild", undecided)
+	}
+	if missing := checkImagePresent(cfg, []docker.CheckResult{{Name: "Proxy image built"}}); missing.OK || missing.Fix != "Build the proxy image: ws proxy rebuild" {
+		t.Errorf("a missing image = %+v; want the rebuild hint, as before", missing)
+	}
+}
+
 // softWord matches the words a doctor outcome writes into its Detail when it
 // is a soft finding (phase-5 §3.5) — ADVISORY, inconclusive, UNKNOWN, NOTE and
 // skipped — in any case, and SKIP, which CheckOutcome's earlier convention
