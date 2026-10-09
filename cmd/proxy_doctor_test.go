@@ -498,16 +498,26 @@ func TestActiveProfileReadFold(t *testing.T) {
 // TestSoftTierOfEachSoftOutcome pins the doctor's soft tier (phase-5 §3.5),
 // one row per soft branch of the spec's table, through the outcome builders
 // themselves: a finding that does not stop the run but is not a pass renders
-// degraded or unknown, never ok. hy2's two rows dial a real listener: a
-// closed port for the inconclusive probe, a TLS server whose leaf differs
-// from the pin for the mismatch.
+// degraded or unknown, never ok. hy2's rows dial a real listener: one that
+// hangs up on every connection for the inconclusive probe — held open, so no
+// other process can take its port between the listen and the dial — and a
+// TLS server whose leaf differs from the pin for the mismatch.
 func TestSoftTierOfEachSoftOutcome(t *testing.T) {
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	hangup, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	closedPort := closed.Addr().(*net.TCPAddr).Port
-	_ = closed.Close()
+	t.Cleanup(func() { _ = hangup.Close() })
+	go func() {
+		for {
+			c, err := hangup.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	hangupPort := hangup.Addr().(*net.TCPAddr).Port
 	tlsSrv := httptest.NewUnstartedServer(http.NotFoundHandler())
 	tlsSrv.Config.ErrorLog = log.New(io.Discard, "", 0) // the probe hangs up mid-handshake, by design
 	tlsSrv.StartTLS()
@@ -534,7 +544,8 @@ func TestSoftTierOfEachSoftOutcome(t *testing.T) {
 		{"IPv6: posture unknown", v6FailClosedOutcome([]string{"api"}, []docker.WorkspaceV6Verdict{docker.V6Unknown}), true, softUnknown},
 		{"IPv6: fail-closed", v6FailClosedOutcome([]string{"api"}, []docker.WorkspaceV6Verdict{docker.V6FailClosed}), true, softNone},
 		{"IPv6: none connected", v6FailClosedOutcome(nil, nil), true, softNone},
-		{"hy2: probe inconclusive", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: closedPort}), true, softUnknown},
+		{"default route: none connected", checkDefaultRoute(config.Config{}, containerList{}), true, softNone},
+		{"hy2: probe inconclusive", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: hangupPort}), true, softUnknown},
 		{"hy2: leaf differs from the pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port, PinSHA256: strings.Repeat("0", 64)}), true, softDegraded},
 		{"hy2: leaf matches the pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port, PinSHA256: leaf}), true, softNone},
 		{"hy2: no pin", hy2ProtocolSanity(xray.DetailedProfile{Address: "127.0.0.1", Port: tlsAddr.Port}), true, softNone},
