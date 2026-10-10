@@ -6,7 +6,7 @@ import (
 
 // The five message helpers moved to message.go, where they resolve their
 // stream, their colour level and their width budget per file descriptor.
-// ConfirmBool and ConfirmDestructive below are untouched by that move.
+// ConfirmBool and ConfirmDestructiveBool below are untouched by that move.
 
 // ConfirmBool shows an interactive confirmation dialog. Returns true only if
 // the user explicitly confirms. Default is No (safe default). Its false is
@@ -28,12 +28,13 @@ func ConfirmBool(title string, description string) bool {
 	return confirmed
 }
 
-// ConfirmDestructive gates a destructive action behind an interactive
+// ConfirmDestructiveBool gates a destructive action behind an interactive
 // confirmation unless force is set. When force is true it returns true
 // immediately without prompting; otherwise it defers to ConfirmBool (default
 // No). A false return means the operator declined — callers treat that as a
-// successful no-op, not an error.
-func ConfirmDestructive(force bool, title, description string) bool {
+// successful no-op, not an error. Named as ConfirmBool is, and for the same
+// reason.
+func ConfirmDestructiveBool(force bool, title, description string) bool {
 	if force {
 		return true
 	}

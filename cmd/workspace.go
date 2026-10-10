@@ -22,7 +22,7 @@ var wsAnnotation = map[string]string{"group": "workspace"}
 
 // confirmDestructiveFn gates every destructive delete; a test seam so
 // confirmation outcomes are driven deterministically without a terminal.
-var confirmDestructiveFn = output.ConfirmDestructive
+var confirmDestructiveFn = output.ConfirmDestructiveBool
 
 var newCmd = &cobra.Command{
 	Use:         "new <name> [profile]",
@@ -485,7 +485,7 @@ var logsCmd = &cobra.Command{
 
 // selectWorkspace shows an interactive selector of workspaces and returns the
 // selected name. ok is false when the selector produced no choice — the
-// operator cancelled it, or it could not run (see output.Select); the
+// operator cancelled it, or it could not run (see output.SelectBool); the
 // caller returns nil and the process exits 0.
 func selectWorkspace() (string, bool, error) {
 	cfg := config.Load()
@@ -498,7 +498,7 @@ func selectWorkspace() (string, bool, error) {
 	}
 
 	// huh draws its forms on stderr, so the labels are rendered for it.
-	return output.Select("Select workspace:", workspaceOptions(output.Err(), workspaces))
+	return output.SelectBool("Select workspace:", workspaceOptions(output.Err(), workspaces))
 }
 
 // workspaceOptions labels each workspace "<name>  <mark> <word>" for s, with
