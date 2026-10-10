@@ -148,7 +148,7 @@ func newPrompter() *prompter {
 func (p *prompter) confirm(title, description string) (bool, error) {
 	var yes bool
 	field := huh.NewConfirm().
-		Title(title).
+		Title(stateMark(StateAdvisory, p.stream.mode) + " " + title).
 		Description(description).
 		Affirmative("Yes").
 		Negative("No").
@@ -189,8 +189,9 @@ func (p *prompter) choose(title string, options []SelectOption) (string, error) 
 
 // ask is the core. It refuses, writing nothing, when the predicate does — huh
 // never runs, so /dev/tty is never opened — when f holds no field to ask,
-// and inside a running step; otherwise it runs f in the mode TERM chooses,
-// huh's own rule made explicit, and decides how the run ended.
+// and inside a running step; otherwise it themes f for the prompt's stream,
+// lays it out to fit the stream's budget, runs it in the mode TERM chooses —
+// huh's own rule made explicit — and decides how the run ended.
 func (p *prompter) ask(f *huh.Form) error {
 	if err := p.ready(); err != nil {
 		return err
@@ -200,6 +201,13 @@ func (p *prompter) ask(f *huh.Form) error {
 	}
 	if stepRunning() {
 		return errInsideRun
+	}
+	theme := promptTheme(p.stream)
+	f.WithTheme(theme)
+	// huh draws a field's left bar outside the width it is given, so the
+	// bar's cells come off the budget.
+	if w := p.stream.budget(); w != WidthUnbounded {
+		f.WithWidth(w - theme.Focused.Base.GetHorizontalBorderSize())
 	}
 	if p.dumb() {
 		return p.askAccessible(f)
