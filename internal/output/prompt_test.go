@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/x/term"
 )
 
 // TestPromptReadyRule: a prompt may ask only when stdin and stderr are both
@@ -95,12 +97,18 @@ func TestCancelledCarriesItsSignal(t *testing.T) {
 
 // coreFor is a core that is ready to ask, records from sigs — stopping
 // closes it — knows no signal ignored at start, and runs forms with run.
+// Its watchdog waits a minute, restores nothing, writes into nothing and
+// dies of nothing.
 func coreFor(sigs chan os.Signal, run func(f *huh.Form) error) *prompter {
 	return &prompter{
-		ready:   func() error { return nil },
-		signals: func(...os.Signal) (<-chan os.Signal, func()) { return sigs, func() { close(sigs) } },
-		ignored: func(os.Signal) bool { return false },
-		run:     run,
+		stream:   NewStreamAt(io.Discard, 80, true, ColourNone, false),
+		ready:    func() error { return nil },
+		signals:  func(...os.Signal) (<-chan os.Signal, func()) { return sigs, func() { close(sigs) } },
+		ignored:  func(os.Signal) bool { return false },
+		run:      run,
+		saveTerm: func() func() error { return func() error { return nil } },
+		die:      func(os.Signal) {},
+		grace:    time.Minute,
 	}
 }
 
@@ -407,6 +415,256 @@ func TestNotifySignalsDeliversAndCloses(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Error("the source's channel was not closed when it was stopped")
+	}
+}
+
+// ------------------------------------------------------------ the watchdog
+
+// hungRun is a run that records its signal, says when, and then hangs until
+// released — Bubble Tea's handler blocked on its send — with the core's
+// death, its restore of the terminal state and its stream observed.
+type hungRun struct {
+	release  chan struct{}
+	sent     chan time.Time
+	died     chan os.Signal
+	restored chan struct{}
+	result   chan error
+}
+
+// startHungRun runs a Confirm on a core whose run hangs after recording
+// recorded, in order, drawn on w, with the watchdog's grace set to grace.
+func startHungRun(w io.Writer, grace time.Duration, recorded ...os.Signal) *hungRun {
+	h := &hungRun{
+		release:  make(chan struct{}),
+		sent:     make(chan time.Time, 1),
+		died:     make(chan os.Signal, 2),
+		restored: make(chan struct{}, 2),
+		result:   make(chan error, 1),
+	}
+	sigs := make(chan os.Signal, 3)
+	p := coreFor(sigs, func(*huh.Form) error {
+		for _, sig := range recorded {
+			sigs <- sig
+		}
+		h.sent <- time.Now()
+		<-h.release
+		return nil
+	})
+	p.stream = NewStreamAt(w, 80, true, ColourNone, false)
+	p.saveTerm = func() func() error {
+		return func() error {
+			h.restored <- struct{}{}
+			return nil
+		}
+	}
+	p.die = func(s os.Signal) { h.died <- s }
+	p.grace = grace
+	go func() {
+		_, err := p.confirm("Delete?", "")
+		h.result <- err
+	}()
+	return h
+}
+
+// death waits a bounded time for the run to record its signal and for the
+// core's death, and returns the signal and how long after the record it came.
+func (h *hungRun) death(t *testing.T) (os.Signal, time.Duration) {
+	t.Helper()
+	var sent time.Time
+	select {
+	case sent = <-h.sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run never recorded its signal")
+	}
+	select {
+	case sig := <-h.died:
+		return sig, time.Since(sent)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watchdog never called the death")
+	}
+	return nil, 0
+}
+
+// finish releases the hung run and returns the core's outcome.
+func (h *hungRun) finish(t *testing.T) error {
+	t.Helper()
+	close(h.release)
+	select {
+	case err := <-h.result:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("the core did not return after the run was released")
+	}
+	return nil
+}
+
+// TestWatchdogEndsAHungRun: a recorded SIGINT or SIGTERM with a run that
+// never returns ends, once the grace is out, in the saved terminal state
+// restored, the undo sequences written to the prompt's stream, and the death
+// by that signal.
+func TestWatchdogEndsAHungRun(t *testing.T) {
+	const grace = 200 * time.Millisecond
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+		var buf syncBuffer
+		h := startHungRun(&buf, grace, sig)
+		got, took := h.death(t)
+		if got != sig {
+			t.Errorf("%v: the watchdog died of %v", sig, got)
+		}
+		if took < grace {
+			t.Errorf("%v: the watchdog fired %v after the signal; want the grace, %v, first", sig, took, grace)
+		}
+		select {
+		case <-h.restored:
+		default:
+			t.Errorf("%v: the death came before the terminal state was restored", sig)
+		}
+		if out := buf.String(); out != undoSequences {
+			t.Errorf("%v: the prompt's stream holds %q; want the undo sequences %q", sig, out, undoSequences)
+		}
+		if err := h.finish(t); cancelledBy(err) != sig {
+			t.Errorf("%v: the core returned %v; want a Cancelled by it", sig, err)
+		}
+	}
+}
+
+// TestWatchdogHangupHasNoGrace: a recorded SIGHUP fires the watchdog at once,
+// whatever the grace, since nothing else would end the run on a hang-up.
+func TestWatchdogHangupHasNoGrace(t *testing.T) {
+	var buf syncBuffer
+	h := startHungRun(&buf, time.Hour, syscall.SIGHUP)
+	got, took := h.death(t)
+	if got != syscall.SIGHUP {
+		t.Errorf("the watchdog died of %v; want SIGHUP", got)
+	}
+	if took > time.Second {
+		t.Errorf("the watchdog fired %v after a SIGHUP; want at once", took)
+	}
+	if out := buf.String(); out != undoSequences {
+		t.Errorf("the prompt's stream holds %q; want the undo sequences", out)
+	}
+	if err := h.finish(t); cancelledBy(err) != syscall.SIGHUP {
+		t.Errorf("the core returned %v; want a Cancelled by SIGHUP", err)
+	}
+}
+
+// TestWatchdogHangupAfterASignal: a SIGHUP that follows a SIGTERM re-arms the
+// watchdog with no grace, and the death is by SIGHUP.
+func TestWatchdogHangupAfterASignal(t *testing.T) {
+	h := startHungRun(io.Discard, time.Hour, syscall.SIGTERM, syscall.SIGHUP)
+	got, took := h.death(t)
+	if got != syscall.SIGHUP || took > time.Second {
+		t.Errorf("the watchdog died of %v %v after a SIGTERM and a SIGHUP; want SIGHUP, at once", got, took)
+	}
+	if err := h.finish(t); cancelledBy(err) != syscall.SIGHUP {
+		t.Errorf("the core returned %v; want a Cancelled by SIGHUP", err)
+	}
+}
+
+// stuckWriter is a stream that never drains: a write blocks until released.
+type stuckWriter struct{ release chan struct{} }
+
+func (w stuckWriter) Write(p []byte) (int, error) {
+	<-w.release
+	return len(p), nil
+}
+
+// TestWatchdogBoundsTheRestore: a prompt's stream that never drains holds the
+// death back by no more than the restore's bound; stdin's state is restored
+// all the same, before the write.
+func TestWatchdogBoundsTheRestore(t *testing.T) {
+	w := stuckWriter{release: make(chan struct{})}
+	defer close(w.release)
+	h := startHungRun(w, time.Hour, syscall.SIGHUP)
+	_, took := h.death(t)
+	if took > restoreBound+500*time.Millisecond {
+		t.Errorf("a stream that never drains held the death back %v; want no more than the restore's bound, %v", took, restoreBound)
+	}
+	select {
+	case <-h.restored:
+	default:
+		t.Error("stdin's state was not restored when the stream did not drain")
+	}
+	_ = h.finish(t)
+}
+
+// TestWatchdogQuietWhenTheRunReturns: a run that returns within the grace
+// never fires the watchdog — no restore, no undo, no death.
+func TestWatchdogQuietWhenTheRunReturns(t *testing.T) {
+	var buf syncBuffer
+	sigs := make(chan os.Signal, 3)
+	p := coreFor(sigs, func(*huh.Form) error {
+		sigs <- syscall.SIGTERM
+		return nil
+	})
+	p.stream = NewStreamAt(&buf, 80, true, ColourNone, false)
+	died, restored := make(chan os.Signal, 1), make(chan struct{}, 1)
+	p.saveTerm = func() func() error {
+		return func() error {
+			restored <- struct{}{}
+			return nil
+		}
+	}
+	p.die = func(s os.Signal) { died <- s }
+	p.grace = 100 * time.Millisecond
+	if _, err := p.confirm("Delete?", ""); cancelledBy(err) != syscall.SIGTERM {
+		t.Fatalf("the core returned %v; want a Cancelled by SIGTERM", err)
+	}
+	select {
+	case sig := <-died:
+		t.Errorf("the watchdog died of %v after the run had returned", sig)
+	case <-restored:
+		t.Error("the watchdog restored the terminal after the run had returned")
+	case <-time.After(400 * time.Millisecond):
+	}
+	if out := buf.String(); out != "" {
+		t.Errorf("the watchdog wrote %q after the run had returned", out)
+	}
+}
+
+// TestPromptCoreProductionValues: the production core's grace is the step
+// runner's second, its restore is bounded to 250 ms, and its undo sequences
+// are the cursor, bracketed paste, focus reporting and the three mouse modes.
+func TestPromptCoreProductionValues(t *testing.T) {
+	if g := newPrompter().grace; g != time.Second {
+		t.Errorf("the production grace is %v; want 1s", g)
+	}
+	if restoreBound != 250*time.Millisecond {
+		t.Errorf("the restore's bound is %v; want 250ms", restoreBound)
+	}
+	if want := "\x1b[?25h\x1b[?2004l\x1b[?1004l\x1b[?1002l\x1b[?1003l\x1b[?1006l"; undoSequences != want {
+		t.Errorf("the undo sequences are %q; want %q", undoSequences, want)
+	}
+}
+
+// TestSaveStdinStateRestores: what saveStdinState returns puts stdin's
+// terminal state back as it was saved, after a change to raw mode.
+func TestSaveStdinStateRestores(t *testing.T) {
+	pty, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("no pty: %v", err)
+	}
+	defer func() { _ = pty.Close() }()
+	saved := os.Stdin
+	os.Stdin = pty
+	defer func() { os.Stdin = saved }()
+
+	before, err := term.GetState(pty.Fd())
+	if err != nil {
+		t.Fatalf("get state: %v", err)
+	}
+	restore := saveStdinState()
+	if _, err := term.MakeRaw(pty.Fd()); err != nil {
+		t.Fatalf("make raw: %v", err)
+	}
+	if raw, _ := term.GetState(pty.Fd()); reflect.DeepEqual(raw, before) {
+		t.Fatal("raw mode changed nothing; this test cannot see a restore")
+	}
+	if err := restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if after, _ := term.GetState(pty.Fd()); !reflect.DeepEqual(after, before) {
+		t.Error("the state after the restore is not the one saved")
 	}
 }
 

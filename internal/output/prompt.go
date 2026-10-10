@@ -3,9 +3,11 @@ package output
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/x/term"
@@ -95,10 +97,15 @@ var errNoAnswer = errors.New("prompt ended without an answer")
 var errInsideRun = errors.New("prompt refused: a step is running")
 
 // prompter is the core every prompt runs through. Its terminal probe, its
-// signal source and its form runner are fields, as the step runner's signal
-// source is: the exported functions use the production values, the tests
-// their own, so that every rule is asserted in process, without a terminal.
+// signal source, its form runner, the save and restore of stdin's terminal
+// state, its death and the watchdog's grace are fields, as the step
+// runner's signal source, death and grace are: the exported functions use
+// the production values, the tests their own, so that every rule and the
+// watchdog are asserted in process, without a terminal and without the test
+// process dying.
 type prompter struct {
+	// stream is the stream the prompt is drawn on: Err().
+	stream *Stream
 	// ready is the predicate: PromptReady.
 	ready func() error
 	// signals starts recording sigs and returns their channel, with the
@@ -109,14 +116,26 @@ type prompter struct {
 	ignored func(sig os.Signal) bool
 	// run runs a form in the normal mode: huh's own Run.
 	run func(f *huh.Form) error
+	// saveTerm saves stdin's terminal state and returns what restores it.
+	saveTerm func() (restore func() error)
+	// die ends the process by a signal: ExitBySignal.
+	die func(sig os.Signal)
+	// grace is how long a recorded SIGINT or SIGTERM leaves Bubble Tea to
+	// end the run before the watchdog does; a SIGHUP leaves it none.
+	grace time.Duration
 }
 
 func newPrompter() *prompter {
 	return &prompter{
-		ready:   PromptReady,
-		signals: notifySignals,
-		ignored: ignoredAtStart,
-		run:     (*huh.Form).Run,
+		stream:   Err(),
+		ready:    PromptReady,
+		signals:  notifySignals,
+		ignored:  ignoredAtStart,
+		run:      (*huh.Form).Run,
+		saveTerm: saveStdinState,
+		die:      ExitBySignal,
+		// The step runner's grace for a stream that does not drain.
+		grace: time.Second,
 	}
 }
 
@@ -218,10 +237,14 @@ func stepRunning() bool {
 //     failed.
 //
 // A run that panicked returned nothing, so 2 to 5 never match it.
+//
+// A recorded signal also arms the watchdog (record), which ends a run Bubble
+// Tea's own handler has hung.
 func (p *prompter) askNormal(f *huh.Form) error {
 	f.WithAccessible(false)
+	restore := p.saveTerm()
 	sigs, stop := p.signals(p.recordedSignals()...)
-	rec := record(sigs)
+	rec := p.record(sigs, restore)
 	panicked, err := p.runRecovered(f)
 	stop()
 	sig := rec.outcome()
@@ -288,20 +311,92 @@ type recorder struct {
 	hangup bool
 }
 
-func record(sigs <-chan os.Signal) *recorder {
+// record starts the recorder over sigs. Its first signal arms the watchdog:
+// should the run not have returned within the grace — none for a SIGHUP,
+// which nothing else would end the run for — the watchdog restores the
+// terminal and ends the process by that signal. A SIGHUP after another
+// signal re-arms it at once. Bubble Tea's handler can hang: a signal that
+// arrives as the form quits on the operator's own key finds the event loop
+// no longer reading, blocks on its send, and the shutdown waits for it with
+// the terminal raw. The channel's close, when the run has returned, ends the
+// goroutine and with it the watchdog.
+func (p *prompter) record(sigs <-chan os.Signal, restore func() error) *recorder {
 	r := &recorder{done: make(chan struct{})}
 	go func() {
 		defer close(r.done)
-		for sig := range sigs {
-			if r.first == nil {
-				r.first = sig
-			}
-			if sig == syscall.SIGHUP {
-				r.hangup = true
+		var armed os.Signal
+		var fire <-chan time.Time
+		for {
+			select {
+			case sig, ok := <-sigs:
+				if !ok {
+					return
+				}
+				if r.first == nil {
+					r.first = sig
+				}
+				if sig == syscall.SIGHUP {
+					r.hangup = true
+				}
+				if armed == nil || sig == syscall.SIGHUP && armed != syscall.SIGHUP {
+					armed = sig
+					fire = time.After(p.graceFor(sig))
+				}
+			case <-fire:
+				fire = nil
+				p.restoreAndDie(armed, restore)
 			}
 		}
 	}()
 	return r
+}
+
+func (p *prompter) graceFor(sig os.Signal) time.Duration {
+	if sig == syscall.SIGHUP {
+		return 0
+	}
+	return p.grace
+}
+
+// restoreBound is how long the watchdog waits for its restore before the
+// death: a terminal that does not drain — stopped with Ctrl-S, or behind an
+// SSH client that stopped reading — must not hold the death back, as the
+// step runner bounds its own drain.
+const restoreBound = 250 * time.Millisecond
+
+// undoSequences turn off what Bubble Tea and huh turn on: the cursor shown
+// again, bracketed paste and focus reporting off, and the mouse modes off as
+// a precaution.
+const undoSequences = "\x1b[?25h\x1b[?2004l\x1b[?1004l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
+
+// restoreAndDie is the watchdog firing: it restores stdin's terminal state,
+// which Bubble Tea left raw — the only stream it makes raw — and writes the
+// undo sequences on the prompt's stream, on a goroutine of its own waited for
+// at most restoreBound, and ends the process by sig. On a terminal that has
+// hung up the restore fails at once and the death follows.
+func (p *prompter) restoreAndDie(sig os.Signal, restore func() error) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = restore()
+		_, _ = io.WriteString(p.stream, undoSequences)
+	}()
+	select {
+	case <-done:
+	case <-time.After(restoreBound):
+	}
+	p.die(sig)
+}
+
+// saveStdinState saves stdin's terminal state before a run and returns what
+// puts it back.
+func saveStdinState() (restore func() error) {
+	fd := os.Stdin.Fd()
+	state, err := term.GetState(fd)
+	if err != nil {
+		return func() error { return err }
+	}
+	return func() error { return term.Restore(fd, state) }
 }
 
 // outcome waits for the recording to end — the source stopped, the goroutine
