@@ -17,8 +17,8 @@ package cmd
 //   - Default invocation NEVER mutates state — only reports + remediation hints.
 //   - --kill-orphans gates mutation #1 (kill detected orphan PIDs).
 //   - --clear-stale-locks gates mutation #2 (remove stale lock files).
-//   - BOTH require --yes OR an interactive output.Confirm acceptance before
-//     the actual kill/remove fires.
+//   - BOTH require --yes OR an interactive output.ConfirmBool acceptance
+//     before the actual kill/remove fires.
 //
 // Mutation discipline is structurally enforced by TestVaultDoctorReadOnlyByDefault
 // which mocks the kill/remove fns and asserts call-count = 0 when no flags
@@ -89,7 +89,7 @@ var (
 
 	// Confirm seam — same convention as vaultIngestConfirmFn so vault leaves
 	// have a uniform mocking surface.
-	doctorConfirmFn = output.Confirm
+	doctorConfirmFn = output.ConfirmBool
 )
 
 // --------------------------------------------------------------------------

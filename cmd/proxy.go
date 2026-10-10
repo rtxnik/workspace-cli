@@ -446,12 +446,12 @@ var proxyInitCmd = &cobra.Command{
 	},
 }
 
-// warnConfirmFn is the confirmation seam: production wires to output.Confirm;
-// tests override it to decide the operator's answer without a TTY. The
-// connected-workspace enumeration reuses the package's existing
-// proxyConnectedContainersFn seam (declared in proxy_doctor.go) — it is NOT
-// redeclared here.
-var warnConfirmFn = output.Confirm
+// warnConfirmFn is the confirmation seam: production wires to
+// output.ConfirmBool; tests override it to decide the operator's answer
+// without a TTY. The connected-workspace enumeration reuses the package's
+// existing proxyConnectedContainersFn seam (declared in proxy_doctor.go) — it
+// is NOT redeclared here.
+var warnConfirmFn = output.ConfirmBool
 
 // errAborted signals the operator declined a mutation at the connected-workspace
 // prompt. Every mutator turns it into the same clean no-op — "Aborted" on stderr

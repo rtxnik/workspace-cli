@@ -11,7 +11,7 @@ package cmd
 //   --dedup-force  -> args.ConfirmDedupOverride = true
 //   --reason <txt> -> args.Reason; REQUIRED whenever --dedup-force set
 //   --yes          -> skip the operator confirmation prompt
-//                     (default behavior fires output.Confirm; declining
+//                     (default behavior fires output.ConfirmBool; declining
 //                      writes nothing and exits 0 — declining an override is
 //                      a safe operator choice, not an error)
 //
@@ -35,11 +35,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Test seams: production wires to runVaultIngest + output.Confirm; unit tests
-// override with closures that emulate MCP responses + operator prompt decisions.
+// Test seams: production wires to runVaultIngest + output.ConfirmBool; unit
+// tests override with closures that emulate MCP responses + operator prompt
+// decisions.
 var (
 	vaultIngestCallFn    = runVaultIngest
-	vaultIngestConfirmFn = output.Confirm
+	vaultIngestConfirmFn = output.ConfirmBool
 )
 
 func runVaultIngest(ctx context.Context, root *cobra.Command, cargs mcp.CreateNoteArgs) (*mcp.Envelope, error) {
