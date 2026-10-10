@@ -563,7 +563,7 @@ func fxProblem() Problem {
 		Title: "cannot start workspace \"api\"",
 		Cause: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock.",
 		Facts: []Fact{{K: "workspace", V: "api"}, {K: "profile", V: "go"}, {K: "proxy", V: "de-fra-01"}},
-		Steps: []Remedy{{"start docker", "sudo systemctl start docker"}, {"check", "ws proxy check"}},
+		Steps: []Remedy{{Label: "start docker", Cmd: "sudo systemctl start docker"}, {Label: "check", Cmd: "ws proxy check"}},
 	}
 }
 
@@ -1308,8 +1308,8 @@ func TestEmptyNamesTheNextStep(t *testing.T) {
 		t.Fatalf("mutation switches not clean on entry: %+v", mutants)
 	}
 	e := Empty{Subject: "workspaces", Steps: []Remedy{
-		{"Create one", "ws new <name>"},
-		{"See profiles", "ws profiles"},
+		{Label: "Create one", Cmd: "ws new <name>"},
+		{Label: "See profiles", Cmd: "ws profiles"},
 	}}
 	for w := MinWidth; w <= 200; w++ {
 		lines := plainLines(e.Render(blockStream(w)))
@@ -1843,7 +1843,7 @@ var assertESCContainment = globalAssertion{
 			Title: "Could not pull the base image",
 			Cause: fxEscCause,
 			Facts: []Fact{{K: "image", V: fxBaseImage}},
-			Steps: []Remedy{{"Retry", "ws profile rebuild default"}},
+			Steps: []Remedy{{Label: "Retry", Cmd: "ws profile rebuild default"}},
 		}
 		for _, w := range []int{MinWidth, 80, sweepMaxWidth} {
 			// The TTY path at ColourNone: literally zero ESC bytes.
