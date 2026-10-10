@@ -172,16 +172,25 @@ func fxProblemSources(p Problem) []string {
 	for _, f := range p.Facts {
 		out = append(out, f.K, f.V)
 	}
-	for _, st := range p.Steps {
-		out = append(out, st.Label, st.Cmd)
-	}
-	return out
+	return append(out, fxRemedySources(p.Steps)...)
 }
 
 func fxEmptySources(e Empty) []string {
-	out := []string{e.Subject}
-	for _, st := range e.Steps {
-		out = append(out, st.Label, st.Cmd)
+	return append([]string{e.Subject}, fxRemedySources(e.Steps)...)
+}
+
+// fxRemedySources are a step's label and its command — word by word for a
+// command given as words, which is broken between its words with a line
+// continuation that is not one of them.
+func fxRemedySources(steps []Remedy) []string {
+	var out []string
+	for _, st := range steps {
+		out = append(out, st.Label)
+		if len(st.Words) > 0 {
+			out = append(out, st.Words...)
+		} else {
+			out = append(out, st.Cmd)
+		}
 	}
 	return out
 }
@@ -643,6 +652,14 @@ func fxCorpusBuild() []fixture {
 			Facts: []Fact{{K: "image", V: fxBaseImage}, {K: "registry", V: fxIPv6}},
 			Steps: []Remedy{{Label: "Retry", Cmd: "ws profile rebuild default"}},
 		}, append([]string{fxBaseImage, fxIPv6, "Retry", "ws profile rebuild default"}, fxEscSurvivors...)},
+		// A step built from the operator's arguments, given as shell words:
+		// broken between them, with line continuations, at every narrow width.
+		{"problem/words", "§3.6 phase 6: a step given as words", Problem{
+			Title: "Cannot ask for confirmation: no terminal",
+			Cause: "stdin is not a terminal",
+			Steps: []Remedy{{Label: "Skip the prompt", Words: []string{"ws", "vault", "ingest", "--dedup-force",
+				"'--reason=a dup'", "--yes", "--", "-draft.md"}}},
+		}, nil},
 	}
 	for _, pf := range problems {
 		p, fid := pf.p, pf.fid
@@ -820,12 +837,14 @@ func fxCorpusBuild() []fixture {
 	escProblem := Problem{
 		Title: fxEsc("Could not reconcile the go profile"),
 		Facts: []Fact{{K: fxEsc("stage"), V: fxEsc("buildkit export")}},
-		Steps: []Remedy{{Label: fxEsc("Retry"), Cmd: fxEsc("ws profile rebuild go")}},
+		Steps: []Remedy{{Label: fxEsc("Retry"), Cmd: fxEsc("ws profile rebuild go")},
+			{Label: "Skip the prompt", Words: []string{"ws", fxEsc("delete"), "--force", "ops"}}},
 	}
 	out = append(out, fixture{
 		name: "problem/esc-surfaces", kind: "problem",
-		spec:        "§6.7 / D-13: escapes in Title, a Fact key and value, and a Remedy label and command",
-		fidelity:    []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go"},
+		spec: "§6.7 / D-13: escapes in Title, a Fact key and value, a Remedy label and command, and a Remedy word",
+		fidelity: []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go",
+			"Skip the prompt", "ws", "delete", "--force", "ops"},
 		prefixState: StateFail, hasPrefixState: true,
 		render: func(s *Stream) string { return escProblem.Render(s) },
 	})

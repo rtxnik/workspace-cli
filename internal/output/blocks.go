@@ -80,9 +80,16 @@ func (f Fact) wrapValue(value string, mode GlyphMode, width int) []string {
 }
 
 // Remedy is a next step: a short label and a copy-pasteable command.
+//
+// Words is the command given as shell words, each already written by
+// ShellQuote, for a step built from the operator's own arguments. It takes
+// Cmd's place, and it is laid out between its words only: a word is never
+// broken and the spaces in a quoted word are never collapsed, where Cmd is
+// wrapped like prose.
 type Remedy struct {
 	Label string
 	Cmd   string
+	Words []string
 }
 
 // Table is a bordered grid whose columns are allocated from the stream's
@@ -347,8 +354,10 @@ type Checks struct {
 // measured 12 violations each and 24 where renderPairs or renderRemedies
 // covers two surfaces at once. Counted at this append: 14 caller surfaces read through
 // Sanitise across 16 call sites, the Fact key and the Remedy label being read
-// once in their width pass and once in their render pass, and a StateFact's
-// label through SanitiseInline in Fact.display.
+// once in their width pass and once in their render pass, a StateFact's
+// label through SanitiseInline in Fact.display, and each of a Remedy's Words
+// through SanitiseInline in renderRemedies — a shell word holds no newline to
+// keep, and problem/esc-surfaces carries one with an escape.
 
 // ----------------------------------------------------------------- Problem
 
@@ -512,6 +521,13 @@ func renderRemedies(s *Stream, steps []Remedy, budget int, numbered bool) string
 	var b strings.Builder
 	for i, st := range steps {
 		label, cmd := Sanitise(st.Label), Sanitise(st.Cmd)
+		var words []string
+		for _, w := range st.Words {
+			words = append(words, SanitiseInline(w))
+		}
+		if len(words) > 0 {
+			cmd = strings.Join(words, " ")
+		}
 		prefix := strings.Repeat(" ", indent)
 		if numbered {
 			prefix += Pad(fmt.Sprintf("%d.", i+1), numberWidth)
@@ -525,10 +541,14 @@ func renderRemedies(s *Stream, steps []Remedy, budget int, numbered bool) string
 					b.WriteString(strings.Repeat(" ", indent+numberWidth) + line + "\n")
 				}
 			}
-			// Wrapped, not truncated: §4.4's precedence rule says the width
-			// contract wins, and a hard break beats silently losing the tail of
-			// a command the operator is meant to paste.
-			for _, line := range wrapIndent(cmd, indent+numberWidth, budget) {
+			cmdLines := wrapWords(words, indent+numberWidth, budget)
+			if len(words) == 0 {
+				// Wrapped, not truncated: §4.4's precedence rule says the
+				// width contract wins, and a hard break beats silently losing
+				// the tail of a command the operator is meant to paste.
+				cmdLines = wrapIndent(cmd, indent+numberWidth, budget)
+			}
+			for _, line := range cmdLines {
 				b.WriteString(s.paint(RoleAccent, line) + "\n")
 			}
 			continue
@@ -537,6 +557,33 @@ func renderRemedies(s *Stream, steps []Remedy, budget int, numbered bool) string
 			s.paint(RoleAccent, cmd) + "\n")
 	}
 	return b.String()
+}
+
+// wrapWords lays a command given as shell words out from indent within w,
+// breaking between words only: each broken line ends with " \", a POSIX line
+// continuation, so that the lines paste as one command, and the lines after
+// the first are indented by two more. A word is never broken, and one wider
+// than its line stays whole on a line of its own.
+func wrapWords(words []string, indent, w int) []string {
+	if len(words) == 0 {
+		return nil
+	}
+	first, rest := strings.Repeat(" ", indent), strings.Repeat(" ", indent+2)
+	var out []string
+	line := first + words[0]
+	for i := 1; i < len(words); i++ {
+		if tail := strings.Join(words[i:], " "); W(line)+1+W(tail) <= w {
+			line += " " + tail
+			break
+		}
+		if W(line)+1+W(words[i])+2 <= w {
+			line += " " + words[i]
+			continue
+		}
+		out = append(out, line+" \\")
+		line = rest + words[i]
+	}
+	return append(out, line)
 }
 
 // ------------------------------------------------------------------- Empty
