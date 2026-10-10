@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -433,11 +434,18 @@ const (
 // does so with a child that dies at once, and =after runs one task to its
 // end and then waits five seconds with Run returned. =after-pipe writes to
 // stdout after Run returned, and =dead-pipe fails its task off a terminal
-// once stderr's reader is gone; neither waits for a signal.
+// once stderr's reader is gone; neither waits for a signal. =after-prompt
+// is =log after what a prompt does first: asking for SIGINT and stopping.
 func TestRunSIGINTChild(t *testing.T) {
 	mode := os.Getenv(sigintChildEnv)
 	if mode == "" {
 		t.Skip("child half of TestSIGINT; runs only in the subprocess")
+	}
+	if mode == "after-prompt" {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		signal.Stop(c)
+		mode = "log"
 	}
 	if mode == "after-pipe" {
 		r := newRunner(NewStreamAt(stdWriter{err: true}, 80, false, ColourNone, false))
@@ -705,7 +713,8 @@ var interruptedPlain = regexp.MustCompile(`^~ Starting container\n✗ Starting c
 // queue is drained the same way, in plain lines; so it is for SIGTERM sent
 // to the process alone. Once Run has returned SIGINT kills as it always
 // did. A process started with SIGINT ignored catches nothing, and its task
-// runs to the end.
+// runs to the end — also after a prompt has asked for SIGINT, which clears
+// the runtime's record that it was ignored.
 func TestSIGINT(t *testing.T) {
 	t.Run("the log", func(t *testing.T) {
 		status, stderr, survived := runSIGINTChild(t, "log", false)
@@ -768,16 +777,22 @@ func TestSIGINT(t *testing.T) {
 			t.Errorf("the process ended with %v; want death by SIGINT\n%s", status, stderr)
 		}
 	})
-	t.Run("SIGINT ignored", func(t *testing.T) {
-		status, stderr, survived := runSIGINTChild(t, "log", true)
-		if status.Signaled() || status.ExitStatus() != 0 {
-			t.Errorf("the process ended with %v; want exit 0\n%s", status, stderr)
+	for _, mode := range []string{"log", "after-prompt"} {
+		name := "SIGINT ignored"
+		if mode == "after-prompt" {
+			name += ", after a prompt asked for it"
 		}
-		if strings.Contains(stderr, "interrupted") || !strings.Contains(stderr, "✓ Starting container") {
-			t.Errorf("the task did not run to the end:\n%q", stderr)
-		}
-		if !survived {
-			t.Error("the child did not write its marker")
-		}
-	})
+		t.Run(name, func(t *testing.T) {
+			status, stderr, survived := runSIGINTChild(t, mode, true)
+			if status.Signaled() || status.ExitStatus() != 0 {
+				t.Errorf("the process ended with %v; want exit 0\n%s", status, stderr)
+			}
+			if strings.Contains(stderr, "interrupted") || !strings.Contains(stderr, "✓ Starting container") {
+				t.Errorf("the task did not run to the end:\n%q", stderr)
+			}
+			if !survived {
+				t.Error("the child did not write its marker")
+			}
+		})
+	}
 }
