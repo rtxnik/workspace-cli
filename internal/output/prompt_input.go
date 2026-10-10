@@ -39,12 +39,16 @@ import (
 // process, and the terminal, cooked, needs nothing restored.
 func (p *prompter) askAccessible(f *huh.Form) error {
 	in := &lineRecorder{r: p.input}
-	f.WithAccessible(true).WithOutput(p.stream).WithInput(in)
+	out := io.Writer(p.stream)
+	if mutants.PromptDrawnOnStdout {
+		out = Out()
+	}
+	f.WithAccessible(true).WithOutput(out).WithInput(in)
 	panicked, err := recovered(f.Run)
 	switch {
 	case in.failed != nil:
 		return fmt.Errorf("prompt failed: %w", in.failed)
-	case in.ended:
+	case in.ended && !mutants.PromptEOFIsAnswer:
 		return &Cancelled{Signal: os.Interrupt}
 	case panicked != nil:
 		return fmt.Errorf("prompt failed: %v", panicked)
@@ -84,7 +88,7 @@ type lineRecorder struct {
 }
 
 func (l *lineRecorder) Read(p []byte) (int, error) {
-	if l.ended || l.failed != nil {
+	if l.ended && !mutants.PromptEOFNotLatched || l.failed != nil {
 		return 0, io.EOF
 	}
 	if len(l.pending) == 0 {

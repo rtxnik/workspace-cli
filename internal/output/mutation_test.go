@@ -769,6 +769,29 @@ func contractMutants() []contractMutant {
 			apply: func(m *mutantSwitches) { m.PromptWatchdogNeverFires = true },
 			probe: probePromptWatchdog,
 		},
+		{
+			name: "screen_reader_end_of_input_read_as_answer",
+			spec: "phase 6 §4.3",
+			defect: "the screen-reader mode reads the end of input as an answer — huh's default, or what was typed " +
+				"without Enter — so `TERM=dumb ws ssh` with nothing typed enters the first workspace",
+			apply: func(m *mutantSwitches) { m.PromptEOFIsAnswer = true },
+			probe: probeScreenReaderEOF,
+		},
+		{
+			name: "screen_reader_end_of_input_not_latched",
+			spec: "phase 6 §4.3",
+			defect: "the screen-reader mode reads stdin again after its end of input, so a Ctrl-D at the wizard's " +
+				"first field leaves it waiting at the second",
+			apply: func(m *mutantSwitches) { m.PromptEOFNotLatched = true },
+			probe: probeScreenReaderLatch,
+		},
+		{
+			name:   "screen_reader_prompt_on_stdout",
+			spec:   "phase 6 §4.3",
+			defect: "the screen-reader mode draws its prompt on stdout, huh's default, into the answer a script reads",
+			apply:  func(m *mutantSwitches) { m.PromptDrawnOnStdout = true },
+			probe:  probeScreenReaderStream,
+		},
 	}
 }
 
@@ -788,7 +811,8 @@ func TestContractMutationHarness(t *testing.T) {
 	// their §4.7 behaviour when the first registry landed, so a probe over
 	// them would have been red at that point's own acceptance gate.
 	clean := map[string]string{}
-	for _, p := range append(append(append(contractProbes(), messageProbes()...), runnerProbes()...), promptProbes()...) {
+	probes := append(append(contractProbes(), messageProbes()...), runnerProbes()...)
+	for _, p := range append(append(probes, promptProbes()...), screenReaderProbes()...) {
 		r := newResults()
 		clean[p.name] = p.run(t, r)
 		if r.any() {

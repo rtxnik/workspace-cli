@@ -3,6 +3,7 @@ package output
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -215,6 +216,75 @@ func TestScreenReaderHuhErrorFails(t *testing.T) {
 	if err := accessibleCore(t, strings.NewReader("x\n"), io.Discard).ask(form); !errors.Is(err, huh.ErrTimeoutUnsupported) {
 		t.Errorf("a timeout in the screen-reader mode: %v; want a failed prompt carrying huh's error", err)
 	}
+}
+
+// screenReaderProbes is the screen-reader mode's contract, planted against
+// by TestContractMutationHarness in mutation_test.go and run clean by
+// TestScreenReaderContract.
+func screenReaderProbes() []contractProbe {
+	return []contractProbe{probeScreenReaderEOF, probeScreenReaderLatch, probeScreenReaderStream}
+}
+
+// TestScreenReaderContract runs the screen-reader mode's probes on the
+// shipped code.
+func TestScreenReaderContract(t *testing.T) {
+	for _, p := range screenReaderProbes() {
+		t.Run(p.name, func(t *testing.T) {
+			r := newResults()
+			p.run(t, r)
+			r.report(t)
+		})
+	}
+}
+
+// probeScreenReaderEOF: text ended by the end of input, not by Enter, is a
+// cancellation, not the answer huh scans out of it.
+var probeScreenReaderEOF = contractProbe{
+	name: "screen_reader_end_of_input",
+	spec: "phase 6 §4.1",
+	what: "in the screen-reader mode, n then the end of input is a Cancelled by SIGINT, not the answer",
+	run: func(t *testing.T, r *results) string {
+		ok, err := accessibleCore(t, strings.NewReader("n"), io.Discard).confirm("Delete?", "")
+		if cancelledBy(err) != os.Interrupt {
+			r.fail("screen_reader_end_of_input", "n then the end of input returned (%t, %v); want a Cancelled by SIGINT", ok, err)
+		}
+		return fmt.Sprintf("%t %v", ok, err)
+	},
+}
+
+// probeScreenReaderLatch: a terminal's end of input is not sticky, and the
+// form ends at the first one, reading nothing after it.
+var probeScreenReaderLatch = contractProbe{
+	name: "screen_reader_latch",
+	spec: "phase 6 §4.1",
+	what: "in the screen-reader mode, nothing is read from stdin after its first end of input",
+	run: func(t *testing.T, r *results) string {
+		var w wizardShaped
+		in := &scriptedReader{steps: []readStep{{"2\n", nil}, {"", io.EOF}, {"jq\n", nil}, {"0\n", nil}, {"y\n", nil}}}
+		err := accessibleCore(t, in, io.Discard).ask(w.form())
+		if in.readsPastIt != 0 {
+			r.fail("screen_reader_latch", "stdin was read %d time(s) after its end of input", in.readsPastIt)
+		}
+		return fmt.Sprintf("reads after the end %d, %v", in.readsPastIt, err)
+	},
+}
+
+// probeScreenReaderStream: the prompt is drawn on the stream the core is
+// given, never on stdout.
+var probeScreenReaderStream = contractProbe{
+	name: "screen_reader_stream",
+	spec: "phase 6 §4.1",
+	what: "in the screen-reader mode the prompt is drawn on its stream, and stdout stays empty",
+	run: func(t *testing.T, r *results) string {
+		var drawn syncBuffer
+		stdout, _ := capture(t, func() {
+			_, _ = accessibleCore(t, strings.NewReader("y\n"), &drawn).confirm("Delete?", "")
+		})
+		if stdout != "" || drawn.String() == "" {
+			r.fail("screen_reader_stream", "the prompt wrote %q to stdout and %q to its stream", stdout, drawn.String())
+		}
+		return fmt.Sprintf("stdout %q, drawn %t", stdout, drawn.String() != "")
+	},
 }
 
 // TestScreenReaderDrawsOnItsStream: the prompt is written to the stream the
