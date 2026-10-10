@@ -154,6 +154,13 @@ func (p *prompter) confirm(title, description string) (bool, error) {
 		Negative("No").
 		Value(&yes)
 	if err := p.ask(huh.NewForm(huh.NewGroup(field)).WithShowHelp(false)); err != nil {
+		if mutants.PromptNoTerminalIsNo && errors.Is(err, ErrNoTTY) {
+			return false, nil
+		}
+		var c *Cancelled
+		if mutants.PromptCancelledIsNo && errors.As(err, &c) {
+			return false, nil
+		}
 		return false, err
 	}
 	return yes, nil
@@ -271,7 +278,7 @@ func (p *prompter) askNormal(f *huh.Form) error {
 	stop()
 	sig := rec.outcome()
 	switch {
-	case sig != nil:
+	case sig != nil && (!mutants.PromptSIGTERMIsAnswer || sig != syscall.SIGTERM):
 		return &Cancelled{Signal: sig}
 	case panicked != nil:
 		return fmt.Errorf("prompt failed: %v", panicked)
@@ -360,7 +367,7 @@ func (p *prompter) record(sigs <-chan os.Signal, restore func() error) *recorder
 				if sig == syscall.SIGHUP {
 					r.hangup = true
 				}
-				if armed == nil || sig == syscall.SIGHUP && armed != syscall.SIGHUP {
+				if !mutants.PromptWatchdogNeverFires && (armed == nil || sig == syscall.SIGHUP && armed != syscall.SIGHUP) {
 					armed = sig
 					fire = time.After(p.graceFor(sig))
 				}

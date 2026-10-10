@@ -737,6 +737,38 @@ func contractMutants() []contractMutant {
 			apply: func(m *mutantSwitches) { m.IgnoreCJKTag = true },
 			probe: probeGlyphMode,
 		},
+		{
+			name: "prompt_no_terminal_read_as_no",
+			spec: "phase 6 §4.3",
+			defect: "a Confirm that could not ask returns the operator's \"no\", so `ws delete ops` in CI prints " +
+				"Aborted and exits 0",
+			apply: func(m *mutantSwitches) { m.PromptNoTerminalIsNo = true },
+			probe: probePromptNoTerminal,
+		},
+		{
+			name: "prompt_cancellation_read_as_no",
+			spec: "phase 6 §4.3",
+			defect: "a Confirm a Ctrl-C or a signal cancelled returns \"no\", so the process exits 0 with Aborted " +
+				"instead of dying of the signal",
+			apply: func(m *mutantSwitches) { m.PromptCancelledIsNo = true },
+			probe: probePromptCancellation,
+		},
+		{
+			name: "prompt_sigterm_read_as_answer",
+			spec: "phase 6 §4.3",
+			defect: "a SIGTERM that arrives as the form quits is read as the operator's answer, so `ws ssh` enters " +
+				"the highlighted workspace",
+			apply: func(m *mutantSwitches) { m.PromptSIGTERMIsAnswer = true },
+			probe: probePromptSIGTERM,
+		},
+		{
+			name: "prompt_watchdog_never_fires",
+			spec: "phase 6 §4.3",
+			defect: "a recorded signal arms no watchdog, so a run Bubble Tea's handler hung keeps the process " +
+				"alive and the terminal raw",
+			apply: func(m *mutantSwitches) { m.PromptWatchdogNeverFires = true },
+			probe: probePromptWatchdog,
+		},
 	}
 }
 
@@ -756,7 +788,7 @@ func TestContractMutationHarness(t *testing.T) {
 	// their §4.7 behaviour when the first registry landed, so a probe over
 	// them would have been red at that point's own acceptance gate.
 	clean := map[string]string{}
-	for _, p := range append(append(contractProbes(), messageProbes()...), runnerProbes()...) {
+	for _, p := range append(append(append(contractProbes(), messageProbes()...), runnerProbes()...), promptProbes()...) {
 		r := newResults()
 		clean[p.name] = p.run(t, r)
 		if r.any() {

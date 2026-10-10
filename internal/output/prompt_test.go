@@ -690,6 +690,107 @@ func TestSaveStdinStateRestores(t *testing.T) {
 	}
 }
 
+// ------------------------------------------------- the core's contract probes
+
+// promptProbes is the prompt core's contract, planted against by
+// TestContractMutationHarness in mutation_test.go and run clean by
+// TestPromptContract.
+func promptProbes() []contractProbe {
+	return []contractProbe{probePromptNoTerminal, probePromptCancellation, probePromptSIGTERM, probePromptWatchdog}
+}
+
+// TestPromptContract runs the prompt core's probes on the shipped code.
+func TestPromptContract(t *testing.T) {
+	for _, p := range promptProbes() {
+		t.Run(p.name, func(t *testing.T) {
+			r := newResults()
+			p.run(t, r)
+			r.report(t)
+		})
+	}
+}
+
+// probePromptNoTerminal: a Confirm with no terminal returns ErrNoTTY, not
+// the operator's "no".
+var probePromptNoTerminal = contractProbe{
+	name: "prompt_no_terminal",
+	spec: "phase 6 §4.1",
+	what: "a Confirm with no terminal returns ErrNoTTY, not the operator's no",
+	run: func(t *testing.T, r *results) string {
+		p := coreFor(make(chan os.Signal, 3), func(*huh.Form) error { return nil })
+		p.ready = func() error { return promptReady(false, true) }
+		ok, err := p.confirm("Delete?", "")
+		if !errors.Is(err, ErrNoTTY) {
+			r.fail("prompt_no_terminal", "a Confirm with no terminal returned (%t, %v); want ErrNoTTY", ok, err)
+		}
+		return fmt.Sprintf("%t %v", ok, err)
+	},
+}
+
+// probePromptCancellation: a Confirm a SIGINT cancelled returns a Cancelled,
+// not the operator's "no".
+var probePromptCancellation = contractProbe{
+	name: "prompt_cancellation",
+	spec: "phase 6 §4.1",
+	what: "a Confirm cancelled by a SIGINT returns a Cancelled by it, not the operator's no",
+	run: func(t *testing.T, r *results) string {
+		sigs := make(chan os.Signal, 3)
+		ok, err := coreFor(sigs, func(*huh.Form) error {
+			sigs <- os.Interrupt
+			return nil
+		}).confirm("Delete?", "")
+		if cancelledBy(err) != os.Interrupt {
+			r.fail("prompt_cancellation", "a Confirm cancelled by SIGINT returned (%t, %v); want a Cancelled by it", ok, err)
+		}
+		return fmt.Sprintf("%t %v", ok, err)
+	},
+}
+
+// probePromptSIGTERM: a SIGTERM recorded on a run that reports the form
+// completed — the race with the operator's Enter — cancels the prompt.
+var probePromptSIGTERM = contractProbe{
+	name: "prompt_sigterm",
+	spec: "phase 6 §4.1",
+	what: "a SIGTERM recorded on a run that completed the form is a Cancelled by it, not the answer",
+	run: func(t *testing.T, r *results) string {
+		sigs := make(chan os.Signal, 3)
+		ok, err := coreFor(sigs, func(f *huh.Form) error {
+			sigs <- syscall.SIGTERM
+			f.State = huh.StateCompleted
+			return nil
+		}).confirm("Delete?", "")
+		if cancelledBy(err) != syscall.SIGTERM {
+			r.fail("prompt_sigterm", "a SIGTERM on a completed form returned (%t, %v); want a Cancelled by it", ok, err)
+		}
+		return fmt.Sprintf("%t %v", ok, err)
+	},
+}
+
+// probePromptWatchdog: a run that hangs after recording a SIGHUP is ended by
+// the watchdog, at once.
+var probePromptWatchdog = contractProbe{
+	name: "prompt_watchdog",
+	spec: "phase 6 §4.1",
+	what: "a run hung after a SIGHUP is ended by the watchdog's death by SIGHUP",
+	run: func(t *testing.T, r *results) string {
+		h := startHungRun(io.Discard, time.Hour, syscall.SIGHUP)
+		observed := "no death"
+		select {
+		case sig := <-h.died:
+			observed = "died of " + sig.String()
+		case <-time.After(2 * time.Second):
+			r.fail("prompt_watchdog", "a run hung after a SIGHUP was not ended within 2s")
+		}
+		close(h.release)
+		select {
+		case <-h.result:
+		case <-time.After(5 * time.Second):
+			r.fail("prompt_watchdog", "the core did not return after the hung run was released")
+		}
+		return observed
+	},
+}
+
 const promptChildEnv = "WS_TEST_PROMPT_CHILD"
 
 // TestPromptChild is the far side of TestPromptReadsTheStartSnapshot: two

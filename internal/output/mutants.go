@@ -165,6 +165,12 @@ type mutantSwitches struct {
 	NoMessageQueue     bool // a message is written while a task runs, under the frame
 	ResultCarriesError bool // a failed task's result line carries the error, which the root prints again
 
+	// ---------------------------------------- phase-6 §4.10 the prompt contract
+	PromptNoTerminalIsNo     bool // a Confirm that could not ask returns the operator's "no", as the bool form did
+	PromptCancelledIsNo      bool // a Confirm a signal or a Ctrl-C cancelled returns "no"
+	PromptSIGTERMIsAnswer    bool // a SIGTERM that raced the operator's Enter is read as the answer
+	PromptWatchdogNeverFires bool // a recorded signal arms no watchdog, so a run Bubble Tea hung stays hung
+
 	// ------------------------------------------- §4.7 / §4.2 / §4.5 contract
 	MessagesToStdout      bool // the message helpers write to stdout
 	FailUnwrapped         bool // Fail stops wrapping; mark, role and sanitising unchanged
