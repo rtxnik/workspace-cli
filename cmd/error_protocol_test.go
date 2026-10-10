@@ -192,6 +192,13 @@ var errorCases = []errorCase{
 func installExecuteStub(name string) {
 	switch name {
 	case "":
+	case "cancelled-sigint", "cancelled-sigterm", "cancelled-sighup":
+		sig := map[string]os.Signal{"cancelled-sigint": os.Interrupt, "cancelled-sigterm": syscall.SIGTERM,
+			"cancelled-sighup": syscall.SIGHUP}[name]
+		rootCmd.AddCommand(&cobra.Command{Use: "cancel-test", Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return fmt.Errorf("confirm: %w", &output.Cancelled{Signal: sig})
+		}})
 	case "proxy-not-ready":
 		verifyProxyReadyFn = func(config.Config) error {
 			return errors.New("stub: proxy container not inspectable")
@@ -613,6 +620,10 @@ func TestRootProtocolBranches(t *testing.T) {
 		{"wrapped silent prints the wrapper's text",
 			fmt.Errorf("context: %w", &cliErrorWithExit{code: 3, msg: ""}), "context: ", 3},
 		{"plain", errors.New("plain failure"), "plain failure", 1},
+		{"cancelled by SIGINT", &output.Cancelled{Signal: os.Interrupt}, "", 130},
+		{"wrapped cancelled by SIGTERM", fmt.Errorf("confirm: %w", &output.Cancelled{Signal: syscall.SIGTERM}), "", 143},
+		{"cancelled by SIGHUP beats a cli exit in the same chain", fmt.Errorf("%w: %w",
+			&cliErrorWithExit{code: 2, msg: "band"}, &output.Cancelled{Signal: syscall.SIGHUP}), "", 129},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			msg, code := run(c.err)
@@ -620,6 +631,29 @@ func TestRootProtocolBranches(t *testing.T) {
 				t.Errorf("run(%v) = (%q, %d); want (%q, %d)", c.err, msg, code, c.wantMsg, c.wantCode)
 			}
 		})
+	}
+}
+
+// TestRootDiesOfACancellation: in a child process, a command that returns a
+// cancelled prompt — wrapped, as a call site passes it through — ends the
+// process by the prompt's signal, the shell's death by it, with nothing on
+// stderr.
+func TestRootDiesOfACancellation(t *testing.T) {
+	for stub, want := range map[string]syscall.Signal{
+		"cancelled-sigint": syscall.SIGINT, "cancelled-sigterm": syscall.SIGTERM, "cancelled-sighup": syscall.SIGHUP,
+	} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestExecuteChildProcess$")
+		cmd.Env = append(os.Environ(), executeChildEnv+"=1", executeArgsEnv+`=["cancel-test"]`, executeStubEnv+"="+stub)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		_ = cmd.Run()
+		status, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
+		if !status.Signaled() || status.Signal() != want {
+			t.Errorf("%s: the child ended with %v; want death by %v", stub, status, want)
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("%s: the child wrote %q on stderr; want nothing", stub, stderr.String())
+		}
 	}
 }
 

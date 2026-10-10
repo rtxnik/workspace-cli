@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
@@ -70,13 +71,18 @@ func (e *cliErrorWithExit) Error() string { return e.msg }
 // run is the root's error protocol. Given what the command tree returned, it
 // decides what the root prints and what the process exits with; msg is
 // printed as a Problem's title unless err carries a Problem of its own
-// (rootProblem), and an empty msg prints nothing. Four branches and nothing
+// (rootProblem), and an empty msg prints nothing. Five branches and nothing
 // else:
 //
 //	nil                                     -> "", 0
+//	*output.Cancelled in the chain          -> "", 128 + its signal
 //	*cliErrorWithExit, err.Error() == ""    -> "", cerr.code
 //	*cliErrorWithExit, err.Error() != ""    -> err.Error(), cerr.code
 //	any other error                         -> err.Error(), 1
+//
+// A cancelled prompt prints nothing: the operator ended it, and the process
+// dies of the signal they sent (Execute); 128 + signal is only the exit
+// ExitBySignal falls back to.
 //
 // The two *cliErrorWithExit branches test and print err.Error(), not
 // cerr.msg: errors.As also finds one that another error wraps, and cerr.msg
@@ -84,6 +90,11 @@ func (e *cliErrorWithExit) Error() string { return e.msg }
 func run(err error) (msg string, code int) {
 	if err == nil {
 		return "", 0
+	}
+	var cancelled *output.Cancelled
+	if errors.As(err, &cancelled) {
+		num, _ := cancelled.Signal.(syscall.Signal)
+		return "", 128 + int(num)
 	}
 	var cerr *cliErrorWithExit
 	if errors.As(err, &cerr) {
@@ -136,12 +147,17 @@ func usageTarget(cmd *cobra.Command, err error) (target *cobra.Command, suggesti
 
 // Execute runs the command tree. An error that reaches it is printed at most
 // once, as the Problem rootProblem chooses, and the process exits with the
-// code run chose. A usage error gets its usage lines under the ✗ line.
+// code run chose. A usage error gets its usage lines under the ✗ line. A
+// cancelled prompt prints nothing and ends the process by its signal.
 func Execute() {
 	// Built here rather than at package init, so that it is built for the
 	// stream --version writes to, once that stream has been resolved.
 	rootCmd.SetVersionTemplate(versionTemplate(output.Out()))
 	cmd, err := execute(rootCmd)
+	var cancelled *output.Cancelled
+	if errors.As(err, &cancelled) {
+		output.ExitBySignal(cancelled.Signal)
+	}
 	msg, code := run(err)
 	if p, ok := rootProblem(msg, err); ok {
 		s := output.Err()
