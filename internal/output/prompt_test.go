@@ -95,16 +95,18 @@ func TestCancelledCarriesItsSignal(t *testing.T) {
 
 // ------------------------------------------------------------ the core
 
-// coreFor is a core that is ready to ask, records from sigs — stopping
-// closes it — knows no signal ignored at start, and runs forms with run.
-// Its watchdog waits a minute, restores nothing, writes into nothing and
-// dies of nothing.
+// coreFor is a core in the normal mode that is ready to ask, records from
+// sigs — stopping closes it — knows no signal ignored at start, and runs
+// forms with run. Its watchdog waits a minute, restores nothing, writes into
+// nothing and dies of nothing.
 func coreFor(sigs chan os.Signal, run func(f *huh.Form) error) *prompter {
 	return &prompter{
 		stream:   NewStreamAt(io.Discard, 80, true, ColourNone, false),
 		ready:    func() error { return nil },
 		signals:  func(...os.Signal) (<-chan os.Signal, func()) { return sigs, func() { close(sigs) } },
 		ignored:  func(os.Signal) bool { return false },
+		dumb:     func() bool { return false },
+		input:    strings.NewReader(""),
 		run:      run,
 		saveTerm: func() func() error { return func() error { return nil } },
 		die:      func(os.Signal) {},
@@ -342,13 +344,28 @@ func TestCorePanicIsAFailedPrompt(t *testing.T) {
 	}
 }
 
-// TestCoreRefusesAnEmptyForm: a form with no group — huh would return nil
-// for it, an answer to nothing — is refused with rule 4's error before
-// anything runs. (A group with no field cannot be built: huh.NewGroup
-// panics on one.)
+// TestCoreRefusesAnEmptyForm: a form with no group — huh returns nil for it
+// before it looks at the mode, an answer to nothing — is refused with rule
+// 4's error before anything runs, in both modes, TERM set for each. (A group
+// with no field cannot be built: huh.NewGroup panics on one.)
 func TestCoreRefusesAnEmptyForm(t *testing.T) {
-	if err := coreFor(make(chan os.Signal, 3), neverRuns(t)).ask(huh.NewForm()); err == nil || err.Error() != "prompt ended without an answer" {
-		t.Errorf("a form with no group: %v; want prompt ended without an answer", err)
+	for _, term := range []string{"xterm-256color", "dumb"} {
+		t.Setenv("TERM", term)
+		p := coreFor(make(chan os.Signal, 3), neverRuns(t))
+		p.dumb = termIsDumb
+		if err := p.ask(huh.NewForm()); err == nil || err.Error() != "prompt ended without an answer" {
+			t.Errorf("TERM=%s, a form with no group: %v; want prompt ended without an answer", term, err)
+		}
+	}
+}
+
+// TestTermIsDumb: the screen-reader mode is TERM=dumb's, and only its.
+func TestTermIsDumb(t *testing.T) {
+	for term, want := range map[string]bool{"dumb": true, "xterm-256color": false, "": false, "screen": false} {
+		t.Setenv("TERM", term)
+		if got := termIsDumb(); got != want {
+			t.Errorf("TERM=%q: termIsDumb() = %t; want %t", term, got, want)
+		}
 	}
 }
 
@@ -623,11 +640,16 @@ func TestWatchdogQuietWhenTheRunReturns(t *testing.T) {
 }
 
 // TestPromptCoreProductionValues: the production core's grace is the step
-// runner's second, its restore is bounded to 250 ms, and its undo sequences
-// are the cursor, bracketed paste, focus reporting and the three mouse modes.
+// runner's second, its restore is bounded to 250 ms, its undo sequences are
+// the cursor, bracketed paste, focus reporting and the three mouse modes,
+// and its screen-reader mode reads stdin.
 func TestPromptCoreProductionValues(t *testing.T) {
-	if g := newPrompter().grace; g != time.Second {
-		t.Errorf("the production grace is %v; want 1s", g)
+	p := newPrompter()
+	if p.grace != time.Second {
+		t.Errorf("the production grace is %v; want 1s", p.grace)
+	}
+	if p.input != io.Reader(os.Stdin) {
+		t.Errorf("the screen-reader mode reads %v; want os.Stdin", p.input)
 	}
 	if restoreBound != 250*time.Millisecond {
 		t.Errorf("the restore's bound is %v; want 250ms", restoreBound)

@@ -114,6 +114,10 @@ type prompter struct {
 	// ignored is the start snapshot: was the process started with sig
 	// ignored.
 	ignored func(sig os.Signal) bool
+	// dumb reports TERM=dumb: the screen-reader mode.
+	dumb func() bool
+	// input is what the screen-reader mode reads: stdin.
+	input io.Reader
 	// run runs a form in the normal mode: huh's own Run.
 	run func(f *huh.Form) error
 	// saveTerm saves stdin's terminal state and returns what restores it.
@@ -131,6 +135,8 @@ func newPrompter() *prompter {
 		ready:    PromptReady,
 		signals:  notifySignals,
 		ignored:  ignoredAtStart,
+		dumb:     termIsDumb,
+		input:    os.Stdin,
 		run:      (*huh.Form).Run,
 		saveTerm: saveStdinState,
 		die:      ExitBySignal,
@@ -183,8 +189,8 @@ func (p *prompter) choose(title string, options []SelectOption) (string, error) 
 
 // ask is the core. It refuses, writing nothing, when the predicate does — huh
 // never runs, so /dev/tty is never opened — when f holds no field to ask,
-// and inside a running step; otherwise it runs f and decides how the run
-// ended.
+// and inside a running step; otherwise it runs f in the mode TERM chooses,
+// huh's own rule made explicit, and decides how the run ended.
 func (p *prompter) ask(f *huh.Form) error {
 	if err := p.ready(); err != nil {
 		return err
@@ -195,8 +201,16 @@ func (p *prompter) ask(f *huh.Form) error {
 	if stepRunning() {
 		return errInsideRun
 	}
+	if p.dumb() {
+		return p.askAccessible(f)
+	}
 	return p.askNormal(f)
 }
+
+// termIsDumb reports TERM=dumb: a terminal that does not move its cursor —
+// a screen reader, an editor's shell buffer — on which huh switches every
+// form to its screen-reader mode.
+func termIsDumb() bool { return os.Getenv("TERM") == "dumb" }
 
 // asksSomething reports whether f holds a field to ask. huh returns nil for
 // a form with no group, before it looks at its mode, which would read as an
@@ -245,7 +259,7 @@ func (p *prompter) askNormal(f *huh.Form) error {
 	restore := p.saveTerm()
 	sigs, stop := p.signals(p.recordedSignals()...)
 	rec := p.record(sigs, restore)
-	panicked, err := p.runRecovered(f)
+	panicked, err := recovered(func() error { return p.run(f) })
 	stop()
 	sig := rec.outcome()
 	switch {
@@ -263,14 +277,14 @@ func (p *prompter) askNormal(f *huh.Form) error {
 	return nil
 }
 
-// runRecovered runs f, recovering a panic.
-func (p *prompter) runRecovered(f *huh.Form) (panicked any, err error) {
+// recovered calls run, recovering a panic.
+func recovered(run func() error) (panicked any, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = r
 		}
 	}()
-	return nil, p.run(f)
+	return nil, run()
 }
 
 // recordedSignals is what a run records: SIGINT and SIGTERM whatever their
