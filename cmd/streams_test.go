@@ -782,7 +782,7 @@ func TestWorkspaceRefusalsReturnTheirProblem(t *testing.T) {
 	} {
 		err := c.cmd.RunE(c.cmd, c.args)
 		p, ok := output.ProblemOf(err)
-		if !ok || p.Title != c.title || len(p.Steps) != 2 || p.Steps[1] != c.next {
+		if !ok || p.Title != c.title || len(p.Steps) != 2 || !reflect.DeepEqual(p.Steps[1], c.next) {
 			t.Errorf("ws %s %s returned %v (Problem %+v); want the error carrying %q with the step %+v",
 				c.cmd.Name(), c.args[0], err, p, c.title, c.next)
 		}
