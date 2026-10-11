@@ -42,8 +42,9 @@ import (
 //   - Closed. The next task starts, or Run returns.
 //
 // A signal and a panic take the same path out, from whichever state the task
-// is in. The owner catches SIGINT, SIGTERM and SIGHUP — each one that is not
-// ignored when Run starts, so `ws … &` from a script stays deaf to SIGINT —
+// is in. The owner catches SIGINT, SIGTERM and SIGHUP — each one the process
+// was not started with ignored (the start snapshot, signal.go), so `ws … &`
+// from a script stays deaf to SIGINT even after a prompt asked for it —
 // on a terminal and off it: the messages a task queued would otherwise die
 // with the process. It drains as above with the result line "✗ <title>
 // interrupted after <time>", then restores the signal's default disposition

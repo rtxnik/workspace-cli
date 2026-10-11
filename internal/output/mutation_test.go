@@ -636,8 +636,9 @@ func TestPairedAssertionCatchesWhatTheSweepCannot(t *testing.T) {
 // the corpus — the bytes do not change — and a harness that reported such a
 // mutant as killed would be certifying coverage it does not have.
 //
-// So those defects are planted against the PROBES of stream_contract_test.go
-// and message_test.go instead, on the same three rules: the probe must be
+// So those defects are planted against the PROBES of stream_contract_test.go,
+// message_test.go, run_test.go, prompt_test.go and prompt_input_test.go
+// instead, on the same three rules: the probe must be
 // green clean, the mutant must CHANGE WHAT THE PROBE OBSERVES, and the probe
 // must go red.
 
@@ -804,12 +805,14 @@ func TestContractMutationHarness(t *testing.T) {
 	// One clean run per probe: the baseline observation, and the proof that
 	// the probe is green on the shipped behaviour before anything is planted.
 	//
-	// Both registries: contractProbes() in stream_contract_test.go carries
-	// stream_identity, resolve_width and glyph_mode_selection, and
+	// Five registries: contractProbes() in stream_contract_test.go carries
+	// stream_identity, resolve_width and glyph_mode_selection;
 	// messageProbes() in message_test.go carries message_routing and
-	// fail_contract. They are separate because the message helpers did not have
-	// their §4.7 behaviour when the first registry landed, so a probe over
-	// them would have been red at that point's own acceptance gate.
+	// fail_contract; runnerProbes() the step runner's; promptProbes() in
+	// prompt_test.go and screenReaderProbes() in prompt_input_test.go the
+	// prompt core's, against which the phase-6 mutants are planted. They are
+	// separate because each layer's behaviour landed after the one before, so a
+	// probe over it would have been red at that point's own acceptance gate.
 	clean := map[string]string{}
 	probes := append(append(contractProbes(), messageProbes()...), runnerProbes()...)
 	for _, p := range append(append(probes, promptProbes()...), screenReaderProbes()...) {

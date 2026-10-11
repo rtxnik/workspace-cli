@@ -503,6 +503,10 @@ func renderPairs(s *Stream, pairs []Fact, budget int, keyRole Role) string {
 // destroys copy-paste exactly as truncation would. The width contract wins:
 // below the fold the command wraps. Commands should therefore be kept short,
 // with a long remedy expressed as a short command plus prose in Problem.Cause.
+// All of this is the Cmd path. A step given as Words is laid out by wrapWords
+// instead: broken only between words, each broken line ending in " \", so it
+// still pastes, and a word wider than its line is left whole past the budget
+// (phase-6 ruling 8).
 func renderRemedies(s *Stream, steps []Remedy, budget int, numbered bool) string {
 	const indent, gap = 2, 2
 	labelWidth := 0
