@@ -536,6 +536,10 @@ var streamsRows = []streamsRow{
 		code: 1, stderr: proxyNoTerminal("ws proxy update --force v26.2.6")},
 	{name: "ws proxy debug: workspaces connected, no terminal", args: []string{"proxy", "debug", "on"}, docker: &fakeHealthyProxy,
 		code: 1, stderr: proxyNoTerminal("ws proxy debug --force on")},
+	{name: "ws proxy debug maybe: workspaces connected", args: []string{"proxy", "debug", "maybe"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: "✗ usage: ws proxy debug <on|off>\n"},
+	{name: "ws proxy debug maybe: no docker", args: []string{"proxy", "debug", "maybe"},
+		code: 1, stderr: "✗ usage: ws proxy debug <on|off>\n"},
 	{name: "ws proxy restart --force: no docker, no terminal", args: []string{"proxy", "restart", "--force"}, code: 1,
 		stderr: "✗ proxy restart failed: stop proxy: Cannot connect to the Docker daemon at\n" +
 			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +

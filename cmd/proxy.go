@@ -280,22 +280,24 @@ var proxyDebugCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		cfg := config.Load()
-		force, _ := cmd.Flags().GetBool("force")
-		if !force {
-			if proceed, err := confirmProxyMutation(cmd, cfg); !proceed {
-				return err
-			}
-		}
-		mode := args[0]
 
+		// The mode is checked before the gate, so that a wrong one is said
+		// whatever the proxy's state, and never asked about.
 		var level string
-		switch mode {
+		switch args[0] {
 		case "on":
 			level = "debug"
 		case "off":
 			level = "warning"
 		default:
 			return errors.New("usage: ws proxy debug <on|off>")
+		}
+
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			if proceed, err := confirmProxyMutation(cmd, cfg); !proceed {
+				return err
+			}
 		}
 
 		if err := setXrayLogLevel(cfg, level); err != nil {
