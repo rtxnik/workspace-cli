@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
-	"github.com/mattn/go-isatty"
 	"github.com/rtxnik/workspace-cli/internal/config"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/profile"
@@ -98,8 +96,10 @@ var profileCreateCmd = &cobra.Command{
 			return fmt.Errorf("profile %q already exists", name)
 		}
 
-		// Non-interactive path: flags were explicitly provided.
-		if cmd.Flags().Changed("image") || !isatty.IsTerminal(os.Stdin.Fd()) {
+		// Non-interactive path: --image given, or no terminal to ask on —
+		// stdin or stderr, where the wizard would draw — which skips the
+		// wizard rather than refusing.
+		if cmd.Flags().Changed("image") || promptReadyFn() != nil {
 			baseImage, _ := cmd.Flags().GetString("image")
 			dind, _ := cmd.Flags().GetBool("docker-in-docker")
 			opts := profile.CreateOpts{
@@ -115,9 +115,9 @@ var profileCreateCmd = &cobra.Command{
 		}
 
 		// Interactive wizard.
-		opts, ok := runProfileWizard(name)
-		if !ok {
-			return nil
+		opts, ok, err := runProfileWizard(name)
+		if err != nil || !ok {
+			return err
 		}
 		if err := profile.Create(cfg, opts); err != nil {
 			return err
@@ -160,16 +160,26 @@ func profileSummary(name, image, packages string, tools []string, dind bool) out
 	return output.KV{Title: "Profile summary", Pairs: pairs}
 }
 
-// runProfileWizard walks the operator through a new profile's settings. ok is
-// false when the operator backed out or the form could not run — a blank
-// line after the first form, "Aborted" after the final confirmation — the
-// caller returns nil, and the process exits 0.
-func runProfileWizard(name string) (profile.CreateOpts, bool) {
+// wizardFormFn runs the profile-create wizard's form and wizardConfirmFn asks
+// its final question, through the prompt core: the form takes the layer's
+// theme, and a run that does not answer comes back as the contract's error.
+// Test seams, so that the wizard is driven without a terminal.
+var (
+	wizardFormFn    = output.RunForm
+	wizardConfirmFn = output.Confirm
+)
+
+// runProfileWizard walks the operator through a new profile's settings: the
+// options, with ok; ok false and no error when the operator said no to the
+// final question — "Aborted" has been printed and the process exits 0; or
+// the error of the form or the question that did not answer — a
+// cancellation, which the root dies of, or a failure — with nothing printed
+// of its own after the summary.
+func runProfileWizard(name string) (profile.CreateOpts, bool, error) {
 	var baseImage string
 	var packages string
 	var selectedTools []string
 	var dind bool
-	var confirmed bool
 
 	// Step 1: Base image.
 	form := huh.NewForm(
@@ -198,9 +208,8 @@ func runProfileWizard(name string) (profile.CreateOpts, bool) {
 		),
 	)
 
-	if err := form.Run(); err != nil {
-		fmt.Fprintln(os.Stderr)
-		return profile.CreateOpts{}, false
+	if err := wizardFormFn(form); err != nil {
+		return profile.CreateOpts{}, false, err
 	}
 
 	// The summary belongs to the confirmation that follows, so it goes to
@@ -208,14 +217,13 @@ func runProfileWizard(name string) (profile.CreateOpts, bool) {
 	errs := output.Err()
 	_, _ = fmt.Fprintf(errs, "\n%s\n\n", profileSummary(name, baseImage, packages, selectedTools, dind).Render(errs))
 
-	if err := huh.NewConfirm().
-		Title("Create this profile?").
-		Affirmative("Yes").
-		Negative("No").
-		Value(&confirmed).
-		Run(); err != nil || !confirmed {
+	confirmed, err := wizardConfirmFn("Create this profile?", "")
+	if err != nil {
+		return profile.CreateOpts{}, false, err
+	}
+	if !confirmed {
 		output.Info("Aborted")
-		return profile.CreateOpts{}, false
+		return profile.CreateOpts{}, false, nil
 	}
 
 	// Build opts.
@@ -236,7 +244,7 @@ func runProfileWizard(name string) (profile.CreateOpts, bool) {
 		}
 	}
 
-	return opts, true
+	return opts, true, nil
 }
 
 // profileDeleteConfirmFn asks before ws profile-delete removes a profile: the
