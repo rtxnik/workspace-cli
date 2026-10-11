@@ -9,6 +9,10 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// confirmNoTerminal is the title of the Problem a confirmation gives when it
+// could not ask.
+const confirmNoTerminal = "Cannot ask for confirmation: no terminal"
+
 // promptProblem is what a command returns when its prompt could not ask: err
 // is output.ErrNoTTY's, and the Problem says what could not happen (title),
 // names the stream that is not a terminal (its cause), and gives as its step

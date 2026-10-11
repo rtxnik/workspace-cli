@@ -275,6 +275,11 @@ var stopCmd = &cobra.Command{
 	},
 }
 
+// deleteConfirmFn asks before ws delete removes a workspace: the operator's
+// answer, or the contract's error. A test seam, so that every outcome of the
+// prompt is driven without a terminal.
+var deleteConfirmFn = output.ConfirmDestructive
+
 var deleteCmd = &cobra.Command{
 	Use:         "delete <name>",
 	Aliases:     []string{"rm"},
@@ -302,9 +307,13 @@ var deleteCmd = &cobra.Command{
 		}
 
 		force, _ := cmd.Flags().GetBool("force")
-		if !confirmDestructiveFn(force,
+		ok, err := deleteConfirmFn(force,
 			fmt.Sprintf("Delete workspace %q?", name),
-			"This will remove the workspace and its local files.") {
+			"This will remove the workspace and its local files.")
+		if err != nil {
+			return promptProblem(cmd, args, err, confirmNoTerminal, "force")
+		}
+		if !ok {
 			output.Info("Aborted")
 			return nil
 		}

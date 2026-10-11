@@ -316,6 +316,17 @@ var streamsRows = []streamsRow{
 				t.Errorf("the workspace directory is still there: %v", err)
 			}
 		}},
+	{name: "ws delete: no terminal", args: []string{"delete", "ops"}, code: 1, stderr: deleteNoTerminal,
+		after: workspaceKept("ops")},
+	{name: "ws delete: no terminal, TERM=dumb", args: []string{"delete", "ops"}, env: []string{"TERM=dumb"}, code: 1,
+		stderr: deleteNoTerminal, after: workspaceKept("ops")},
+	{name: "ws delete --force: no terminal", args: []string{"delete", "--force", "ops"},
+		stderr: "~ Deleting workspace \"ops\"\n✓ Deleting workspace \"ops\"  <t>\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, "workspaces", "ops")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the workspace directory is still there: %v", err)
+			}
+		}},
 	{name: "ws proxy check: no daemon", args: []string{"proxy", "check"}, code: 1,
 		stdout: "Proxy prerequisites\n" +
 			"  ✗ failed    Docker running\n" +
@@ -601,6 +612,24 @@ const deleteNotFound = "✗ Workspace \"nosuch\" not found\n" +
 	"\n" +
 	"  1. List workspaces        ws list\n" +
 	"  2. Remove it from devpod  devpod delete nosuch\n"
+
+// deleteNoTerminal is what ws delete ops prints when it cannot ask: the
+// child's stdin is the null device and its stderr a pipe.
+const deleteNoTerminal = "✗ Cannot ask for confirmation: no terminal\n" +
+	"  stdin and stderr are not terminals\n" +
+	"\n" +
+	"  1. Skip the prompt  ws delete --force ops\n"
+
+// workspaceKept is the after of a row that must leave the workspace name
+// where it was.
+func workspaceKept(name string) func(t *testing.T, fx streamsFixture) {
+	return func(t *testing.T, fx streamsFixture) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(fx.home, "workspaces", name)); err != nil {
+			t.Errorf("the workspace directory of %s is gone: %v", name, err)
+		}
+	}
+}
 
 func TestStreams(t *testing.T) {
 	for _, row := range streamsRows {
