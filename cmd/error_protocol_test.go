@@ -87,7 +87,9 @@ type errorCase struct {
 	legacyXray bool
 }
 
-// errorCases covers the five branches of the root protocol, the argument
+// errorCases covers four of the root protocol's five branches — the fifth, a
+// cancellation, whose child dies of its signal, is TestRootDiesOfACancellation's
+// — the argument
 // and runtime halves of the usage distinction, a failed step, whose error
 // the spinner used to print a second time, and every helper and in-body exit
 // that phase 1 moves onto a returned value and a hermetic process can reach.
@@ -376,14 +378,13 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	// the 30s deadline above.
 	cmd.WaitDelay = 5 * time.Second
 	// Setsid, so the child has no controlling terminal. Its stdin is the null
-	// device, which the prompt core refuses before huh runs; were that
-	// refusal to regress, huh's terminal layer would answer the null stdin by
-	// opening /dev/tty instead — which, when `go test` is run from a real
-	// terminal, is the developer's — and the selector case would draw a live
-	// prompt there. The
-	// 45 s timeout panic under `script -qec` was measured before the
-	// per-case 30 s deadline below existed; with the deadline, the same
-	// regression fails the case by name after 30 s instead.
+	// device, which the prompt core refuses before huh runs. Were that
+	// refusal to regress, huh would open /dev/tty instead: without a new
+	// session that is the developer's terminal when `go test` runs from one,
+	// and the selector case would draw a live prompt there (a 45 s timeout
+	// panic was once measured under `script -qec`). In a new session the open
+	// fails at once and the case fails by name; the per-case 30 s deadline
+	// above bounds any other block.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	// The environment is built, not inherited: a COLUMNS, NO_COLOR, CI or
 	// VAULT_AI_REPO_ROOT in the developer's shell must not reach the case.

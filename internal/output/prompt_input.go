@@ -36,7 +36,9 @@ import (
 //
 // No signal is recorded in this mode: the line read blocks and nothing
 // interrupts it, so a Ctrl-C is a real SIGINT whose default action ends the
-// process, and the terminal, cooked, needs nothing restored.
+// process, and the terminal, cooked, needs nothing restored — unless the
+// process was started with SIGINT ignored: it stays ignored, and Ctrl-D
+// cancels with exit 130 (spec E-09).
 //
 // huh draws through a latchedWriter: once the recorder has latched, huh
 // still goes through every field it has left, drawing each before its read
