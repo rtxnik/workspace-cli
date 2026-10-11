@@ -170,7 +170,7 @@ Overall: yellow (exit 1)
 
 ### ws vault doctor
 
-**Purpose.** Self-diagnose common failures: orphan MCP subprocess, stale lock files, missing token, broken token-fd-pass, qdrant container liveness. **Read-only by default** per memory `feedback_no_auto_state_mutation`. (CLI-10; Phase 18 Plan 18-05.)
+**Purpose.** Self-diagnose common failures: orphan MCP subprocess, stale lock files, missing token, broken token-fd-pass, cross-repo contract drift. **Read-only by default** per memory `feedback_no_auto_state_mutation`. (CLI-10; Phase 18 Plan 18-05.)
 
 **Flags.** `--kill-orphans` (opt-in mutation; asks for confirmation unless `--yes`); `--clear-stale-locks` (likewise); `--yes` (skip confirmation for the two mutation flags; needed without a terminal, where the doctor otherwise refuses before running any check: exit 1, stdout empty); `--json` (NDJSON, one check record per line). Without mutation flags, doctor diagnoses + prints remediation; doctor does not heal silently. Enforced by `TestVaultDoctorReadOnlyByDefault` tripwire.
 

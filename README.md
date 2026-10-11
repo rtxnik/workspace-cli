@@ -129,7 +129,7 @@ Key parameters:
 
 `ws profile-create` skips its wizard without a terminal and creates the profile from its flags.
 
-At a terminal, answering no prints `Aborted` and exits 0. Ctrl-C at a question ends `ws` by SIGINT (a shell reports 130), and SIGTERM and SIGHUP end it by their signals; after a hang-up the terminal's settings are restored. Under `TERM=dumb` — a screen reader, an editor's shell buffer — questions stay interactive, drawn as plain lines on stderr, and Ctrl-D cancels a question rather than taking its default.
+At a terminal, answering no prints `Aborted` and exits 0 — `ws vault doctor` keeps its report's exit code. Ctrl-C at a question ends `ws` by SIGINT (a shell reports 130), and SIGTERM and SIGHUP end it by their signals; after a hang-up the terminal's settings are restored. Under `TERM=dumb` — a screen reader, an editor's shell buffer — questions stay interactive, drawn as plain lines on stderr, and Ctrl-D cancels a question rather than taking its default.
 
 ## Configuration
 
