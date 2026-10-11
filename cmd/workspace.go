@@ -20,10 +20,6 @@ import (
 
 var wsAnnotation = map[string]string{"group": "workspace"}
 
-// confirmDestructiveFn gates every destructive delete; a test seam so
-// confirmation outcomes are driven deterministically without a terminal.
-var confirmDestructiveFn = output.ConfirmDestructiveBool
-
 var newCmd = &cobra.Command{
 	Use:         "new <name> [profile]",
 	Short:       "Create a new workspace",

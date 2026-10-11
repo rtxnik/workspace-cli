@@ -340,6 +340,23 @@ var streamsRows = []streamsRow{
 				t.Errorf("the profile directory is still there: %v", err)
 			}
 		}},
+	{name: "ws proxy profile rm: no terminal", args: []string{"proxy", "profile", "rm", "backup-nl"}, code: 1,
+		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
+			"  stdin and stderr are not terminals\n" +
+			"\n" +
+			"  1. Skip the prompt  ws proxy profile rm --force backup-nl\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, ".config", "xray", "profiles", "backup-nl.json")); err != nil {
+				t.Errorf("the proxy profile backup-nl is gone: %v", err)
+			}
+		}},
+	{name: "ws proxy profile rm --force: no terminal", args: []string{"proxy", "profile", "rm", "--force", "backup-nl"},
+		stderr: "✓ Profile \"backup-nl\" removed\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, ".config", "xray", "profiles", "backup-nl.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the proxy profile backup-nl is still there: %v", err)
+			}
+		}},
 	{name: "ws proxy check: no daemon", args: []string{"proxy", "check"}, code: 1,
 		stdout: "Proxy prerequisites\n" +
 			"  ✗ failed    Docker running\n" +

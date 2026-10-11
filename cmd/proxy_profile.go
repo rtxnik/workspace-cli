@@ -254,6 +254,11 @@ Use --no-reload to perform only the symlink swap (advanced — operator must run
 	},
 }
 
+// profileRmConfirmFn asks before ws proxy profile rm removes a profile: the
+// operator's answer, or the contract's error. A test seam, so that every
+// outcome of the prompt is driven without a terminal.
+var profileRmConfirmFn = output.ConfirmDestructive
+
 var profileRmCmd = &cobra.Command{
 	Use:         "rm <name>",
 	Short:       "Remove a profile (refuses active)",
@@ -265,7 +270,11 @@ var profileRmCmd = &cobra.Command{
 		name := args[0]
 		force, _ := cmd.Flags().GetBool("force")
 		desc := fmt.Sprintf("Profile file %s will be deleted.", filepath.Join(cfg.XrayProfilesDir, name+".json"))
-		if !confirmDestructiveFn(force, fmt.Sprintf("Remove profile %q?", name), desc) {
+		ok, err := profileRmConfirmFn(force, fmt.Sprintf("Remove profile %q?", name), desc)
+		if err != nil {
+			return promptProblem(cmd, args, err, confirmNoTerminal, "force")
+		}
+		if !ok {
 			output.Info("Aborted")
 			return nil
 		}

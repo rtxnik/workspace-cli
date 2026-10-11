@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
@@ -231,6 +232,100 @@ func resetProfileUseFlags(t *testing.T) {
 	if f := profileCmd.PersistentFlags().Lookup("no-migrate"); f != nil {
 		_ = f.Value.Set("false")
 		f.Changed = false
+	}
+}
+
+// stubProfileRmConfirm makes ws proxy profile rm's prompt answer ok and err.
+func stubProfileRmConfirm(t *testing.T, ok bool, err error) {
+	t.Helper()
+	orig := profileRmConfirmFn
+	profileRmConfirmFn = func(_ bool, _, _ string) (bool, error) { return ok, err }
+	t.Cleanup(func() { profileRmConfirmFn = orig })
+}
+
+// withXrayProfile points the configuration at an xray directory of the
+// test's own that holds the profile name, its migration stubbed out, and
+// returns the profile's file.
+func withXrayProfile(t *testing.T, name string) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("XRAY_CONFIG", filepath.Join(root, "config.json"))
+	t.Setenv("XRAY_PROFILES_DIR", filepath.Join(root, "profiles"))
+	file := filepath.Join(root, "profiles", name+".json")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orig := ensureMigratedFn
+	ensureMigratedFn = func(config.Config, bool) error { return nil }
+	t.Cleanup(func() { ensureMigratedFn = orig })
+	return file
+}
+
+// Declining the removal exits 0, says Aborted and removes nothing.
+func TestProfileRmDeclineExits0(t *testing.T) {
+	file := withXrayProfile(t, "backup")
+	resetFlags(t, profileRmCmd)
+	stubProfileRmConfirm(t, false, nil)
+
+	var err error
+	stdout, stderr := captureStd(t, func() { _, _, err = execCapture(t, "proxy", "profile", "rm", "backup") })
+	if err != nil {
+		t.Fatalf("declining proxy profile rm must exit 0; got %v", err)
+	}
+	if stdout != "" || stderr != "Aborted\n" {
+		t.Errorf("a decline printed stdout %q, stderr %q; want only Aborted on stderr", stdout, stderr)
+	}
+	if _, statErr := os.Stat(file); statErr != nil {
+		t.Fatalf("profile removed despite decline: %v", statErr)
+	}
+}
+
+// A prompt that cannot ask makes ws proxy profile rm return the Problem that
+// names the stream and the step with --force — carrying the parent's
+// --no-migrate the operator gave — with nothing printed by the command and
+// nothing removed. A cancelled prompt is returned as it is, for the root to
+// die of its signal, with nothing printed either.
+func TestProfileRmPromptRefusals(t *testing.T) {
+	file := withXrayProfile(t, "backup")
+
+	resetFlags(t, profileRmCmd)
+	stubProfileRmConfirm(t, false, errNoTerminal)
+	var err error
+	stdout, stderr := captureStd(t, func() {
+		_, _, err = execCapture(t, "proxy", "profile", "--no-migrate", "rm", "backup")
+	})
+	if !errors.Is(err, output.ErrNoTTY) {
+		t.Errorf("errors.Is(%v, ErrNoTTY) = false; want true", err)
+	}
+	want := output.Problem{
+		Title: "Cannot ask for confirmation: no terminal",
+		Cause: "stdin is not a terminal",
+		Steps: []output.Remedy{{Label: "Skip the prompt",
+			Words: []string{"ws", "proxy", "profile", "rm", "--no-migrate", "--force", "backup"}}},
+	}
+	if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, want) {
+		t.Errorf("no terminal: the Problem is %+v, %t; want %+v", p, ok, want)
+	}
+	if stdout != "" || stderr != "" {
+		t.Errorf("no terminal: the command printed stdout %q, stderr %q; want nothing", stdout, stderr)
+	}
+
+	resetFlags(t, profileRmCmd)
+	stubProfileRmConfirm(t, false, &output.Cancelled{Signal: syscall.SIGHUP})
+	stdout, stderr = captureStd(t, func() { _, _, err = execCapture(t, "proxy", "profile", "rm", "backup") })
+	var cancelled *output.Cancelled
+	if !errors.As(err, &cancelled) || cancelled.Signal != syscall.SIGHUP {
+		t.Errorf("cancelled: the command returned %v; want the SIGHUP cancellation", err)
+	}
+	if stdout != "" || stderr != "" {
+		t.Errorf("cancelled: the command printed stdout %q, stderr %q; want nothing", stdout, stderr)
+	}
+
+	if _, statErr := os.Stat(file); statErr != nil {
+		t.Fatalf("profile removed by a prompt that did not answer: %v", statErr)
 	}
 }
 
