@@ -87,7 +87,7 @@ type errorCase struct {
 	legacyXray bool
 }
 
-// errorCases covers the four branches of the root protocol, the argument
+// errorCases covers the five branches of the root protocol, the argument
 // and runtime halves of the usage distinction, a failed step, whose error
 // the spinner used to print a second time, and every helper and in-body exit
 // that phase 1 moves onto a returned value and a hermetic process can reach.
@@ -376,9 +376,11 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	// the 30s deadline above.
 	cmd.WaitDelay = 5 * time.Second
 	// Setsid, so the child has no controlling terminal. Its stdin is the null
-	// device, and huh's terminal layer answers that by opening /dev/tty
-	// instead — which, when `go test` is run from a real terminal, is the
-	// developer's: the selector case then draws a live prompt there. The
+	// device, which the prompt core refuses before huh runs; were that
+	// refusal to regress, huh's terminal layer would answer the null stdin by
+	// opening /dev/tty instead — which, when `go test` is run from a real
+	// terminal, is the developer's — and the selector case would draw a live
+	// prompt there. The
 	// 45 s timeout panic under `script -qec` was measured before the
 	// per-case 30 s deadline below existed; with the deadline, the same
 	// regression fails the case by name after 30 s instead.
@@ -606,7 +608,7 @@ func TestErrorOutputBaseline(t *testing.T) {
 	}
 }
 
-// TestRootProtocolBranches drives run() directly: which of its four branches
+// TestRootProtocolBranches drives run() directly: which of its five branches
 // an error takes, and the exit code each one routes. The bytes those branches
 // print are TestErrorOutputBaseline's; this is the selection.
 //

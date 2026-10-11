@@ -175,7 +175,8 @@ func Execute() {
 // msg: the Problem err's chain carries, when it carries one; otherwise, when
 // msg is not empty, a Problem with msg as its title, which renders byte for
 // byte as the ✗ line output.Fail prints; and otherwise nothing, which is a
-// *cliErrorWithExit whose command printed everything itself.
+// *cliErrorWithExit whose command printed everything itself — or a
+// cancellation, whose process Execute has already ended by its signal.
 func rootProblem(msg string, err error) (output.Problem, bool) {
 	if p, ok := output.ProblemOf(err); ok {
 		return p, true
