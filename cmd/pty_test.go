@@ -97,6 +97,9 @@ type ptyRun struct {
 	stdout bytes.Buffer
 	mu     sync.Mutex
 	screen bytes.Buffer
+	// drained is closed when the reader has taken the end of the pty: every
+	// byte the child drew is on the screen.
+	drained chan struct{}
 }
 
 // startPtyChild starts args in a child over fx with TERM term, the pty's
@@ -113,7 +116,7 @@ func startPtyChild(t *testing.T, fx streamsFixture, term string, args ...string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &ptyRun{t: t, master: master, slave: slavePath, before: slaveState(t, slavePath)}
+	r := &ptyRun{t: t, master: master, slave: slavePath, before: slaveState(t, slavePath), drained: make(chan struct{})}
 	r.cmd = exec.Command(os.Args[0], "-test.run=^TestExecuteChildProcess$")
 	r.cmd.Env = []string{
 		executeChildEnv + "=1",
@@ -143,6 +146,7 @@ func startPtyChild(t *testing.T, fx streamsFixture, term string, args ...string)
 		_ = master.Close()
 	})
 	go func() {
+		defer close(r.drained)
 		buf := make([]byte, 4096)
 		for {
 			n, err := master.Read(buf)
@@ -208,6 +212,13 @@ func (r *ptyRun) wait() syscall.WaitStatus {
 	case <-ctx.Done():
 		_ = syscall.Kill(-r.cmd.Process.Pid, syscall.SIGKILL)
 		r.t.Fatalf("the child did not end within 30s; the pty shows:\n%q", r.drawn())
+	}
+	// With the child gone the slave has no opener left, so the reader gets
+	// the end of the pty once it has taken what the child drew last.
+	select {
+	case <-r.drained:
+	case <-time.After(5 * time.Second):
+		r.t.Fatalf("the pty was not drained within 5s of the child's end; it shows:\n%q", r.drawn())
 	}
 	return r.cmd.ProcessState.Sys().(syscall.WaitStatus)
 }
