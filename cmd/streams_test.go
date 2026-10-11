@@ -327,6 +327,19 @@ var streamsRows = []streamsRow{
 				t.Errorf("the workspace directory is still there: %v", err)
 			}
 		}},
+	{name: "ws profile-delete: no terminal", args: []string{"profile-delete", "zig"}, code: 1,
+		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
+			"  stdin and stderr are not terminals\n" +
+			"\n" +
+			"  1. Skip the prompt  ws profile-delete --force zig\n",
+		after: profileKept("zig")},
+	{name: "ws profile-delete --force: no terminal", args: []string{"profile-delete", "--force", "zig"},
+		stderr: "✓ Profile \"zig\" deleted\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, ".config", "workspaces", "profiles", "zig")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the profile directory is still there: %v", err)
+			}
+		}},
 	{name: "ws proxy check: no daemon", args: []string{"proxy", "check"}, code: 1,
 		stdout: "Proxy prerequisites\n" +
 			"  ✗ failed    Docker running\n" +
@@ -627,6 +640,17 @@ func workspaceKept(name string) func(t *testing.T, fx streamsFixture) {
 		t.Helper()
 		if _, err := os.Stat(filepath.Join(fx.home, "workspaces", name)); err != nil {
 			t.Errorf("the workspace directory of %s is gone: %v", name, err)
+		}
+	}
+}
+
+// profileKept is the after of a row that must leave the workspace profile
+// name where it was.
+func profileKept(name string) func(t *testing.T, fx streamsFixture) {
+	return func(t *testing.T, fx streamsFixture) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(fx.home, ".config", "workspaces", "profiles", name)); err != nil {
+			t.Errorf("the profile directory of %s is gone: %v", name, err)
 		}
 	}
 }

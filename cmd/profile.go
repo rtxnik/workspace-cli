@@ -239,6 +239,11 @@ func runProfileWizard(name string) (profile.CreateOpts, bool) {
 	return opts, true
 }
 
+// profileDeleteConfirmFn asks before ws profile-delete removes a profile: the
+// operator's answer, or the contract's error. A test seam, so that every
+// outcome of the prompt is driven without a terminal.
+var profileDeleteConfirmFn = output.ConfirmDestructive
+
 var profileDeleteCmd = &cobra.Command{
 	Use:         "profile-delete <name>",
 	Short:       "Delete a custom profile",
@@ -257,9 +262,13 @@ var profileDeleteCmd = &cobra.Command{
 		}
 
 		force, _ := cmd.Flags().GetBool("force")
-		if !confirmDestructiveFn(force,
+		ok, err := profileDeleteConfirmFn(force,
 			fmt.Sprintf("Delete profile %q?", name),
-			"This will remove the profile directory and its files.") {
+			"This will remove the profile directory and its files.")
+		if err != nil {
+			return promptProblem(cmd, args, err, confirmNoTerminal, "force")
+		}
+		if !ok {
 			output.Info("Aborted")
 			return nil
 		}
