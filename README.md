@@ -115,6 +115,22 @@ Key parameters:
 
 `ws vault` provides CLI access to a private knowledge-base backend. The command reference lives in [docs/vault-commands.md](docs/vault-commands.md); these commands are not usable without access to that backend.
 
+### Scripts and CI
+
+`ws` asks a question only when stdin and stderr are both terminals. Without them — in a script, a CI job, a pipe — a command that would ask exits 1 instead, and prints the command to run with what skips the question:
+
+| Command | Without a terminal, pass |
+|---------|--------------------------|
+| `ws delete`, `ws profile-delete`, `ws proxy profile rm` | `--force` |
+| `ws proxy down`, `rebuild`, `restart`, `recreate`, `update`, `debug` (they ask only while workspaces are connected) | `--force` |
+| `ws vault ingest --dedup-force` | `--yes` |
+| `ws vault doctor --kill-orphans` or `--clear-stale-locks` (it refuses before running any check) | `--yes` |
+| `ws ssh`, `ws code` | a workspace name |
+
+`ws profile-create` skips its wizard without a terminal and creates the profile from its flags.
+
+At a terminal, answering no prints `Aborted` and exits 0. Ctrl-C at a question ends `ws` by SIGINT (a shell reports 130), and SIGTERM and SIGHUP end it by their signals; after a hang-up the terminal's settings are restored. Under `TERM=dumb` — a screen reader, an editor's shell buffer — questions stay interactive, drawn as plain lines on stderr, and Ctrl-D cancels a question rather than taking its default.
+
 ## Configuration
 
 Environment variables (with defaults):
