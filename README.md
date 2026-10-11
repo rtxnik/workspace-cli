@@ -10,11 +10,11 @@ Workspace manager CLI (`ws` binary) for [DevPod](https://devpod.sh/) environment
 curl -fsSL https://raw.githubusercontent.com/rtxnik/workspace-cli/main/scripts/install.sh | sh
 ```
 
-The installer always verifies the SHA-256 of the downloaded archive against the release `checksums.txt`. If `minisign` is installed, it also verifies the minisign signature over `checksums.txt` against the release signing key embedded in the script. To make signature verification mandatory:
+The installer verifies the SHA-256 of the downloaded archive against the release `checksums.txt`, and the minisign signature over `checksums.txt` against the release signing key embedded in the script. It refuses to install when `minisign` is not installed or the signature is missing, and always when the signature does not verify. To accept checksum-level verification only, which does not protect against a compromised release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rtxnik/workspace-cli/main/scripts/install.sh -o install.sh
-sh install.sh --require-signature
+sh install.sh --allow-unsigned
 ```
 
 Overrides: `WS_VERSION` installs a specific tag; `PREFIX` sets the install root (default `/usr/local`).
