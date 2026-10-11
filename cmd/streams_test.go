@@ -364,6 +364,10 @@ var streamsRows = []streamsRow{
 				t.Errorf("the proxy profile backup-nl is gone: %v", err)
 			}
 		}},
+	{name: "ws proxy profile rm primary: the active one, before the prompt", args: []string{"proxy", "profile", "rm", "primary"},
+		code: 1,
+		stderr: "✗ cannot remove active profile \"primary\" (run `ws proxy profile use <other>`\n" +
+			"  first)\n"},
 	{name: "ws proxy profile rm --force: no terminal", args: []string{"proxy", "profile", "rm", "--force", "backup-nl"},
 		stderr: "✓ Profile \"backup-nl\" removed\n",
 		after: func(t *testing.T, fx streamsFixture) {

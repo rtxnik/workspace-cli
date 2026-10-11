@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -321,6 +322,55 @@ func TestReadActiveProfileName(t *testing.T) {
 	_, err = ReadActiveProfileName(cfg2)
 	if err == nil || !strings.Contains(err.Error(), "not a symlink") {
 		t.Errorf("want 'not a symlink' error; got %v", err)
+	}
+}
+
+// TestCheckRemovable: what RemoveProfile refuses, refused before anything is
+// removed — an invalid name, the active profile, a file that is not there,
+// with the error RemoveProfile has always returned for it — while a dangling
+// link, which os.Remove removes, is removable; an error looking for the
+// file other than its absence — a permission denied — is itself.
+func TestCheckRemovable(t *testing.T) {
+	cfg := mkTestCfg(t)
+	uri := "vless://12345678-1234-1234-1234-123456789012@host:443?type=tcp&security=tls#x"
+	for _, name := range []string{"primary", "backup"} {
+		if err := AddProfile(cfg, name, uri, false); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("profiles", "primary.json"), cfg.XrayConfig); err != nil {
+		t.Fatalf("seed symlink: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(cfg.XrayProfilesDir, "gone.json"), filepath.Join(cfg.XrayProfilesDir, "dangling.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckRemovable(cfg, "Foo"); err == nil || !strings.Contains(err.Error(), "must match") {
+		t.Errorf("CheckRemovable(Foo) = %v; want the name's refusal", err)
+	}
+	if err := CheckRemovable(cfg, "primary"); err == nil || !strings.Contains(err.Error(), "cannot remove active profile") {
+		t.Errorf("CheckRemovable(primary) = %v; want the active profile's refusal", err)
+	}
+	missing := filepath.Join(cfg.XrayProfilesDir, "nope.json")
+	if err := CheckRemovable(cfg, "nope"); !errors.Is(err, fs.ErrNotExist) ||
+		!strings.HasPrefix(err.Error(), `remove profile "nope" at `+missing+": ") {
+		t.Errorf("CheckRemovable(nope) = %v; want the not-exist error RemoveProfile returns", err)
+	}
+	for _, name := range []string{"backup", "dangling"} {
+		if err := CheckRemovable(cfg, name); err != nil {
+			t.Errorf("CheckRemovable(%s) = %v; want nil", name, err)
+		}
+	}
+
+	if os.Geteuid() == 0 {
+		t.Skip("root searches a directory it has no permission on")
+	}
+	if err := os.Chmod(cfg.XrayProfilesDir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cfg.XrayProfilesDir, 0o755) })
+	if err := CheckRemovable(cfg, "backup"); !errors.Is(err, fs.ErrPermission) || strings.HasPrefix(err.Error(), "remove profile") {
+		t.Errorf("CheckRemovable under a directory it cannot search = %v; want the permission error itself", err)
 	}
 }
 

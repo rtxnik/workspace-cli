@@ -268,6 +268,12 @@ var profileRmCmd = &cobra.Command{
 		cmd.SilenceUsage = true
 		cfg := config.Load()
 		name := args[0]
+		// Every check that refuses the removal runs before the prompt, so
+		// that the active profile or one that is not there is said, not
+		// asked about.
+		if err := xray.CheckRemovable(cfg, name); err != nil {
+			return err
+		}
 		force, _ := cmd.Flags().GetBool("force")
 		desc := fmt.Sprintf("Profile file %s will be deleted.", filepath.Join(cfg.XrayProfilesDir, name+".json"))
 		ok, err := profileRmConfirmFn(force, fmt.Sprintf("Remove profile %q?", name), desc)
