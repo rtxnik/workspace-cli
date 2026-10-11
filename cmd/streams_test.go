@@ -333,6 +333,12 @@ var streamsRows = []streamsRow{
 				t.Errorf("the workspace directory is still there: %v", err)
 			}
 		}},
+	{name: "ws ssh: no terminal", args: []string{"ssh"}, code: 1, stderr: selectNoTerminal("ws ssh <name>")},
+	{name: "ws code: no terminal", args: []string{"code"}, code: 1, stderr: selectNoTerminal("ws code <name>")},
+	{name: "ws ssh api: no terminal", args: []string{"ssh", "api"}},
+	{name: "ws code api: no terminal", args: []string{"code", "api"},
+		stdout: "[12:01:30] info up api: step one\n[12:01:32] done up api\n",
+		stderr: "Opening workspace \"api\" in VS Code...\n[12:01:31] info up api: step two\n"},
 	{name: "ws profile-delete: no terminal", args: []string{"profile-delete", "zig"}, code: 1,
 		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
 			"  stdin and stderr are not terminals\n" +
@@ -710,6 +716,16 @@ const deleteNoTerminal = "✗ Cannot ask for confirmation: no terminal\n" +
 	"\n" +
 	"  1. Skip the prompt  ws delete --force ops\n"
 
+// selectNoTerminal is what ws ssh or ws code prints without a name when it
+// cannot ask which workspace: step names the command with a name.
+func selectNoTerminal(step string) string {
+	return "✗ Cannot choose a workspace: no terminal\n" +
+		"  stdin and stderr are not terminals\n" +
+		"\n" +
+		"  1. Name the workspace  " + step + "\n" +
+		"  2. List workspaces     ws list\n"
+}
+
 // proxyNoTerminal is what a proxy mutator prints when workspaces are
 // connected and it cannot ask: step is the invocation with --force.
 func proxyNoTerminal(step string) string {
@@ -924,6 +940,95 @@ func TestWorkspaceRefusalsReturnTheirProblem(t *testing.T) {
 		if !ok || p.Title != c.title || len(p.Steps) != 2 || !reflect.DeepEqual(p.Steps[1], c.next) {
 			t.Errorf("ws %s %s returned %v (Problem %+v); want the error carrying %q with the step %+v",
 				c.cmd.Name(), c.args[0], err, p, c.title, c.next)
+		}
+	}
+}
+
+// selectorFakeDevpod is the devpod TestWorkspaceSelectorOutcomes puts on
+// PATH: it lists api and ops and answers their status, as listing the
+// workspaces asks, and logs every other call to $FAKE_DEVPOD_LOG.
+const selectorFakeDevpod = `#!/bin/sh
+case "$1" in
+list) echo '[{"id":"api"},{"id":"ops"}]' ;;
+status) echo "info Workspace '$2' is 'Running'" ;;
+*) echo "$*" >> "$FAKE_DEVPOD_LOG" ;;
+esac
+`
+
+// TestWorkspaceSelectorOutcomes runs ws ssh and ws code without a name in
+// process, a fake devpod on PATH so that listing the workspaces prints
+// nothing of its own. The selector's answer is the workspace devpod opens.
+// With no terminal the command returns the Problem whose steps need no
+// selector, prints nothing and calls devpod for nothing; a cancelled
+// selector is returned as it is, for the root to die of its signal, with
+// nothing printed either.
+func TestWorkspaceSelectorOutcomes(t *testing.T) {
+	root := t.TempDir()
+	bin, wsRoot, devpodLog := filepath.Join(root, "bin"), filepath.Join(root, "workspaces"), filepath.Join(root, "devpod.log")
+	for _, dir := range []string{bin, filepath.Join(wsRoot, "api"), filepath.Join(wsRoot, "ops")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bin, "devpod"), []byte(selectorFakeDevpod), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("FAKE_DEVPOD_LOG", devpodLog)
+	t.Setenv("WORKSPACES_DIR", wsRoot)
+	orig := selectFn
+	t.Cleanup(func() { selectFn = orig })
+	devpodCalls := func() string {
+		b, _ := os.ReadFile(devpodLog)
+		_ = os.Remove(devpodLog)
+		return string(b)
+	}
+
+	for _, c := range []struct {
+		name   string
+		leaf   *cobra.Command
+		devpod string
+	}{
+		{"ssh", sshCmd, "ssh api\n"},
+		{"code", codeCmd, "up api --ide vscode\n"},
+	} {
+		resetFlags(t, c.leaf)
+		selectFn = func(string, []output.SelectOption) (string, error) { return "api", nil }
+		var err error
+		captureStd(t, func() { _, _, err = execCapture(t, c.name) })
+		if err != nil || devpodCalls() != c.devpod {
+			t.Errorf("ws %s answered api: returned %v; want devpod called as %q", c.name, err, c.devpod)
+		}
+
+		resetFlags(t, c.leaf)
+		selectFn = func(string, []output.SelectOption) (string, error) { return "", errNoTerminal }
+		stdout, stderr := captureStd(t, func() { _, _, err = execCapture(t, c.name) })
+		if !errors.Is(err, output.ErrNoTTY) {
+			t.Errorf("ws %s, no terminal: errors.Is(%v, ErrNoTTY) = false; want true", c.name, err)
+		}
+		want := output.Problem{
+			Title: "Cannot choose a workspace: no terminal",
+			Cause: "stdin is not a terminal",
+			Steps: []output.Remedy{{Label: "Name the workspace", Cmd: "ws " + c.name + " <name>"}, {Label: "List workspaces", Cmd: "ws list"}},
+		}
+		if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, want) {
+			t.Errorf("ws %s, no terminal: the Problem is %+v, %t; want %+v", c.name, p, ok, want)
+		}
+		if printed := stdout + stderr + devpodCalls(); printed != "" {
+			t.Errorf("ws %s, no terminal: printed or called %q; want nothing", c.name, printed)
+		}
+
+		resetFlags(t, c.leaf)
+		selectFn = func(string, []output.SelectOption) (string, error) {
+			return "", &output.Cancelled{Signal: syscall.SIGTERM}
+		}
+		stdout, stderr = captureStd(t, func() { _, _, err = execCapture(t, c.name) })
+		var cancelled *output.Cancelled
+		if !errors.As(err, &cancelled) || cancelled.Signal != syscall.SIGTERM {
+			t.Errorf("ws %s, cancelled: returned %v; want the SIGTERM cancellation", c.name, err)
+		}
+		if printed := stdout + stderr + devpodCalls(); printed != "" {
+			t.Errorf("ws %s, cancelled: printed or called %q; want nothing", c.name, printed)
 		}
 	}
 }
