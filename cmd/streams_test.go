@@ -490,6 +490,28 @@ var streamsRows = []streamsRow{
 			"✗ proxy recipe drift: Dockerfile (missing), entrypoint.sh (missing). Run\n" +
 			"  'chezmoi apply' to restore the canonical recipe, or rebuild intentionally with\n" +
 			"  'ws proxy rebuild --allow-drift'\n"},
+	{name: "ws proxy down: workspaces connected, no terminal", args: []string{"proxy", "down"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy down --force")},
+	{name: "ws proxy rebuild: workspaces connected, no terminal", args: []string{"proxy", "rebuild"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy rebuild --force")},
+	{name: "ws proxy restart: workspaces connected, no terminal", args: []string{"proxy", "restart"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy restart --force")},
+	{name: "ws proxy recreate: workspaces connected, no terminal", args: []string{"proxy", "recreate"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy recreate --force")},
+	{name: "ws proxy update: workspaces connected, no terminal", args: []string{"proxy", "update", "v26.2.6"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy update --force v26.2.6")},
+	{name: "ws proxy debug: workspaces connected, no terminal", args: []string{"proxy", "debug", "on"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy debug --force on")},
+	{name: "ws proxy restart --force: no docker, no terminal", args: []string{"proxy", "restart", "--force"}, code: 1,
+		stderr: "✗ proxy restart failed: stop proxy: Cannot connect to the Docker daemon at\n" +
+			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
+			"  running? -- proxy left running, restart aborted\n"},
+	{name: "ws proxy recreate --force: no docker, no terminal", args: []string{"proxy", "recreate", "--force"}, code: 1,
+		stderr: "✗ proxy recreate failed: inspect proxy: Cannot connect to the Docker daemon at\n" +
+			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
+			"  running?\n"},
+	{name: "ws proxy debug --force: no docker, no terminal", args: []string{"proxy", "debug", "on", "--force"},
+		stderr: "✓ Log level set to \"debug\"\n"},
 	{name: "ws proxy rebuild: docker writes to the log", args: []string{"proxy", "rebuild", "--force", "--allow-drift"},
 		setup: withFakeDockerBuild, code: 1,
 		stderr: "~ Building proxy image\n" +
@@ -649,6 +671,15 @@ const deleteNoTerminal = "✗ Cannot ask for confirmation: no terminal\n" +
 	"  stdin and stderr are not terminals\n" +
 	"\n" +
 	"  1. Skip the prompt  ws delete --force ops\n"
+
+// proxyNoTerminal is what a proxy mutator prints when workspaces are
+// connected and it cannot ask: step is the invocation with --force.
+func proxyNoTerminal(step string) string {
+	return "✗ Cannot ask for confirmation: no terminal\n" +
+		"  stdin and stderr are not terminals\n" +
+		"\n" +
+		"  1. Skip the prompt  " + step + "\n"
+}
 
 // workspaceKept is the after of a row that must leave the workspace name
 // where it was.
