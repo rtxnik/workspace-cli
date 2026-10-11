@@ -431,9 +431,11 @@ func applyMutations(cmd *cobra.Command, checks []*doctorCheck) error {
 		if orphan != nil && len(orphan.PIDs) > 0 {
 			proceed := yes
 			if !proceed {
+				// Killing a live session by mistake is destructive (Phase 22
+				// D-10 manual-recovery discipline): the operator decides.
 				title := fmt.Sprintf("Kill %d orphan MCP subprocess(es)?", len(orphan.PIDs))
 				desc := fmt.Sprintf(
-					"This will SIGTERM PIDs %v (5s grace then SIGKILL). Falsely killing a legitimate session is destructive per Phase 22 D-10 manual-recovery discipline.",
+					"Sends SIGTERM to PIDs %v, then SIGKILL after 5s. A session still in use that is killed by mistake loses its work.",
 					orphan.PIDs,
 				)
 				ok, err := doctorConfirmFn(title, desc)
@@ -466,8 +468,10 @@ func applyMutations(cmd *cobra.Command, checks []*doctorCheck) error {
 		if stale != nil && len(stale.LockPaths) > 0 {
 			proceed := yes
 			if !proceed {
+				// A lock still held guards the audit chain (Phase 14 lock-file
+				// invariants).
 				title := fmt.Sprintf("Remove %d stale lock file(s)?", len(stale.LockPaths))
-				desc := fmt.Sprintf("Paths: %v. Removing a legitimate active lock could corrupt audit chain state per Phase 14 lock-file invariants.", stale.LockPaths)
+				desc := fmt.Sprintf("Paths: %v. Removing a lock that is still held can corrupt the vault's audit chain.", stale.LockPaths)
 				ok, err := doctorConfirmFn(title, desc)
 				if err != nil {
 					return err
@@ -507,11 +511,15 @@ func newVaultDoctorCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose MCP subprocess + token + xrepo contract health (read-only by default)",
-		Long: "Runs 5 read-only diagnostic checks per CONTEXT D-12: orphan MCP subprocesses, " +
-			"stale lock files, VAULT_AI_TOKEN presence, MCP fd-pass handshake, xrepo contract parity. " +
-			"Exit 0 (all green) / 1 (≥1 yellow) / 2 (≥1 red). " +
-			"Mutation is opt-in only via --kill-orphans + --clear-stale-locks (each gated by --yes or " +
-			"output.Confirm) per memory feedback_no_auto_state_mutation + Phase 22 D-09/D-10 lineage.",
+		// The checks are the five CONTEXT D-12 numbers; the mutations are
+		// opt-in and confirmed, never automatic (CONTEXT D-13, Phase 22
+		// D-09/D-10 manual-recovery discipline).
+		Long: "Runs five read-only checks: orphan MCP subprocesses, stale lock files, " +
+			"VAULT_AI_TOKEN presence, the MCP fd-pass handshake and cross-repo contract parity. " +
+			"Exits 0 when every check passes, 1 when one is degraded, 2 when one failed. " +
+			"It changes nothing unless asked to: --kill-orphans and --clear-stale-locks each ask " +
+			"for confirmation before they act, or act at once with --yes; without --yes and " +
+			"without a terminal to ask on, the doctor refuses before it runs any check.",
 		Annotations: vaultAnnotation,
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -565,8 +573,8 @@ func newVaultDoctorCmd() *cobra.Command {
 			return &cliErrorWithExit{code: code, msg: ""}
 		},
 	}
-	cmd.Flags().Bool("kill-orphans", false, "Kill detected orphan MCP subprocesses (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)")
-	cmd.Flags().Bool("clear-stale-locks", false, "Remove stale lock files (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)")
-	cmd.Flags().Bool("yes", false, "Skip confirmation prompts for --kill-orphans / --clear-stale-locks (Phase 22 D-09/D-10 discipline)")
+	cmd.Flags().Bool("kill-orphans", false, "Kill the orphan MCP subprocesses found, once confirmed")
+	cmd.Flags().Bool("clear-stale-locks", false, "Remove the stale lock files found, once confirmed")
+	cmd.Flags().Bool("yes", false, "Confirm --kill-orphans and --clear-stale-locks without asking (needed without a terminal)")
 	return cmd
 }

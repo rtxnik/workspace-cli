@@ -99,16 +99,16 @@
 |Global Flags:
 |      --json  Output in JSON format, where the command supports it
 === ws vault doctor --help, piped
-|Runs 5 read-only diagnostic checks per CONTEXT D-12: orphan MCP subprocesses, stale lock files, VAULT_AI_TOKEN presence, MCP fd-pass handshake, xrepo contract parity. Exit 0 (all green) / 1 (≥1 yellow) / 2 (≥1 red). Mutation is opt-in only via --kill-orphans + --clear-stale-locks (each gated by --yes or output.Confirm) per memory feedback_no_auto_state_mutation + Phase 22 D-09/D-10 lineage.
+|Runs five read-only checks: orphan MCP subprocesses, stale lock files, VAULT_AI_TOKEN presence, the MCP fd-pass handshake and cross-repo contract parity. Exits 0 when every check passes, 1 when one is degraded, 2 when one failed. It changes nothing unless asked to: --kill-orphans and --clear-stale-locks each ask for confirmation before they act, or act at once with --yes; without --yes and without a terminal to ask on, the doctor refuses before it runs any check.
 |
 |Usage:
 |  ws vault doctor [flags]
 |
 |Flags:
-|      --clear-stale-locks  Remove stale lock files (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)
+|      --clear-stale-locks  Remove the stale lock files found, once confirmed
 |  -h, --help               help for doctor
-|      --kill-orphans       Kill detected orphan MCP subprocesses (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)
-|      --yes                Skip confirmation prompts for --kill-orphans / --clear-stale-locks (Phase 22 D-09/D-10 discipline)
+|      --kill-orphans       Kill the orphan MCP subprocesses found, once confirmed
+|      --yes                Confirm --kill-orphans and --clear-stale-locks without asking (needed without a terminal)
 |
 |Global Flags:
 |      --json  Output in JSON format, where the command supports it
