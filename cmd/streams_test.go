@@ -345,6 +345,8 @@ var streamsRows = []streamsRow{
 			"\n" +
 			"  1. Skip the prompt  ws profile-delete --force zig\n",
 		after: profileKept("zig")},
+	{name: "ws profile-delete nosuch: not found before the prompt", args: []string{"profile-delete", "nosuch"}, code: 1,
+		stderr: "✗ profile \"nosuch\" not found\n"},
 	{name: "ws profile-delete --force: no terminal", args: []string{"profile-delete", "--force", "zig"},
 		stderr: "✓ Profile \"zig\" deleted\n",
 		after: func(t *testing.T, fx streamsFixture) {

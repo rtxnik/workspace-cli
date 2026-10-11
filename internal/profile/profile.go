@@ -2,7 +2,9 @@ package profile
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,19 +54,36 @@ func IsBuiltin(name string) bool {
 	return builtinProfiles[name]
 }
 
-// Delete removes a custom profile directory.
-func Delete(cfg config.Config, name string) error {
+// CheckDeletable reports why the profile name cannot be deleted, or nil: it
+// is built in; its name is not valid, which is checked before any file is
+// touched; or it is not there. It asks for the profile with os.Stat, as
+// Delete always has, so a dangling symlink is not there, and an error of
+// Stat's other than the profile's absence — a permission denied — is that
+// error, not "not found". Delete calls it, and a command calls it before it
+// asks, so that the two cannot disagree.
+func CheckDeletable(cfg config.Config, name string) error {
 	if IsBuiltin(name) {
 		return fmt.Errorf("cannot delete built-in profile %q", name)
 	}
 	if err := ValidateName(name); err != nil {
 		return err
 	}
-	dir := filepath.Join(cfg.ProfilesDir, name)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return fmt.Errorf("profile %q not found", name)
+	if _, err := os.Stat(filepath.Join(cfg.ProfilesDir, name)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("profile %q not found", name)
+		}
+		return err
 	}
-	return os.RemoveAll(dir)
+	return nil
+}
+
+// Delete removes a custom profile directory, once CheckDeletable finds
+// nothing against it.
+func Delete(cfg config.Config, name string) error {
+	if err := CheckDeletable(cfg, name); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(cfg.ProfilesDir, name))
 }
 
 // Exists returns true if a profile directory exists.

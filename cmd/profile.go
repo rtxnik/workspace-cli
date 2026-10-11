@@ -262,10 +262,9 @@ var profileDeleteCmd = &cobra.Command{
 		cfg := config.Load()
 		name := args[0]
 
-		if profile.IsBuiltin(name) {
-			return &cliErrorWithExit{code: 1, msg: fmt.Sprintf("cannot delete built-in profile %q", name)}
-		}
-		if err := profile.ValidateName(name); err != nil {
+		// Every check that refuses the deletion runs before the prompt, so
+		// that a profile that is not there is said, not asked about.
+		if err := profile.CheckDeletable(cfg, name); err != nil {
 			return &cliErrorWithExit{code: 1, msg: err.Error()}
 		}
 
