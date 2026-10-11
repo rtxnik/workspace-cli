@@ -13,6 +13,12 @@ import (
 // could not ask.
 const confirmNoTerminal = "Cannot ask for confirmation: no terminal"
 
+// promptReadyFn reports whether a prompt may ask, as output.PromptReady does.
+// It is a seam for the commands that ask it themselves, before work that
+// precedes their prompt — the vault doctor before its checks — so that the
+// tests, whose stdin is the null device, can drive them past it.
+var promptReadyFn = output.PromptReady
+
 // promptProblem is what a command returns when its prompt could not ask: err
 // is output.ErrNoTTY's, and the Problem says what could not happen (title),
 // names the stream that is not a terminal (its cause), and gives as its step

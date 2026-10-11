@@ -23,7 +23,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/output"
@@ -43,6 +45,7 @@ func installDoctorMocks(t *testing.T) func() {
 	origKill := doctorKillFn
 	origRemove := doctorRemoveFn
 	origConfirm := doctorConfirmFn
+	origReady := promptReadyFn
 
 	doctorOrphanCheckFn = func(_ context.Context) *doctorCheck {
 		return &doctorCheck{Name: "orphan-mcp-subprocess", Band: bandGreen, Detail: "0 orphan MCP subprocesses"}
@@ -61,7 +64,11 @@ func installDoctorMocks(t *testing.T) func() {
 	}
 	doctorKillFn = func(_ []int) error { return nil }
 	doctorRemoveFn = func(_ []string) error { return nil }
-	doctorConfirmFn = func(_, _ string) bool { return false }
+	doctorConfirmFn = func(_, _ string) (bool, error) { return false, nil }
+	// A terminal to ask on, so that a mutation flag without --yes reaches
+	// its prompt: under go test stdin is the null device, and the doctor
+	// would refuse before its checks.
+	promptReadyFn = func() error { return nil }
 
 	return func() {
 		doctorOrphanCheckFn = origOrphan
@@ -72,7 +79,33 @@ func installDoctorMocks(t *testing.T) func() {
 		doctorKillFn = origKill
 		doctorRemoveFn = origRemove
 		doctorConfirmFn = origConfirm
+		promptReadyFn = origReady
 	}
+}
+
+// runDoctor runs ws vault doctor with args, every flag of its leaf reset
+// first, and returns what reached stdout — its report, written to the
+// command's own stdout, and anything else — what reached stderr, and the
+// command's error.
+func runDoctor(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	leaf, _, ferr := rootCmd.Find([]string{"vault", "doctor"})
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	resetFlags(t, leaf)
+	var out, errOut bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	rootCmd.SetArgs(append([]string{"vault", "doctor"}, args...))
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+		resetFlags(t, leaf)
+	})
+	osOut, osErr := captureStd(t, func() { err = rootCmd.Execute() })
+	return out.String() + osOut, errOut.String() + osErr, err
 }
 
 // resetVaultDoctorFlags walks rootCmd → vault → doctor and resets each Cobra
@@ -387,7 +420,7 @@ func TestVaultDoctorKillOrphansRequiresYes(t *testing.T) {
 	}
 
 	// Confirm returns false → kill MUST NOT be called.
-	doctorConfirmFn = func(_, _ string) bool { return false }
+	doctorConfirmFn = func(_, _ string) (bool, error) { return false, nil }
 	var killCalls int
 	var gotPIDs []int
 	doctorKillFn = func(pids []int) error {
@@ -396,20 +429,162 @@ func TestVaultDoctorKillOrphansRequiresYes(t *testing.T) {
 		return nil
 	}
 
-	var out, errOut bytes.Buffer
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&errOut)
-	rootCmd.SetArgs([]string{"vault", "doctor", "--kill-orphans"})
-	t.Cleanup(func() {
-		rootCmd.SetArgs(nil)
-		rootCmd.SetOut(nil)
-		rootCmd.SetErr(nil)
-	})
-
-	_ = rootCmd.Execute()
+	_, stderr, err := runDoctor(t, "--kill-orphans")
 
 	if killCalls != 0 {
 		t.Errorf("--kill-orphans without --yes + Confirm=false MUST NOT call killFn; got %d calls with pids=%v", killCalls, gotPIDs)
+	}
+	// The operator's no keeps the band's exit code and says what it skipped.
+	var cerr *cliErrorWithExit
+	if !errors.As(err, &cerr) || cerr.code != 2 {
+		t.Errorf("a decline returned %v; want the red band's code 2", err)
+	}
+	if stderr != "Aborted --kill-orphans\n" {
+		t.Errorf("a decline printed %q on stderr; want Aborted --kill-orphans", stderr)
+	}
+}
+
+// Without --yes and with no terminal, ws vault doctor --kill-orphans or
+// --clear-stale-locks refuses before any check runs, whatever the checks
+// would find: the Problem that names the stream and the step with --yes,
+// and nothing printed. With --yes, or without a mutation flag, it does not
+// ask, and its checks run.
+func TestVaultDoctorRefusesWithNoTerminal(t *testing.T) {
+	restore := installDoctorMocks(t)
+	t.Cleanup(restore)
+	var checked int
+	doctorOrphanCheckFn = func(_ context.Context) *doctorCheck {
+		checked++
+		return &doctorCheck{Name: "orphan-mcp-subprocess", Band: bandRed, Detail: "1 orphan", PIDs: []int{100}}
+	}
+	promptReadyFn = func() error { return errNoTerminal }
+
+	for _, tc := range []struct{ args, words []string }{
+		{[]string{"--kill-orphans"}, []string{"ws", "vault", "doctor", "--kill-orphans", "--yes"}},
+		{[]string{"--clear-stale-locks"}, []string{"ws", "vault", "doctor", "--clear-stale-locks", "--yes"}},
+		{[]string{"--kill-orphans", "--clear-stale-locks", "--json"},
+			[]string{"ws", "vault", "doctor", "--clear-stale-locks", "--json", "--kill-orphans", "--yes"}},
+	} {
+		checked = 0
+		stdout, stderr, err := runDoctor(t, tc.args...)
+		if !errors.Is(err, output.ErrNoTTY) {
+			t.Errorf("%v: errors.Is(%v, ErrNoTTY) = false; want true", tc.args, err)
+		}
+		want := output.Problem{
+			Title: "Cannot ask for confirmation: no terminal",
+			Cause: "stdin is not a terminal",
+			Steps: []output.Remedy{{Label: "Skip the prompt", Words: tc.words}},
+		}
+		if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, want) {
+			t.Errorf("%v: the Problem is %+v, %t; want %+v", tc.args, p, ok, want)
+		}
+		if stdout != "" || stderr != "" {
+			t.Errorf("%v: the command printed stdout %q, stderr %q; want nothing", tc.args, stdout, stderr)
+		}
+		if checked != 0 {
+			t.Errorf("%v: the checks ran before the refusal", tc.args)
+		}
+	}
+
+	for _, args := range [][]string{{"--kill-orphans", "--yes"}, {}} {
+		checked = 0
+		_, _, err := runDoctor(t, args...)
+		var cerr *cliErrorWithExit
+		if checked != 1 || !errors.As(err, &cerr) || cerr.code != 2 {
+			t.Errorf("%v: checks ran %d time(s), returned %v; want them run once and the red band's code 2", args, checked, err)
+		}
+	}
+}
+
+// On a terminal, a cancelled prompt of ws vault doctor ends the run with the
+// cancellation, for the root to die of its signal: the report is already on
+// stdout, the command adds nothing to it, the second prompt is not reached,
+// and nothing is killed or removed.
+func TestVaultDoctorPromptCancelledKeepsTheReport(t *testing.T) {
+	restore := installDoctorMocks(t)
+	t.Cleanup(restore)
+	doctorOrphanCheckFn = func(_ context.Context) *doctorCheck {
+		return &doctorCheck{Name: "orphan-mcp-subprocess", Band: bandRed, Detail: "1 orphan", PIDs: []int{100}}
+	}
+	doctorStaleLockCheckFn = func(_ context.Context) *doctorCheck {
+		return &doctorCheck{Name: "stale-lock-files", Band: bandYellow, Detail: "1 stale lock", LockPaths: []string{"/tmp/a.lock"}}
+	}
+	var asked, killed, removed int
+	doctorConfirmFn = func(_, _ string) (bool, error) {
+		asked++
+		return false, &output.Cancelled{Signal: syscall.SIGINT}
+	}
+	doctorKillFn = func(_ []int) error { killed++; return nil }
+	doctorRemoveFn = func(_ []string) error { removed++; return nil }
+
+	stdout, stderr, err := runDoctor(t, "--kill-orphans", "--clear-stale-locks")
+	var cancelled *output.Cancelled
+	if !errors.As(err, &cancelled) || cancelled.Signal != syscall.SIGINT {
+		t.Errorf("the command returned %v; want the SIGINT cancellation", err)
+	}
+	if !strings.HasPrefix(stdout, "Vault doctor\n") || !strings.HasSuffix(stdout, "\nOverall: red (exit 2)\n") {
+		t.Errorf("stdout is not the report alone:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q; want nothing added to the report", stderr)
+	}
+	if asked != 1 || killed != 0 || removed != 0 {
+		t.Errorf("asked %d, killed %d, removed %d; want one prompt and no mutation", asked, killed, removed)
+	}
+}
+
+// On a terminal, a prompt of ws vault doctor that fails ends the run with
+// the report on stdout, the prompt's Problem for the root to print, and the
+// band's code, at least 1: 2 under the red band the kill prompt runs on, 1
+// under a band that is green. A prompt that found no terminal after all
+// gives the Problem with the step with --yes.
+func TestVaultDoctorPromptFailed(t *testing.T) {
+	restore := installDoctorMocks(t)
+	t.Cleanup(restore)
+	failed := errors.New("prompt failed: raw mode refused")
+	red := func() {
+		doctorOrphanCheckFn = func(_ context.Context) *doctorCheck {
+			return &doctorCheck{Name: "orphan-mcp-subprocess", Band: bandRed, Detail: "1 orphan", PIDs: []int{100}}
+		}
+	}
+	green := func() {
+		doctorOrphanCheckFn = func(_ context.Context) *doctorCheck {
+			return &doctorCheck{Name: "orphan-mcp-subprocess", Band: bandGreen, Detail: "0 orphans"}
+		}
+		doctorStaleLockCheckFn = func(_ context.Context) *doctorCheck {
+			return &doctorCheck{Name: "stale-lock-files", Band: bandGreen, LockPaths: []string{"/tmp/a.lock"}}
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		setup  func()
+		flag   string
+		err    error
+		want   output.Problem
+		code   int
+		report string
+	}{
+		{"red band", red, "--kill-orphans", failed, output.Problem{Title: "prompt failed: raw mode refused"}, 2, "Overall: red (exit 2)"},
+		{"green band", green, "--clear-stale-locks", failed, output.Problem{Title: "prompt failed: raw mode refused"}, 1, "Overall: green (exit 0)"},
+		{"no terminal at the prompt", red, "--kill-orphans", errNoTerminal, output.Problem{
+			Title: "Cannot ask for confirmation: no terminal",
+			Cause: "stdin is not a terminal",
+			Steps: []output.Remedy{{Label: "Skip the prompt", Words: []string{"ws", "vault", "doctor", "--kill-orphans", "--yes"}}},
+		}, 2, "Overall: red (exit 2)"},
+	} {
+		tc.setup()
+		doctorConfirmFn = func(_, _ string) (bool, error) { return false, tc.err }
+		stdout, _, err := runDoctor(t, tc.flag)
+		msg, code := run(err)
+		if code != tc.code {
+			t.Errorf("%s: exit %d; want %d", tc.name, code, tc.code)
+		}
+		if p, printed := rootProblem(msg, err); !printed || !reflect.DeepEqual(p, tc.want) {
+			t.Errorf("%s: the root prints %+v, %t; want %+v", tc.name, p, printed, tc.want)
+		}
+		if !strings.HasPrefix(stdout, "Vault doctor\n") || !strings.HasSuffix(stdout, "\n"+tc.report+"\n") {
+			t.Errorf("%s: stdout is not the report:\n%s", tc.name, stdout)
+		}
 	}
 }
 
@@ -429,9 +604,9 @@ func TestVaultDoctorKillOrphansWithYes(t *testing.T) {
 	// --yes flag should skip Confirm entirely; force Confirm to fail-mode to
 	// prove --yes path bypasses it.
 	confirmCalls := 0
-	doctorConfirmFn = func(_, _ string) bool {
+	doctorConfirmFn = func(_, _ string) (bool, error) {
 		confirmCalls++
-		return false
+		return false, nil
 	}
 
 	var killCalls int
