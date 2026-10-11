@@ -447,11 +447,11 @@ var proxyInitCmd = &cobra.Command{
 }
 
 // warnConfirmFn is the confirmation seam: production wires to
-// output.ConfirmBool; tests override it to decide the operator's answer
-// without a TTY. The connected-workspace enumeration reuses the package's
-// existing proxyConnectedContainersFn seam (declared in proxy_doctor.go) — it
-// is NOT redeclared here.
-var warnConfirmFn = output.ConfirmBool
+// output.Confirm; tests override it to decide the operator's answer, or the
+// contract's error, without a TTY. The connected-workspace enumeration reuses
+// the package's existing proxyConnectedContainersFn seam (declared in
+// proxy_doctor.go) — it is NOT redeclared here.
+var warnConfirmFn = output.Confirm
 
 // errAborted signals the operator declined a mutation at the connected-workspace
 // prompt. Every mutator turns it into the same clean no-op — "Aborted" on stderr
@@ -466,6 +466,8 @@ var errAborted = errors.New("aborted by user")
 //   - no connected workspaces (nil/empty) -> nil: proceed, no prompt.
 //   - connected workspaces + operator declines -> errAborted.
 //   - connected workspaces + operator confirms -> nil: proceed.
+//   - connected workspaces + a prompt with no terminal, cancelled or failed ->
+//     the prompt's error, as the contract returned it.
 func warnProxyConnected(cfg config.Config) error {
 	names, err := proxyConnectedContainersFn(cfg)
 	if err != nil {
@@ -476,7 +478,11 @@ func warnProxyConnected(cfg config.Config) error {
 	}
 
 	desc := fmt.Sprintf("Active workspaces: %s\nThis will interrupt network for these workspaces.", strings.Join(names, ", "))
-	if !warnConfirmFn("Continue?", desc) {
+	ok, err := warnConfirmFn("Continue?", desc)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return errAborted
 	}
 	return nil
@@ -485,9 +491,11 @@ func warnProxyConnected(cfg config.Config) error {
 // confirmProxyMutation gates cmd, a mutating proxy command, on the connected-
 // workspace prompt; it is the one gate of all six. proceed is false when the
 // command must stop: either the operator declined — "Aborted" has been
-// printed and err is nil, so the command returns nil and exits 0 — or the
-// connected workspaces could not be enumerated, and err says why
-// (fail-closed). Every caller is therefore
+// printed and err is nil, so the command returns nil and exits 0 — or err
+// says why: the connected workspaces could not be enumerated (fail-closed);
+// the prompt had no terminal, and err is the Problem whose step is cmd's
+// invocation with --force; or the prompt was cancelled or failed. Every
+// caller is therefore
 //
 //	if proceed, err := confirmProxyMutation(cmd, cfg); !proceed {
 //		return err
@@ -498,7 +506,7 @@ func confirmProxyMutation(cmd *cobra.Command, cfg config.Config) (proceed bool, 
 			output.Info("Aborted")
 			return false, nil
 		}
-		return false, err
+		return false, promptProblem(cmd, cmd.Flags().Args(), err, confirmNoTerminal, "force")
 	}
 	return true, nil
 }

@@ -213,7 +213,7 @@ func installExecuteStub(name string) {
 		proxyConnectedContainersFn = func(config.Config) ([]string, error) {
 			return []string{"wsa"}, nil
 		}
-		warnConfirmFn = func(string, string) bool { return false }
+		warnConfirmFn = func(string, string) (bool, error) { return false, nil }
 	case "health-yellow":
 		vaultHealthScoreComputeFn = func(context.Context, *cobra.Command) (int, error) { return 55, nil }
 	case "tunnel-up":

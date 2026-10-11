@@ -5,10 +5,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
 // captureStderr redirects os.Stderr for the duration of fn and returns
@@ -143,7 +146,7 @@ func TestProxyRecreateWarnGate_DeclineAborts(t *testing.T) {
 	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
 		return []string{"ws-alpha"}, nil
 	}
-	warnConfirmFn = func(_, _ string) bool { return false } // operator declines
+	warnConfirmFn = func(_, _ string) (bool, error) { return false, nil } // operator declines
 	var called int
 	proxyRecreateCmdFn = func(_ config.Config) error { called++; return nil }
 	if err := proxyRecreateCmd.Flags().Set("force", "false"); err != nil {
@@ -176,6 +179,61 @@ func TestProxyRecreateWarnGate_DeclineAborts(t *testing.T) {
 	}
 }
 
+// With workspaces connected, a gate's prompt that cannot ask makes ws proxy
+// recreate return the Problem that names the stream and the step with
+// --force, with nothing printed and the proxy left alone; a cancelled prompt
+// is returned as it is, with nothing printed either.
+func TestProxyRecreateWarnGate_PromptRefusals(t *testing.T) {
+	origConn := proxyConnectedContainersFn
+	origConfirm := warnConfirmFn
+	origRecreate := proxyRecreateCmdFn
+	t.Cleanup(func() {
+		proxyConnectedContainersFn = origConn
+		warnConfirmFn = origConfirm
+		proxyRecreateCmdFn = origRecreate
+	})
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
+		return []string{"ws-alpha"}, nil
+	}
+	var called int
+	proxyRecreateCmdFn = func(_ config.Config) error { called++; return nil }
+
+	resetFlags(t, proxyRecreateCmd)
+	warnConfirmFn = func(_, _ string) (bool, error) { return false, errNoTerminal }
+	var out, errOut *bytes.Buffer
+	var err error
+	stdout, stderr := captureStd(t, func() { out, errOut, err = execCapture(t, "proxy", "recreate") })
+	if !errors.Is(err, output.ErrNoTTY) {
+		t.Errorf("errors.Is(%v, ErrNoTTY) = false; want true", err)
+	}
+	want := output.Problem{
+		Title: "Cannot ask for confirmation: no terminal",
+		Cause: "stdin is not a terminal",
+		Steps: []output.Remedy{{Label: "Skip the prompt", Words: []string{"ws", "proxy", "recreate", "--force"}}},
+	}
+	if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, want) {
+		t.Errorf("no terminal: the Problem is %+v, %t; want %+v", p, ok, want)
+	}
+	if printed := stdout + stderr + out.String() + errOut.String(); printed != "" {
+		t.Errorf("no terminal: the command printed %q; want nothing", printed)
+	}
+
+	resetFlags(t, proxyRecreateCmd)
+	warnConfirmFn = func(_, _ string) (bool, error) { return false, &output.Cancelled{Signal: syscall.SIGINT} }
+	stdout, stderr = captureStd(t, func() { out, errOut, err = execCapture(t, "proxy", "recreate") })
+	var cancelled *output.Cancelled
+	if !errors.As(err, &cancelled) || cancelled.Signal != syscall.SIGINT {
+		t.Errorf("cancelled: the command returned %v; want the SIGINT cancellation", err)
+	}
+	if printed := stdout + stderr + out.String() + errOut.String(); printed != "" {
+		t.Errorf("cancelled: the command printed %q; want nothing", printed)
+	}
+
+	if called != 0 {
+		t.Errorf("the proxy was recreated %d time(s) by a prompt that did not answer", called)
+	}
+}
+
 func TestProxyRecreateWarnGate_ForceSkipsPrompt(t *testing.T) {
 	// --force proceeds even with connected workspaces, without prompting.
 	origConn := proxyConnectedContainersFn
@@ -192,7 +250,7 @@ func TestProxyRecreateWarnGate_ForceSkipsPrompt(t *testing.T) {
 		return []string{"ws-alpha"}, nil
 	}
 	var confirmCalls int
-	warnConfirmFn = func(_, _ string) bool { confirmCalls++; return false }
+	warnConfirmFn = func(_, _ string) (bool, error) { confirmCalls++; return false, nil }
 	var called int
 	proxyRecreateCmdFn = func(_ config.Config) error { called++; return nil }
 
@@ -234,7 +292,7 @@ func TestProxyRecreateWarnGate_EnumErrorFailsClosed(t *testing.T) {
 	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
 		return nil, errors.New("docker daemon unreachable")
 	}
-	warnConfirmFn = func(_, _ string) bool { return true } // would confirm, but must never be asked
+	warnConfirmFn = func(_, _ string) (bool, error) { return true, nil } // would confirm, but must never be asked
 	var called int
 	proxyRecreateCmdFn = func(_ config.Config) error { called++; return nil }
 	if err := proxyRecreateCmd.Flags().Set("force", "false"); err != nil {
