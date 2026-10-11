@@ -11,9 +11,10 @@ package cmd
 //   --dedup-force  -> args.ConfirmDedupOverride = true
 //   --reason <txt> -> args.Reason; REQUIRED whenever --dedup-force set
 //   --yes          -> skip the operator confirmation prompt
-//                     (default behavior fires output.ConfirmBool; declining
+//                     (default behavior fires output.Confirm; declining
 //                      writes nothing and exits 0 — declining an override is
-//                      a safe operator choice, not an error)
+//                      a safe operator choice, not an error; with no terminal
+//                      to ask on, rc 1 and the step with --yes)
 //
 // NOTE on contract-field naming (Rule 1 deviation tracked in SUMMARY):
 //   The plan draft <interfaces> proposed args.DedupForce + args.DedupOverrideReason,
@@ -35,12 +36,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Test seams: production wires to runVaultIngest + output.ConfirmBool; unit
+// Test seams: production wires to runVaultIngest + output.Confirm; unit
 // tests override with closures that emulate MCP responses + operator prompt
-// decisions.
+// decisions, the contract's errors included.
 var (
 	vaultIngestCallFn    = runVaultIngest
-	vaultIngestConfirmFn = output.ConfirmBool
+	vaultIngestConfirmFn = output.Confirm
 )
 
 func runVaultIngest(ctx context.Context, root *cobra.Command, cargs mcp.CreateNoteArgs) (*mcp.Envelope, error) {
@@ -158,7 +159,11 @@ func newVaultIngestCmd() *cobra.Command {
 				if !yes {
 					title := fmt.Sprintf("Override dedup gate for %q?", path)
 					desc := "This will write the note bypassing the similarity-based DEDUP_BLOCKED. The reason is audited verbatim per Phase 17 D-12 dedup_override stream."
-					if !vaultIngestConfirmFn(title, desc) {
+					ok, err := vaultIngestConfirmFn(title, desc)
+					if err != nil {
+						return promptProblem(cmd, args, err, confirmNoTerminal, "yes")
+					}
+					if !ok {
 						output.Info("Aborted")
 						return nil
 					}
