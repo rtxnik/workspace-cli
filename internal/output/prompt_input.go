@@ -37,13 +37,17 @@ import (
 // No signal is recorded in this mode: the line read blocks and nothing
 // interrupts it, so a Ctrl-C is a real SIGINT whose default action ends the
 // process, and the terminal, cooked, needs nothing restored.
+//
+// huh draws through a latchedWriter: once the recorder has latched, huh
+// still goes through every field it has left, drawing each before its read
+// fails at once, and nothing of that is drawn.
 func (p *prompter) askAccessible(f *huh.Form) error {
 	in := &lineRecorder{r: p.input}
 	out := io.Writer(p.stream)
 	if mutants.PromptDrawnOnStdout {
 		out = Out()
 	}
-	f.WithAccessible(true).WithOutput(out).WithInput(in)
+	f.WithAccessible(true).WithOutput(&latchedWriter{w: out, in: in}).WithInput(in)
 	panicked, err := recovered(f.Run)
 	switch {
 	case in.failed != nil:
@@ -130,4 +134,31 @@ func (l *lineRecorder) Read(p []byte) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// latchedWriter is the prompt's stream as the screen-reader mode draws on
+// it. Until the recorder latches it draws what huh writes; from then on it
+// draws nothing — not the fields huh goes on to draw, which a screen reader
+// would read out as if they were asked — save, the first time, the newline
+// that ends the line the prompt was left on, which huh writes after a failed
+// scan, so that what comes next starts a line of its own.
+type latchedWriter struct {
+	w    io.Writer
+	in   *lineRecorder
+	open bool // the last byte drawn was not a newline
+}
+
+func (l *latchedWriter) Write(p []byte) (int, error) {
+	if !l.in.ended && l.in.failed == nil {
+		n, err := l.w.Write(p)
+		if n > 0 {
+			l.open = p[n-1] != '\n'
+		}
+		return n, err
+	}
+	if l.open {
+		l.open = false
+		_, _ = l.w.Write([]byte{'\n'})
+	}
+	return len(p), nil
 }

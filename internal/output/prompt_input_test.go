@@ -191,6 +191,63 @@ func TestScreenReaderLatches(t *testing.T) {
 	}
 }
 
+// lineField is a field whose screen-reader run draws a whole line, reads,
+// and draws again: at its read the line is already ended.
+type lineField struct{ *huh.Input }
+
+func (f lineField) WithAccessible(bool) huh.Field { return f }
+
+func (lineField) RunAccessible(w io.Writer, r io.Reader) error {
+	_, _ = io.WriteString(w, "Name:\n")
+	_, _ = r.Read(make([]byte, 64))
+	_, _ = io.WriteString(w, "drawn after the read")
+	return nil
+}
+
+// TestScreenReaderDrawsNothingAfterItsEnd: once the input has ended or
+// failed, huh still draws every field it has left to ask — a screen reader
+// would read each one out — so the mode draws nothing more after it but the
+// newline that ends the line its prompt was left on, if that line is open;
+// also when huh then panics on a rejected number.
+func TestScreenReaderDrawsNothingAfterItsEnd(t *testing.T) {
+	const prompt = "Enter a number between 1 and 3: "
+	wizard := func(p *prompter) error {
+		var w wizardShaped
+		return p.ask(w.form())
+	}
+	for _, tc := range []struct {
+		name string
+		in   io.Reader
+		ask  func(p *prompter) error
+		tail string // what the stream ends with
+	}{
+		{"the end of input at the wizard's first field", strings.NewReader(""), wizard, prompt + "\n"},
+		{"a read error at the wizard's first field", &scriptedReader{steps: []readStep{{"", errEIO}}}, wizard, prompt + "\n"},
+		{"4 then the end of input at a Select of three", &scriptedReader{steps: []readStep{{"4\n", nil}, {"", io.EOF}}}, func(p *prompter) error {
+			_, err := p.choose("Select workspace:", threeWorkspaces())
+			return err
+		}, prompt + "\n"},
+		{"the end of input with the line already ended", strings.NewReader(""), func(p *prompter) error {
+			return p.ask(huh.NewForm(huh.NewGroup(lineField{huh.NewInput()})))
+		}, "\nName:\n"},
+	} {
+		var drawn syncBuffer
+		err := tc.ask(accessibleCore(t, tc.in, &drawn))
+		if err == nil {
+			t.Errorf("%s: no error; want a cancelled or failed prompt", tc.name)
+		}
+		got := drawn.String()
+		for _, later := range []string{"System packages", "Mise tools to install", "Enable Docker-in-Docker?", "drawn after the read"} {
+			if strings.Contains(got, later) {
+				t.Errorf("%s: %q was drawn after the input's end; the stream holds %q", tc.name, later, got)
+			}
+		}
+		if !strings.HasSuffix("\n"+got, tc.tail) {
+			t.Errorf("%s: the stream ends %q; want it to end %q", tc.name, got[max(0, len(got)-48):], tc.tail)
+		}
+	}
+}
+
 // brokenField is a field whose screen-reader run panics on its own.
 type brokenField struct{ *huh.Input }
 
