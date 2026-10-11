@@ -157,7 +157,9 @@ var errorCases = []errorCase{
 
 	// The two helpers that called Die before phase 1, and the exits beside them.
 	{name: "helper/select-no-workspaces", args: []string{"ssh"}},
-	{name: "helper/select-cancelled", args: []string{"ssh"}, workspace: "wsx"},
+	// The child has no controlling terminal and stdin is the null device:
+	// the selector cannot ask (it read as a silent success before phase 6).
+	{name: "helper/select-no-terminal", args: []string{"ssh"}, workspace: "wsx"},
 	{name: "helper/connected-enumeration-fails", args: []string{"proxy", "down"}, stub: "connected-enumeration-fails"},
 	{name: "helper/connected-declined", args: []string{"proxy", "down"}, stub: "connected-declined"},
 

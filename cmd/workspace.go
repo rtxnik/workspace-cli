@@ -353,12 +353,9 @@ var sshCmd = &cobra.Command{
 		if len(args) > 0 {
 			name = args[0]
 		} else {
-			picked, ok, err := selectWorkspace()
+			picked, err := selectWorkspace(cmd)
 			if err != nil {
 				return err
-			}
-			if !ok {
-				return nil
 			}
 			name = picked
 		}
@@ -388,12 +385,9 @@ var codeCmd = &cobra.Command{
 		if len(args) > 0 {
 			name = args[0]
 		} else {
-			picked, ok, err := selectWorkspace()
+			picked, err := selectWorkspace(cmd)
 			if err != nil {
 				return err
-			}
-			if !ok {
-				return nil
 			}
 			name = picked
 		}
@@ -488,22 +482,39 @@ var logsCmd = &cobra.Command{
 	},
 }
 
-// selectWorkspace shows an interactive selector of workspaces and returns the
-// selected name. ok is false when the selector produced no choice — the
-// operator cancelled it, or it could not run (see output.SelectBool); the
-// caller returns nil and the process exits 0.
-func selectWorkspace() (string, bool, error) {
+// selectFn asks which workspace ws ssh and ws code open: the chosen value, or
+// the contract's error. A test seam, so that every outcome of the selector is
+// driven without a terminal.
+var selectFn = output.Select
+
+// selectWorkspace shows an interactive selector of workspaces for cmd, ws ssh
+// or ws code, and returns the selected name, or the error that stops cmd:
+// no workspaces; with no terminal to ask on, the Problem whose steps need no
+// selector — cmd with a name, and ws list; a cancellation or a selector that
+// failed as the contract returned it.
+func selectWorkspace(cmd *cobra.Command) (string, error) {
 	cfg := config.Load()
 	workspaces, err := workspace.List(cfg)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	if len(workspaces) == 0 {
-		return "", false, errors.New("no workspaces found")
+		return "", errors.New("no workspaces found")
 	}
 
 	// huh draws its forms on stderr, so the labels are rendered for it.
-	return output.SelectBool("Select workspace:", workspaceOptions(output.Err(), workspaces))
+	name, err := selectFn("Select workspace:", workspaceOptions(output.Err(), workspaces))
+	if errors.Is(err, output.ErrNoTTY) {
+		return "", &output.ProblemError{P: output.Problem{
+			Title: "Cannot choose a workspace: no terminal",
+			Cause: err.Error(),
+			Steps: []output.Remedy{
+				{Label: "Name the workspace", Cmd: cmd.CommandPath() + " <name>"},
+				{Label: "List workspaces", Cmd: "ws list"},
+			},
+		}, Err: err}
+	}
+	return name, err
 }
 
 // workspaceOptions labels each workspace "<name>  <mark> <word>" for s, with

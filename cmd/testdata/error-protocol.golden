@@ -189,12 +189,16 @@ exit 1
 --- stderr (85 bytes)
 |⚠ devpod not found in PATH, workspace statuses unavailable
 |✗ no workspaces found
-=== helper/select-cancelled
-exit 0
+=== helper/select-no-terminal
+exit 1
 --- stdout (0 bytes)
---- stderr (62 bytes)
+--- stderr (214 bytes)
 |⚠ devpod not found in PATH, workspace statuses unavailable
+|✗ Cannot choose a workspace: no terminal
+|  stdin and stderr are not terminals
 |
+|  1. Name the workspace  ws ssh <name>
+|  2. List workspaces     ws list
 === helper/connected-enumeration-fails
 exit 1
 --- stdout (0 bytes)
