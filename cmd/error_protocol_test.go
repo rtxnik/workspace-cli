@@ -21,6 +21,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 	"github.com/spf13/cobra"
@@ -260,6 +261,12 @@ func installExecuteStub(name string) {
 			return &doctorCheck{Name: "xrepo-contract-parity", Band: bandYellow,
 				Detail:      "check-xrepo-contract.sh not found at /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: stat /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: no such file or directory",
 				Remediation: "verify Phase 17 deliverable is present in vault-ai checkout"}
+		}
+	case "vault-ingest-created":
+		// The vault answers create_note with the note it wrote.
+		vaultIngestCallFn = func(context.Context, *cobra.Command, mcp.CreateNoteArgs) (*mcp.Envelope, error) {
+			return &mcp.Envelope{OK: true, Data: json.RawMessage(
+				`{"id":"zettel-20261011-stand-up","path":"30_Resources/zettel-20261011-stand-up.md"}`)}, nil
 		}
 	case "vault-status-mixed":
 		// Six signals as a host with no cost or DR-drill logs yet answers

@@ -176,6 +176,9 @@ type streamsRow struct {
 	// child reaches through DOCKER_HOST, with the fake docker CLI on PATH for
 	// route lookups. Unset, the child's DOCKER_HOST reaches nothing.
 	docker *fakeDockerState
+	// inHome runs the child in the fixture's home rather than where the test
+	// runs, for a row whose arguments name a file there.
+	inHome bool
 }
 
 // reportCheck is the stdout check of a report row whose whole stdout the
@@ -228,6 +231,9 @@ func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int,
 	if row.docker != nil {
 		cmd.Env = append(cmd.Env, "DOCKER_HOST="+startFakeDocker(t, *row.docker))
 		writeFakeDockerCLI(t, fx.bin)
+	}
+	if row.inHome {
+		cmd.Dir = fx.home
 	}
 	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+v)
@@ -444,6 +450,28 @@ var streamsRows = []streamsRow{
 	{name: "ws vault doctor: mixed bands", args: []string{"vault", "doctor"}, stub: "vault-doctor-mixed", code: 2,
 		check: reportCheck("Vault doctor", "  ⚠ degraded  stale-lock-files", "  ✗ failed    vault-ai-token",
 			"              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles", "Overall: red (exit 2)")},
+	{name: "ws vault doctor --kill-orphans: no terminal", args: []string{"vault", "doctor", "--kill-orphans"},
+		stub: "vault-doctor-mixed", code: 1,
+		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
+			"  stdin and stderr are not terminals\n" +
+			"\n" +
+			"  1. Skip the prompt  ws vault doctor --kill-orphans --yes\n"},
+	{name: "ws vault doctor --kill-orphans --yes: no terminal", args: []string{"vault", "doctor", "--kill-orphans", "--yes"},
+		stub: "vault-doctor-mixed", code: 2,
+		check: reportCheck("Vault doctor", "  ⚠ degraded  stale-lock-files", "  ✗ failed    vault-ai-token", "Overall: red (exit 2)")},
+	{name: "ws vault ingest --dedup-force: no terminal",
+		args:  []string{"vault", "ingest", "note.md", "--dedup-force", "--reason", "duplicate of the weekly note"},
+		setup: withIngestNote, inHome: true, code: 1,
+		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
+			"  stdin and stderr are not terminals\n" +
+			"\n" +
+			"  1. Skip the prompt\n" +
+			"     ws vault ingest --dedup-force '--reason=duplicate of the weekly note' \\\n" +
+			"       --yes note.md\n"},
+	{name: "ws vault ingest --dedup-force --yes: no terminal",
+		args:  []string{"vault", "ingest", "note.md", "--dedup-force", "--reason", "duplicate of the weekly note", "--yes"},
+		setup: withIngestNote, inHome: true, stub: "vault-ingest-created",
+		stdout: "{\n  \"id\": \"zettel-20261011-stand-up\",\n  \"path\": \"30_Resources/zettel-20261011-stand-up.md\"\n}\n"},
 	{name: "ws vault status: mixed bands", args: []string{"vault", "status"}, stub: "vault-status-mixed", code: 1,
 		check: reportCheck("Vault status", "  ✓ ok        MCP liveness", "  ⚠ degraded  cost-tracker headroom",
 			"Overall: yellow (exit 1)")},
@@ -655,6 +683,16 @@ func withFakeDockerBuild(t *testing.T, fx streamsFixture) {
 	}
 	fake := "#!/bin/sh\necho '#1 [internal] load build definition'\necho '#2 WARN: FromAsCasing' >&2\n"
 	if err := os.WriteFile(filepath.Join(fx.bin, "docker"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// withIngestNote writes note.md, a note that passes ws vault ingest's input
+// checks, into the fixture's home.
+func withIngestNote(t *testing.T, fx streamsFixture) {
+	t.Helper()
+	note := "---\ntype: zettel\nzone: 30_Resources\ntitle: Stand-up\n---\n\n# Stand-up\n\nWhat was decided.\n"
+	if err := os.WriteFile(filepath.Join(fx.home, "note.md"), []byte(note), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
