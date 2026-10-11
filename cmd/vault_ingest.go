@@ -114,9 +114,13 @@ func splitFrontmatter(raw []byte) (map[string]any, string, error) {
 
 func newVaultIngestCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:         "ingest <file>",
-		Short:       "Ingest a markdown file via MCP create_note (dedup-gated)",
-		Long:        "Reads a markdown file (YAML frontmatter + body), creates a note via MCP create_note with the dedup gate enabled per CONTEXT D-24. Override via --dedup-force --reason \"<text>\" (operator confirmation prompt fires unless --yes is set). On DEDUP_BLOCKED returns exit 6 with envelope.error.details on stderr.",
+		Use:   "ingest <file>",
+		Short: "Ingest a markdown file via MCP create_note (dedup-gated)",
+		Long: "Reads a markdown file — YAML frontmatter, which must give type and zone, and a body — and " +
+			"creates a note from it. The vault refuses a note too similar to an existing one: the command " +
+			"then exits 6 and prints the details on stderr. --dedup-force writes it all the same, with a " +
+			"--reason kept in the vault's audit log; it asks for confirmation first unless --yes is given, " +
+			"and without a terminal to ask on it refuses and names --yes.",
 		Annotations: vaultAnnotation,
 		Args:        cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -153,12 +157,12 @@ func newVaultIngestCmd() *cobra.Command {
 				if reason == "" {
 					return &cliErrorWithExit{
 						code: 1,
-						msg:  "ingest: --dedup-force requires --reason \"<operator override reason>\" (audited via Phase 17 D-12 dedup_override stream)",
+						msg:  "ingest: --dedup-force requires --reason \"<why>\", which is kept in the vault's audit log",
 					}
 				}
 				if !yes {
-					title := fmt.Sprintf("Override dedup gate for %q?", path)
-					desc := "This will write the note bypassing the similarity-based DEDUP_BLOCKED. The reason is audited verbatim per Phase 17 D-12 dedup_override stream."
+					title := fmt.Sprintf("Write %q even if it duplicates a note?", path)
+					desc := "The vault's check for near-duplicates is overridden for this note; the reason is kept in the vault's audit log as given."
 					ok, err := vaultIngestConfirmFn(title, desc)
 					if err != nil {
 						return promptProblem(cmd, args, err, confirmNoTerminal, "yes")
@@ -213,8 +217,12 @@ func newVaultIngestCmd() *cobra.Command {
 			return renderCoverageReport(cmd.OutOrStdout(), env.Data, jsonFlag)
 		},
 	}
-	cmd.Flags().Bool("dedup-force", false, "Override DEDUP_BLOCKED via confirm_dedup_override=true (requires --reason; CONTEXT D-24)")
-	cmd.Flags().Bool("yes", false, "Skip operator confirmation prompt for --dedup-force (Phase 22 D-09/D-10 manual-recovery discipline)")
-	cmd.Flags().String("reason", "", "Operator override reason (REQUIRED with --dedup-force; audited verbatim per Phase 17 D-12)")
+	// --dedup-force sets create_note's confirm_dedup_override (CONTEXT D-24);
+	// the reason is audited verbatim in the dedup_override stream (Phase 17
+	// D-12); the operator confirms the override (Phase 22 D-09/D-10
+	// manual-recovery discipline).
+	cmd.Flags().Bool("dedup-force", false, "Write the note even if the vault finds it too similar to an existing one (needs --reason)")
+	cmd.Flags().Bool("yes", false, "Confirm --dedup-force without asking (needed without a terminal)")
+	cmd.Flags().String("reason", "", "Why the note is written all the same, kept in the vault's audit log (needed with --dedup-force)")
 	return cmd
 }

@@ -563,7 +563,7 @@ var updateHelpGolden = flag.Bool("update-help-golden", false,
 
 const helpGoldenFile = "testdata/help.golden"
 
-// TestHelpGolden pins the help of six commands as it is piped — no width, no
+// TestHelpGolden pins the help of seven commands as it is piped — no width, no
 // colour — and of ws proxy on a 40-column terminal without colour. It is the
 // file a reviewer reads to see what the help looks like. Re-record with:
 //
@@ -583,6 +583,7 @@ func TestHelpGolden(t *testing.T) {
 		{"ws proxy profile use --help, piped", piped, []string{"proxy", "profile", "use"}},
 		{"ws list --help, piped", piped, []string{"list"}},
 		{"ws vault doctor --help, piped", piped, []string{"vault", "doctor"}},
+		{"ws vault ingest --help, piped", piped, []string{"vault", "ingest"}},
 		{"ws completion --help, piped", piped, []string{"completion"}},
 		{"ws proxy --help, 40-column terminal, no colour", narrow, []string{"proxy"}},
 	} {

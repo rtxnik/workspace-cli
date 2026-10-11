@@ -112,6 +112,20 @@
 |
 |Global Flags:
 |      --json  Output in JSON format, where the command supports it
+=== ws vault ingest --help, piped
+|Reads a markdown file — YAML frontmatter, which must give type and zone, and a body — and creates a note from it. The vault refuses a note too similar to an existing one: the command then exits 6 and prints the details on stderr. --dedup-force writes it all the same, with a --reason kept in the vault's audit log; it asks for confirmation first unless --yes is given, and without a terminal to ask on it refuses and names --yes.
+|
+|Usage:
+|  ws vault ingest <file> [flags]
+|
+|Flags:
+|      --dedup-force    Write the note even if the vault finds it too similar to an existing one (needs --reason)
+|  -h, --help           help for ingest
+|      --reason string  Why the note is written all the same, kept in the vault's audit log (needed with --dedup-force)
+|      --yes            Confirm --dedup-force without asking (needed without a terminal)
+|
+|Global Flags:
+|      --json  Output in JSON format, where the command supports it
 === ws completion --help, piped
 |Generate shell completion script for ws.
 |
