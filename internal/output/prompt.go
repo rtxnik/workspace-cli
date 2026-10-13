@@ -256,16 +256,20 @@ func stepRunning() bool {
 //  1. a signal was recorded: the prompt was cancelled by it — even on a run
 //     that reports the form completed, as a SIGTERM racing the operator's
 //     Enter arrives as the same quit;
-//  2. huh.ErrUserAborted: a Ctrl-C keystroke, which raw mode delivers as a
-//     key — cancelled by SIGINT;
-//  3. no error, the form completed: the answer;
-//  4. no error, the form not completed: an error, not an answer;
-//  5. any other error: the prompt failed;
+//  2. the run returned huh.ErrUserAborted: a Ctrl-C keystroke, which raw
+//     mode delivers as a key — cancelled by SIGINT;
+//  3. the run returned no error, the form completed: the answer;
+//  4. the run returned no error, the form not completed: an error, not an
+//     answer;
+//  5. the run returned any other error: the prompt failed;
 //  6. the run panicked — Bubble Tea recovers a panic in Update or View and
 //     huh panics again on the model it gets back: recovered, the prompt
 //     failed.
 //
-// A run that panicked returned nothing, so 2 to 5 never match it.
+// A run that panicked returned nothing, so 2 to 5, which read what the run
+// returned, cannot match it — though its error reads nil and the form is in
+// whatever state huh left it, completed included — and the switch below
+// tells the panic before them.
 //
 // A recorded signal also arms the watchdog (record), which ends a run Bubble
 // Tea's own handler has hung.
