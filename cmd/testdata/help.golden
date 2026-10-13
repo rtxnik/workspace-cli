@@ -99,16 +99,30 @@
 |Global Flags:
 |      --json  Output in JSON format, where the command supports it
 === ws vault doctor --help, piped
-|Runs 5 read-only diagnostic checks per CONTEXT D-12: orphan MCP subprocesses, stale lock files, VAULT_AI_TOKEN presence, MCP fd-pass handshake, xrepo contract parity. Exit 0 (all green) / 1 (≥1 yellow) / 2 (≥1 red). Mutation is opt-in only via --kill-orphans + --clear-stale-locks (each gated by --yes or output.Confirm) per memory feedback_no_auto_state_mutation + Phase 22 D-09/D-10 lineage.
+|Runs five read-only checks: orphan MCP subprocesses, stale lock files, VAULT_AI_TOKEN presence, the MCP fd-pass handshake and cross-repo contract parity. Exits 0 when every check passes, 1 when one is degraded, 2 when one failed. It changes nothing unless asked to: --kill-orphans and --clear-stale-locks each ask for confirmation before they act, or act at once with --yes; without --yes and without a terminal to ask on, the doctor refuses before it runs any check.
 |
 |Usage:
 |  ws vault doctor [flags]
 |
 |Flags:
-|      --clear-stale-locks  Remove stale lock files (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)
+|      --clear-stale-locks  Remove the stale lock files found, once confirmed
 |  -h, --help               help for doctor
-|      --kill-orphans       Kill detected orphan MCP subprocesses (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)
-|      --yes                Skip confirmation prompts for --kill-orphans / --clear-stale-locks (Phase 22 D-09/D-10 discipline)
+|      --kill-orphans       Kill the orphan MCP subprocesses found, once confirmed
+|      --yes                Confirm --kill-orphans and --clear-stale-locks without asking (needed without a terminal)
+|
+|Global Flags:
+|      --json  Output in JSON format, where the command supports it
+=== ws vault ingest --help, piped
+|Reads a markdown file — YAML frontmatter, which must give type and zone, and a body — and creates a note from it. The vault refuses a note too similar to an existing one: the command then exits 6 and prints the details on stderr. --dedup-force writes it all the same, with a --reason kept in the vault's audit log; it asks for confirmation first unless --yes is given, and without a terminal to ask on it refuses and names --yes.
+|
+|Usage:
+|  ws vault ingest <file> [flags]
+|
+|Flags:
+|      --dedup-force    Write the note even if the vault finds it too similar to an existing one (needs --reason)
+|  -h, --help           help for ingest
+|      --reason string  Why the note is written all the same, kept in the vault's audit log (needed with --dedup-force)
+|      --yes            Confirm --dedup-force without asking (needed without a terminal)
 |
 |Global Flags:
 |      --json  Output in JSON format, where the command supports it

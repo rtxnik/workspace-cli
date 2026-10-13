@@ -172,16 +172,25 @@ func fxProblemSources(p Problem) []string {
 	for _, f := range p.Facts {
 		out = append(out, f.K, f.V)
 	}
-	for _, st := range p.Steps {
-		out = append(out, st.Label, st.Cmd)
-	}
-	return out
+	return append(out, fxRemedySources(p.Steps)...)
 }
 
 func fxEmptySources(e Empty) []string {
-	out := []string{e.Subject}
-	for _, st := range e.Steps {
-		out = append(out, st.Label, st.Cmd)
+	return append([]string{e.Subject}, fxRemedySources(e.Steps)...)
+}
+
+// fxRemedySources are a step's label and its command — word by word for a
+// command given as words, which is broken between its words with a line
+// continuation that is not one of them.
+func fxRemedySources(steps []Remedy) []string {
+	var out []string
+	for _, st := range steps {
+		out = append(out, st.Label)
+		if len(st.Words) > 0 {
+			out = append(out, st.Words...)
+		} else {
+			out = append(out, st.Cmd)
+		}
 	}
 	return out
 }
@@ -603,36 +612,36 @@ func fxCorpusBuild() []fixture {
 			Cause: "iptables: no chain/target/match by that name (exit 1)",
 			Facts: []Fact{{K: "stage", V: "post-start route fix"}, {K: "proxy", V: "devpod-proxy at 172.31.0.2"},
 				{K: "failed", V: "ws-vault-ai, ws-lazyray"}},
-			Steps: []Remedy{{"Retry the route fix", "ws proxy fix-routes"}, {"Diagnose the stack", "ws proxy doctor"}},
+			Steps: []Remedy{{Label: "Retry the route fix", Cmd: "ws proxy fix-routes"}, {Label: "Diagnose the stack", Cmd: "ws proxy doctor"}},
 		}, nil},
 		{"problem/multiline-cause", "§6.2 multi-line upstream error", Problem{
 			Title: "Could not start workspace \"api\"",
 			Cause: fxMultilineErr,
 			Facts: []Fact{{K: "command", V: "devpod up api --ide none"}, {K: "exit", V: "1"}},
-			Steps: []Remedy{{"Check the daemon", "systemctl --user status docker"}, {"Retry", "ws up api"}},
+			Steps: []Remedy{{Label: "Check the daemon", Cmd: "systemctl --user status docker"}, {Label: "Retry", Cmd: "ws up api"}},
 		}, nil},
 		{"problem/name64", "§6.2 64-character name", Problem{
 			Title: "Workspace \"" + fxName64 + "\" not found",
 			Facts: []Fact{{K: "searched", V: "~/projects"}, {K: "endpoint", V: fxIPv6}},
-			Steps: []Remedy{{"List workspaces", "ws list"}, {"Create it", "ws new " + fxName64}},
+			Steps: []Remedy{{Label: "List workspaces", Cmd: "ws list"}, {Label: "Create it", Cmd: "ws new " + fxName64}},
 		}, nil},
 		{"problem/unbreakable-200", "§6.2 200-character unbreakable token", Problem{
 			Title: "Image pull failed for " + fxToken200,
 			Cause: "manifest unknown: " + fxToken200,
 			Facts: []Fact{{K: "digest", V: fxToken200}},
-			Steps: []Remedy{{"Retry with the digest", "ws profile add x --image " + fxToken200}},
+			Steps: []Remedy{{Label: "Retry with the digest", Cmd: "ws profile add x --image " + fxToken200}},
 		}, nil},
 		{"problem/cjk", "§6.2 CJK-only text", Problem{
 			Title: "工作区启动失败：网络不可达",
 			Cause: fxCJKNote,
 			Facts: []Fact{{K: "阶段", V: "启动后路由修复"}, {K: "代理", V: "devpod-proxy 位于 172.31.0.2"}},
-			Steps: []Remedy{{"重试", "ws proxy fix-routes"}},
+			Steps: []Remedy{{Label: "重试", Cmd: "ws proxy fix-routes"}},
 		}, nil},
 		{"problem/emoji-presentation", "§6.2 emoji-presentation sequences (base + U+FE0F)", Problem{
 			Title: "⚠️ Could not rebuild profile \"go\"",
 			Cause: fxEmojiCause + "\n" + fxEmojiRun,
 			Facts: []Fact{{K: "stage", V: "buildkit export"}, {K: "markers", V: fxEmojiRun}},
-			Steps: []Remedy{{"Retry the build", "ws profile rebuild go"}},
+			Steps: []Remedy{{Label: "Retry the build", Cmd: "ws profile rebuild go"}},
 		}, nil},
 		// The Problem a failed task renders as, with the most its tail holds:
 		// 20 lines, one of them cut at 1 KiB.
@@ -641,8 +650,16 @@ func fxCorpusBuild() []fixture {
 			Title: "Could not pull the base image",
 			Cause: fxEscCause,
 			Facts: []Fact{{K: "image", V: fxBaseImage}, {K: "registry", V: fxIPv6}},
-			Steps: []Remedy{{"Retry", "ws profile rebuild default"}},
+			Steps: []Remedy{{Label: "Retry", Cmd: "ws profile rebuild default"}},
 		}, append([]string{fxBaseImage, fxIPv6, "Retry", "ws profile rebuild default"}, fxEscSurvivors...)},
+		// A step built from the operator's arguments, given as shell words:
+		// broken between them, with line continuations, at every narrow width.
+		{"problem/words", "§3.6 phase 6: a step given as words", Problem{
+			Title: "Cannot ask for confirmation: no terminal",
+			Cause: "stdin is not a terminal",
+			Steps: []Remedy{{Label: "Skip the prompt", Words: []string{"ws", "vault", "ingest", "--dedup-force",
+				"'--reason=a dup'", "--yes", "--", "-draft.md"}}},
+		}, nil},
 	}
 	for _, pf := range problems {
 		p, fid := pf.p, pf.fid
@@ -663,15 +680,15 @@ func fxCorpusBuild() []fixture {
 		e          Empty
 	}{
 		{"empty/workspaces", "§6.1 empty", Empty{Subject: "workspaces", Steps: []Remedy{
-			{"Create one", "ws new <name>"}, {"See profiles", "ws profiles"}}}},
+			{Label: "Create one", Cmd: "ws new <name>"}, {Label: "See profiles", Cmd: "ws profiles"}}}},
 		{"empty/long", "§6.2 subject and command longer than the budget", Empty{
 			Subject: "proxy profiles for the currently selected endpoint " + fxName64,
 			Steps: []Remedy{
-				{"Add one from a share link", "ws proxy profile add --from-url 'vless://" + fxToken200 + "'"},
-				{"Import", "ws proxy profile import ./" + fxName64 + ".json"}}}},
+				{Label: "Add one from a share link", Cmd: "ws proxy profile add --from-url 'vless://" + fxToken200 + "'"},
+				{Label: "Import", Cmd: "ws proxy profile import ./" + fxName64 + ".json"}}}},
 		{"empty/emoji-presentation", "§6.2 emoji-presentation sequences (base + U+FE0F)", Empty{
 			Subject: "cached layers for " + fxEmojiRun,
-			Steps:   []Remedy{{"⚠️ Rebuild", "ws profile rebuild go"}}}},
+			Steps:   []Remedy{{Label: "⚠️ Rebuild", Cmd: "ws profile rebuild go"}}}},
 	}
 	for _, ef := range empties {
 		e := ef.e
@@ -820,19 +837,21 @@ func fxCorpusBuild() []fixture {
 	escProblem := Problem{
 		Title: fxEsc("Could not reconcile the go profile"),
 		Facts: []Fact{{K: fxEsc("stage"), V: fxEsc("buildkit export")}},
-		Steps: []Remedy{{fxEsc("Retry"), fxEsc("ws profile rebuild go")}},
+		Steps: []Remedy{{Label: fxEsc("Retry"), Cmd: fxEsc("ws profile rebuild go")},
+			{Label: "Skip the prompt", Words: []string{"ws", fxEsc("delete"), "--force", "ops"}}},
 	}
 	out = append(out, fixture{
 		name: "problem/esc-surfaces", kind: "problem",
-		spec:        "§6.7 / D-13: escapes in Title, a Fact key and value, and a Remedy label and command",
-		fidelity:    []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go"},
+		spec: "§6.7 / D-13: escapes in Title, a Fact key and value, a Remedy label and command, and a Remedy word",
+		fidelity: []string{"Could not reconcile the go profile", "stage", "buildkit export", "Retry", "ws profile rebuild go",
+			"Skip the prompt", "ws", "delete", "--force", "ops"},
 		prefixState: StateFail, hasPrefixState: true,
 		render: func(s *Stream) string { return escProblem.Render(s) },
 	})
 
 	escEmpty := Empty{
 		Subject: fxEsc("cached layers"),
-		Steps:   []Remedy{{fxEsc("Rebuild"), fxEsc("ws profile rebuild go")}},
+		Steps:   []Remedy{{Label: fxEsc("Rebuild"), Cmd: fxEsc("ws profile rebuild go")}},
 	}
 	out = append(out, fixture{
 		name: "empty/esc-surfaces", kind: "empty",

@@ -232,7 +232,7 @@ This copies the `routing.rules` from the active profile into `secondary.json`. O
 ws proxy profile rm old-backup
 ```
 
-Refuses to remove the active profile. Asks for confirmation; use `--force` to skip.
+Refuses to remove the active profile, or one that does not exist, before it asks anything; then asks for confirmation. `--force` skips the question, and is needed without a terminal (see [Scripts and CI](../README.md#scripts-and-ci)).
 
 ## Container lifecycle
 

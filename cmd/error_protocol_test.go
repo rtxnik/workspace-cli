@@ -21,6 +21,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/mcp"
 	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/rtxnik/workspace-cli/internal/proxyengine"
 	"github.com/spf13/cobra"
@@ -86,7 +87,9 @@ type errorCase struct {
 	legacyXray bool
 }
 
-// errorCases covers the four branches of the root protocol, the argument
+// errorCases covers four of the root protocol's five branches — the fifth, a
+// cancellation, whose child dies of its signal, is TestRootDiesOfACancellation's
+// — the argument
 // and runtime halves of the usage distinction, a failed step, whose error
 // the spinner used to print a second time, and every helper and in-body exit
 // that phase 1 moves onto a returned value and a hermetic process can reach.
@@ -156,7 +159,9 @@ var errorCases = []errorCase{
 
 	// The two helpers that called Die before phase 1, and the exits beside them.
 	{name: "helper/select-no-workspaces", args: []string{"ssh"}},
-	{name: "helper/select-cancelled", args: []string{"ssh"}, workspace: "wsx"},
+	// The child has no controlling terminal and stdin is the null device:
+	// the selector cannot ask (it read as a silent success before phase 6).
+	{name: "helper/select-no-terminal", args: []string{"ssh"}, workspace: "wsx"},
 	{name: "helper/connected-enumeration-fails", args: []string{"proxy", "down"}, stub: "connected-enumeration-fails"},
 	{name: "helper/connected-declined", args: []string{"proxy", "down"}, stub: "connected-declined"},
 
@@ -192,6 +197,13 @@ var errorCases = []errorCase{
 func installExecuteStub(name string) {
 	switch name {
 	case "":
+	case "cancelled-sigint", "cancelled-sigterm", "cancelled-sighup":
+		sig := map[string]os.Signal{"cancelled-sigint": os.Interrupt, "cancelled-sigterm": syscall.SIGTERM,
+			"cancelled-sighup": syscall.SIGHUP}[name]
+		rootCmd.AddCommand(&cobra.Command{Use: "cancel-test", Hidden: true, RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return fmt.Errorf("confirm: %w", &output.Cancelled{Signal: sig})
+		}})
 	case "proxy-not-ready":
 		verifyProxyReadyFn = func(config.Config) error {
 			return errors.New("stub: proxy container not inspectable")
@@ -206,7 +218,7 @@ func installExecuteStub(name string) {
 		proxyConnectedContainersFn = func(config.Config) ([]string, error) {
 			return []string{"wsa"}, nil
 		}
-		warnConfirmFn = func(string, string) bool { return false }
+		warnConfirmFn = func(string, string) (bool, error) { return false, nil }
 	case "health-yellow":
 		vaultHealthScoreComputeFn = func(context.Context, *cobra.Command) (int, error) { return 55, nil }
 	case "tunnel-up":
@@ -253,6 +265,12 @@ func installExecuteStub(name string) {
 			return &doctorCheck{Name: "xrepo-contract-parity", Band: bandYellow,
 				Detail:      "check-xrepo-contract.sh not found at /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: stat /srv/vault-ai/_tooling/lint/check-xrepo-contract.sh: no such file or directory",
 				Remediation: "verify Phase 17 deliverable is present in vault-ai checkout"}
+		}
+	case "vault-ingest-created":
+		// The vault answers create_note with the note it wrote.
+		vaultIngestCallFn = func(context.Context, *cobra.Command, mcp.CreateNoteArgs) (*mcp.Envelope, error) {
+			return &mcp.Envelope{OK: true, Data: json.RawMessage(
+				`{"id":"zettel-20261011-stand-up","path":"30_Resources/zettel-20261011-stand-up.md"}`)}, nil
 		}
 	case "vault-status-mixed":
 		// Six signals as a host with no cost or DR-drill logs yet answers
@@ -360,12 +378,13 @@ func runExecuteChild(t *testing.T, c errorCase) (code int, stdout, stderr string
 	// the 30s deadline above.
 	cmd.WaitDelay = 5 * time.Second
 	// Setsid, so the child has no controlling terminal. Its stdin is the null
-	// device, and huh's terminal layer answers that by opening /dev/tty
-	// instead — which, when `go test` is run from a real terminal, is the
-	// developer's: the selector case then draws a live prompt there. The
-	// 45 s timeout panic under `script -qec` was measured before the
-	// per-case 30 s deadline below existed; with the deadline, the same
-	// regression fails the case by name after 30 s instead.
+	// device, which the prompt core refuses before huh runs. Were that
+	// refusal to regress, huh would open /dev/tty instead: without a new
+	// session that is the developer's terminal when `go test` runs from one,
+	// and the selector case would draw a live prompt there (a 45 s timeout
+	// panic was once measured under `script -qec`). In a new session the open
+	// fails at once and the case fails by name; the per-case 30 s deadline
+	// above bounds any other block.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	// The environment is built, not inherited: a COLUMNS, NO_COLOR, CI or
 	// VAULT_AI_REPO_ROOT in the developer's shell must not reach the case.
@@ -590,7 +609,7 @@ func TestErrorOutputBaseline(t *testing.T) {
 	}
 }
 
-// TestRootProtocolBranches drives run() directly: which of its four branches
+// TestRootProtocolBranches drives run() directly: which of its five branches
 // an error takes, and the exit code each one routes. The bytes those branches
 // print are TestErrorOutputBaseline's; this is the selection.
 //
@@ -613,6 +632,10 @@ func TestRootProtocolBranches(t *testing.T) {
 		{"wrapped silent prints the wrapper's text",
 			fmt.Errorf("context: %w", &cliErrorWithExit{code: 3, msg: ""}), "context: ", 3},
 		{"plain", errors.New("plain failure"), "plain failure", 1},
+		{"cancelled by SIGINT", &output.Cancelled{Signal: os.Interrupt}, "", 130},
+		{"wrapped cancelled by SIGTERM", fmt.Errorf("confirm: %w", &output.Cancelled{Signal: syscall.SIGTERM}), "", 143},
+		{"cancelled by SIGHUP beats a cli exit in the same chain", fmt.Errorf("%w: %w",
+			&cliErrorWithExit{code: 2, msg: "band"}, &output.Cancelled{Signal: syscall.SIGHUP}), "", 129},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			msg, code := run(c.err)
@@ -620,6 +643,29 @@ func TestRootProtocolBranches(t *testing.T) {
 				t.Errorf("run(%v) = (%q, %d); want (%q, %d)", c.err, msg, code, c.wantMsg, c.wantCode)
 			}
 		})
+	}
+}
+
+// TestRootDiesOfACancellation: in a child process, a command that returns a
+// cancelled prompt — wrapped, as a call site passes it through — ends the
+// process by the prompt's signal, the shell's death by it, with nothing on
+// stderr.
+func TestRootDiesOfACancellation(t *testing.T) {
+	for stub, want := range map[string]syscall.Signal{
+		"cancelled-sigint": syscall.SIGINT, "cancelled-sigterm": syscall.SIGTERM, "cancelled-sighup": syscall.SIGHUP,
+	} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestExecuteChildProcess$")
+		cmd.Env = append(os.Environ(), executeChildEnv+"=1", executeArgsEnv+`=["cancel-test"]`, executeStubEnv+"="+stub)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		_ = cmd.Run()
+		status, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
+		if !status.Signaled() || status.Signal() != want {
+			t.Errorf("%s: the child ended with %v; want death by %v", stub, status, want)
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("%s: the child wrote %q on stderr; want nothing", stub, stderr.String())
+		}
 	}
 }
 

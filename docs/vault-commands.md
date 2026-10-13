@@ -154,7 +154,7 @@ Overall: yellow (exit 1)
 
 **Flags.** `<file>` (positional); `--dedup-force` — override a dedup block (requires `--reason`); `--reason "<text>"` — operator override reason, audited verbatim (REQUIRED with `--dedup-force`); `--yes` — skip the operator confirmation prompt; `--json`. Note `type`/`zone` are read from the ingested file's YAML frontmatter (hard error if missing), not from flags.
 
-**Safety rail.** `--dedup-force` without `--reason` is rejected; the confirmation prompt fires unless `--yes` is set. On a dedup block the command returns exit 6 with envelope details on stderr.
+**Safety rail.** `--dedup-force` without `--reason` is rejected; otherwise it asks for confirmation unless `--yes` is set, and without a terminal to ask on it exits 1 and names `--yes`. On a dedup block the command returns exit 6 with envelope details on stderr.
 
 ### ws vault get-coverage-report
 
@@ -170,11 +170,11 @@ Overall: yellow (exit 1)
 
 ### ws vault doctor
 
-**Purpose.** Self-diagnose common failures: orphan MCP subprocess, stale lock files, missing token, broken token-fd-pass, qdrant container liveness. **Read-only by default** per memory `feedback_no_auto_state_mutation`. (CLI-10; Phase 18 Plan 18-05.)
+**Purpose.** Self-diagnose common failures: orphan MCP subprocess, stale lock files, missing token, broken token-fd-pass, cross-repo contract drift. **Read-only by default** per memory `feedback_no_auto_state_mutation`. (CLI-10; Phase 18 Plan 18-05.)
 
-**Flags.** `--kill-orphans` (opt-in mutation; requires `--yes`); `--clear-stale-locks` (opt-in mutation; requires `--yes`); `--yes` (skip confirmation for the two mutation flags); `--json` (NDJSON, one check record per line). Without mutation flags, doctor diagnoses + prints remediation; doctor does not heal silently. Enforced by `TestVaultDoctorReadOnlyByDefault` tripwire.
+**Flags.** `--kill-orphans` (opt-in mutation; asks for confirmation unless `--yes`); `--clear-stale-locks` (likewise); `--yes` (skip confirmation for the two mutation flags; needed without a terminal, where the doctor otherwise refuses before running any check: exit 1, stdout empty); `--json` (NDJSON, one check record per line). Without mutation flags, doctor diagnoses + prints remediation; doctor does not heal silently. Enforced by `TestVaultDoctorReadOnlyByDefault` tripwire.
 
-**Output.** A `Vault doctor` report on stdout: one line per check, its band as a state (`✓ ok`, `⚠ degraded`, `✗ failed`), its detail beneath and, when it has one, its remediation as a `Fix:` line. The last line is the worst band and the exit code it maps to; nothing goes to stderr unless a mutation flag acts.
+**Output.** A `Vault doctor` report on stdout: one line per check, its band as a state (`✓ ok`, `⚠ degraded`, `✗ failed`), its detail beneath and, when it has one, its remediation as a `Fix:` line. The last line is the worst band and the exit code it maps to; nothing goes to stderr unless a mutation flag acts, or is refused.
 
 ```
 Vault doctor

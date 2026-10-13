@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -271,6 +272,26 @@ func ReadActiveProfileName(cfg config.Config) (string, error) {
 //   - On a non-existent profile, returns a wrapped os.IsNotExist error so
 //     callers can distinguish from real I/O failures.
 func RemoveProfile(cfg config.Config, name string) error {
+	if err := CheckRemovable(cfg, name); err != nil {
+		return err
+	}
+	target := filepath.Join(cfg.XrayProfilesDir, name+".json")
+	if err := os.Remove(target); err != nil {
+		return fmt.Errorf("remove profile %q at %s: %w", name, target, err)
+	}
+	return nil
+}
+
+// CheckRemovable reports why the profile name cannot be removed, or nil: its
+// name is not valid, which is checked before any file is touched; it is the
+// active profile; or its file is not there. The file is looked for with
+// os.Lstat, as os.Remove does not follow a symlink either, so a dangling
+// link is there to remove. A missing file keeps RemoveProfile's wording,
+// remove profile %q at %s: %w, now wrapping Lstat's error where Remove's
+// stood (spec E-08), for which errors.Is(err, fs.ErrNotExist) holds;
+// any other error of Lstat's is itself. RemoveProfile calls it, and a command
+// calls it before it asks, so that the two cannot disagree.
+func CheckRemovable(cfg config.Config, name string) error {
 	if err := ValidateProfileName(name); err != nil {
 		return err
 	}
@@ -279,8 +300,11 @@ func RemoveProfile(cfg config.Config, name string) error {
 		return fmt.Errorf("cannot remove active profile %q (run `ws proxy profile use <other>` first)", name)
 	}
 	target := filepath.Join(cfg.XrayProfilesDir, name+".json")
-	if err := os.Remove(target); err != nil {
-		return fmt.Errorf("remove profile %q at %s: %w", name, target, err)
+	if _, err := os.Lstat(target); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove profile %q at %s: %w", name, target, err)
+		}
+		return err
 	}
 	return nil
 }

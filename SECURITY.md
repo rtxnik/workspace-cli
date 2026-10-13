@@ -25,7 +25,7 @@ minisign -Vm checksums.txt -P RWS9SKDBxXVQRL27p1aOVmdoSffl83dqJqKtnwDO6IqEMpdoRf
 sha256sum -c --ignore-missing checksums.txt
 ```
 
-`scripts/install.sh` performs the same checks automatically; `--require-signature` makes the signature check mandatory.
+`scripts/install.sh` performs the same checks automatically and refuses to install without a valid signature; `--allow-unsigned` accepts checksum-level verification only, and `--require-signature`, the earlier opt-in, is accepted as a no-op.
 
 If the signing key is ever rotated, the new key is announced in the release notes of the first release signed with it, and `scripts/install.sh` plus this file are updated in the same commit.
 

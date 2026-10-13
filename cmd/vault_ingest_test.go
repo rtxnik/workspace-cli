@@ -36,10 +36,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/mcp"
+	"github.com/rtxnik/workspace-cli/internal/output"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -175,7 +178,7 @@ func TestVaultIngestDedupForceRequiresYes(t *testing.T) {
 		callCount++
 		return &mcp.Envelope{OK: true, Data: json.RawMessage(`{}`)}, nil
 	}
-	vaultIngestConfirmFn = func(_, _ string) bool { return false } // operator declines
+	vaultIngestConfirmFn = func(_, _ string) (bool, error) { return false, nil } // operator declines
 	path := writeTempIngestFile(t, "")
 
 	var out, errOut bytes.Buffer
@@ -193,12 +196,87 @@ func TestVaultIngestDedupForceRequiresYes(t *testing.T) {
 	})
 
 	var err error
-	quietStderr(t, func() { err = rootCmd.Execute() })
+	stdout, stderr := captureStd(t, func() { err = rootCmd.Execute() })
 	if err != nil {
 		t.Fatalf("declining the override must exit 0 (decline is not an error); got %v", err)
 	}
+	if stdout != "" || stderr != "Aborted\n" {
+		t.Errorf("a decline printed stdout %q, stderr %q; want only Aborted on stderr", stdout, stderr)
+	}
 	if callCount != 0 {
 		t.Errorf("create_note must NOT be called when the operator declines (got %d calls)", callCount)
+	}
+}
+
+// With --dedup-force and no --yes, a prompt that cannot ask makes ws vault
+// ingest return, after its input checks, the Problem that names the stream
+// and the step with --yes — the file, whose name begins with a dash, after a
+// -- — with nothing printed and nothing sent. A cancelled prompt is returned
+// as it is, for the root to die of its signal, with nothing printed either.
+func TestVaultIngestDedupForcePromptRefusals(t *testing.T) {
+	origCall := vaultIngestCallFn
+	origConfirm := vaultIngestConfirmFn
+	t.Cleanup(func() {
+		vaultIngestCallFn = origCall
+		vaultIngestConfirmFn = origConfirm
+	})
+	callCount := 0
+	vaultIngestCallFn = func(_ context.Context, _ *cobra.Command, _ mcp.CreateNoteArgs) (*mcp.Envelope, error) {
+		callCount++
+		return &mcp.Envelope{OK: true, Data: json.RawMessage(`{}`)}, nil
+	}
+	note, err := os.ReadFile(writeTempIngestFile(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "-draft.md"), note, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	leaf, _, err := rootCmd.Find([]string{"vault", "ingest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resetFlags(t, leaf) })
+
+	resetFlags(t, leaf)
+	vaultIngestConfirmFn = func(_, _ string) (bool, error) { return false, errNoTerminal }
+	var out, errOut *bytes.Buffer
+	stdout, stderr := captureStd(t, func() {
+		out, errOut, err = execCapture(t, "vault", "ingest", "--dedup-force", "--reason", "x", "--", "-draft.md")
+	})
+	if !errors.Is(err, output.ErrNoTTY) {
+		t.Errorf("errors.Is(%v, ErrNoTTY) = false; want true", err)
+	}
+	want := output.Problem{
+		Title: "Cannot ask for confirmation: no terminal",
+		Cause: "stdin is not a terminal",
+		Steps: []output.Remedy{{Label: "Skip the prompt",
+			Words: []string{"ws", "vault", "ingest", "--dedup-force", "--reason=x", "--yes", "--", "-draft.md"}}},
+	}
+	if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, want) {
+		t.Errorf("no terminal: the Problem is %+v, %t; want %+v", p, ok, want)
+	}
+	if printed := stdout + stderr + out.String() + errOut.String(); printed != "" {
+		t.Errorf("no terminal: the command printed %q; want nothing", printed)
+	}
+
+	resetFlags(t, leaf)
+	vaultIngestConfirmFn = func(_, _ string) (bool, error) { return false, &output.Cancelled{Signal: syscall.SIGINT} }
+	stdout, stderr = captureStd(t, func() {
+		out, errOut, err = execCapture(t, "vault", "ingest", "--dedup-force", "--reason", "x", "--", "-draft.md")
+	})
+	var cancelled *output.Cancelled
+	if !errors.As(err, &cancelled) || cancelled.Signal != syscall.SIGINT {
+		t.Errorf("cancelled: the command returned %v; want the SIGINT cancellation", err)
+	}
+	if printed := stdout + stderr + out.String() + errOut.String(); printed != "" {
+		t.Errorf("cancelled: the command printed %q; want nothing", printed)
+	}
+
+	if callCount != 0 {
+		t.Errorf("create_note was called %d time(s) after a prompt that did not answer", callCount)
 	}
 }
 
@@ -210,9 +288,9 @@ func TestVaultIngestDedupForceWithYes(t *testing.T) {
 		vaultIngestConfirmFn = origConfirm
 	})
 	confirmCount := 0
-	vaultIngestConfirmFn = func(_, _ string) bool {
+	vaultIngestConfirmFn = func(_, _ string) (bool, error) {
 		confirmCount++
-		return true // should NOT be invoked when --yes is supplied
+		return true, nil // should NOT be invoked when --yes is supplied
 	}
 	var gotArgs mcp.CreateNoteArgs
 	vaultIngestCallFn = func(_ context.Context, _ *cobra.Command, args mcp.CreateNoteArgs) (*mcp.Envelope, error) {

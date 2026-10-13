@@ -3,10 +3,13 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rtxnik/workspace-cli/internal/config"
+	"github.com/rtxnik/workspace-cli/internal/output"
 )
 
 func TestProxyRestartHappyPath(t *testing.T) {
@@ -98,7 +101,7 @@ func TestProxyRestartWarnGate_DeclineAborts(t *testing.T) {
 	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
 		return []string{"ws-alpha"}, nil
 	}
-	warnConfirmFn = func(_, _ string) bool { return false } // operator declines
+	warnConfirmFn = func(_, _ string) (bool, error) { return false, nil } // operator declines
 	var called int
 	proxyRestartCmdFn = func(_ config.Config) error { called++; return nil }
 	if err := proxyRestartCmd.Flags().Set("force", "false"); err != nil {
@@ -128,6 +131,62 @@ func TestProxyRestartWarnGate_DeclineAborts(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "Aborted") {
 		t.Errorf("expected 'Aborted' to be printed on decline; got %q", stderr)
+	}
+}
+
+// With workspaces connected, a gate's prompt that cannot ask makes ws proxy
+// restart return the Problem that names the stream and the step with
+// --force, with nothing printed and the proxy left alone; a cancelled prompt
+// is returned as it is, for the root to die of its signal, with nothing
+// printed either.
+func TestProxyRestartWarnGate_PromptRefusals(t *testing.T) {
+	origConn := proxyConnectedContainersFn
+	origConfirm := warnConfirmFn
+	origRestart := proxyRestartCmdFn
+	t.Cleanup(func() {
+		proxyConnectedContainersFn = origConn
+		warnConfirmFn = origConfirm
+		proxyRestartCmdFn = origRestart
+	})
+	proxyConnectedContainersFn = func(_ config.Config) ([]string, error) {
+		return []string{"ws-alpha"}, nil
+	}
+	var called int
+	proxyRestartCmdFn = func(_ config.Config) error { called++; return nil }
+
+	resetFlags(t, proxyRestartCmd)
+	warnConfirmFn = func(_, _ string) (bool, error) { return false, errNoTerminal }
+	var out, errOut *bytes.Buffer
+	var err error
+	stdout, stderr := captureStd(t, func() { out, errOut, err = execCapture(t, "proxy", "restart") })
+	if !errors.Is(err, output.ErrNoTTY) {
+		t.Errorf("errors.Is(%v, ErrNoTTY) = false; want true", err)
+	}
+	want := output.Problem{
+		Title: "Cannot ask for confirmation: no terminal",
+		Cause: "stdin is not a terminal",
+		Steps: []output.Remedy{{Label: "Skip the prompt", Words: []string{"ws", "proxy", "restart", "--force"}}},
+	}
+	if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, want) {
+		t.Errorf("no terminal: the Problem is %+v, %t; want %+v", p, ok, want)
+	}
+	if printed := stdout + stderr + out.String() + errOut.String(); printed != "" {
+		t.Errorf("no terminal: the command printed %q; want nothing", printed)
+	}
+
+	resetFlags(t, proxyRestartCmd)
+	warnConfirmFn = func(_, _ string) (bool, error) { return false, &output.Cancelled{Signal: syscall.SIGTERM} }
+	stdout, stderr = captureStd(t, func() { out, errOut, err = execCapture(t, "proxy", "restart") })
+	var cancelled *output.Cancelled
+	if !errors.As(err, &cancelled) || cancelled.Signal != syscall.SIGTERM {
+		t.Errorf("cancelled: the command returned %v; want the SIGTERM cancellation", err)
+	}
+	if printed := stdout + stderr + out.String() + errOut.String(); printed != "" {
+		t.Errorf("cancelled: the command printed %q; want nothing", printed)
+	}
+
+	if called != 0 {
+		t.Errorf("the proxy was restarted %d time(s) by a prompt that did not answer", called)
 	}
 }
 

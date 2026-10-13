@@ -398,7 +398,7 @@ func TestRunFlushesTheQueueWhenATaskPanics(t *testing.T) {
 func TestNestedRunJoinsTheQueue(t *testing.T) {
 	var buf syncBuffer
 	r := testRunner(NewStreamAt(&buf, 60, true, ColourNone, false), &fakeClock{}, make(chan time.Time))
-	inner := &ProblemError{P: Problem{Title: "Switch to \"backup\" failed", Steps: []Remedy{{"Restore previous", "ws proxy profile use primary"}}},
+	inner := &ProblemError{P: Problem{Title: "Switch to \"backup\" failed", Steps: []Remedy{{Label: "Restore previous", Cmd: "ws proxy profile use primary"}}},
 		Err: errors.New("switch to \"backup\" failed (previous=\"primary\"): restart: exit status 1")}
 	err := r.run([]Task{{Title: "Switching profile", Run: func(log *Log) error {
 		return Run(
@@ -531,7 +531,7 @@ func TestATaskErrorWithoutAnError(t *testing.T) {
 func TestTaskErrorAsProblem(t *testing.T) {
 	tail := []string{"step two", "fatal: denied"}
 	withCause := Problem{Title: "Failed to start proxy", Cause: "image not found"}
-	noCause := Problem{Title: "Failed to start proxy", Steps: []Remedy{{"Rebuild image", "ws proxy rebuild"}}}
+	noCause := Problem{Title: "Failed to start proxy", Steps: []Remedy{{Label: "Rebuild image", Cmd: "ws proxy rebuild"}}}
 	inner := &TaskError{Title: "inner", Err: errors.New("inner failed"), Tail: []string{"inner line"}}
 	for _, c := range []struct {
 		name string

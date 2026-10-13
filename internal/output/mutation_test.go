@@ -636,8 +636,9 @@ func TestPairedAssertionCatchesWhatTheSweepCannot(t *testing.T) {
 // the corpus — the bytes do not change — and a harness that reported such a
 // mutant as killed would be certifying coverage it does not have.
 //
-// So those defects are planted against the PROBES of stream_contract_test.go
-// and message_test.go instead, on the same three rules: the probe must be
+// So those defects are planted against the PROBES of stream_contract_test.go,
+// message_test.go, run_test.go, prompt_test.go and prompt_input_test.go
+// instead, on the same three rules: the probe must be
 // green clean, the mutant must CHANGE WHAT THE PROBE OBSERVES, and the probe
 // must go red.
 
@@ -737,6 +738,61 @@ func contractMutants() []contractMutant {
 			apply: func(m *mutantSwitches) { m.IgnoreCJKTag = true },
 			probe: probeGlyphMode,
 		},
+		{
+			name: "prompt_no_terminal_read_as_no",
+			spec: "phase 6 §4.3",
+			defect: "a Confirm that could not ask returns the operator's \"no\", so `ws delete ops` in CI prints " +
+				"Aborted and exits 0",
+			apply: func(m *mutantSwitches) { m.PromptNoTerminalIsNo = true },
+			probe: probePromptNoTerminal,
+		},
+		{
+			name: "prompt_cancellation_read_as_no",
+			spec: "phase 6 §4.3",
+			defect: "a Confirm a Ctrl-C or a signal cancelled returns \"no\", so the process exits 0 with Aborted " +
+				"instead of dying of the signal",
+			apply: func(m *mutantSwitches) { m.PromptCancelledIsNo = true },
+			probe: probePromptCancellation,
+		},
+		{
+			name: "prompt_sigterm_read_as_answer",
+			spec: "phase 6 §4.3",
+			defect: "a SIGTERM that arrives as the form quits is read as the operator's answer, so `ws ssh` enters " +
+				"the highlighted workspace",
+			apply: func(m *mutantSwitches) { m.PromptSIGTERMIsAnswer = true },
+			probe: probePromptSIGTERM,
+		},
+		{
+			name: "prompt_watchdog_never_fires",
+			spec: "phase 6 §4.3",
+			defect: "a recorded signal arms no watchdog, so a run Bubble Tea's handler hung keeps the process " +
+				"alive and the terminal raw",
+			apply: func(m *mutantSwitches) { m.PromptWatchdogNeverFires = true },
+			probe: probePromptWatchdog,
+		},
+		{
+			name: "screen_reader_end_of_input_read_as_answer",
+			spec: "phase 6 §4.3",
+			defect: "the screen-reader mode reads the end of input as an answer — huh's default, or what was typed " +
+				"without Enter — so `TERM=dumb ws ssh` with nothing typed enters the first workspace",
+			apply: func(m *mutantSwitches) { m.PromptEOFIsAnswer = true },
+			probe: probeScreenReaderEOF,
+		},
+		{
+			name: "screen_reader_end_of_input_not_latched",
+			spec: "phase 6 §4.3",
+			defect: "the screen-reader mode reads stdin again after its end of input, so a Ctrl-D at the wizard's " +
+				"first field leaves it waiting at the second",
+			apply: func(m *mutantSwitches) { m.PromptEOFNotLatched = true },
+			probe: probeScreenReaderLatch,
+		},
+		{
+			name:   "screen_reader_prompt_on_stdout",
+			spec:   "phase 6 §4.3",
+			defect: "the screen-reader mode draws its prompt on stdout, huh's default, into the answer a script reads",
+			apply:  func(m *mutantSwitches) { m.PromptDrawnOnStdout = true },
+			probe:  probeScreenReaderStream,
+		},
 	}
 }
 
@@ -749,14 +805,17 @@ func TestContractMutationHarness(t *testing.T) {
 	// One clean run per probe: the baseline observation, and the proof that
 	// the probe is green on the shipped behaviour before anything is planted.
 	//
-	// Both registries: contractProbes() in stream_contract_test.go carries
-	// stream_identity, resolve_width and glyph_mode_selection, and
+	// Five registries: contractProbes() in stream_contract_test.go carries
+	// stream_identity, resolve_width and glyph_mode_selection;
 	// messageProbes() in message_test.go carries message_routing and
-	// fail_contract. They are separate because the message helpers did not have
-	// their §4.7 behaviour when the first registry landed, so a probe over
-	// them would have been red at that point's own acceptance gate.
+	// fail_contract; runnerProbes() the step runner's; promptProbes() in
+	// prompt_test.go and screenReaderProbes() in prompt_input_test.go the
+	// prompt core's, against which the phase-6 mutants are planted. They are
+	// separate because each layer's behaviour landed after the one before, so a
+	// probe over it would have been red at that point's own acceptance gate.
 	clean := map[string]string{}
-	for _, p := range append(append(contractProbes(), messageProbes()...), runnerProbes()...) {
+	probes := append(append(contractProbes(), messageProbes()...), runnerProbes()...)
+	for _, p := range append(append(probes, promptProbes()...), screenReaderProbes()...) {
 		r := newResults()
 		clean[p.name] = p.run(t, r)
 		if r.any() {

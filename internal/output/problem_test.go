@@ -33,7 +33,7 @@ func TestProblemErrorKeepsTheErrorItWraps(t *testing.T) {
 // the outermost carrier, and reports none for an error that carries none.
 func TestProblemOfFindsTheFirstCarrier(t *testing.T) {
 	inner := Problem{Title: "inner", Cause: "the inner cause"}
-	outer := Problem{Title: "outer", Steps: []Remedy{{"Retry", "ws proxy up"}}}
+	outer := Problem{Title: "outer", Steps: []Remedy{{Label: "Retry", Cmd: "ws proxy up"}}}
 	for _, c := range []struct {
 		name string
 		err  error

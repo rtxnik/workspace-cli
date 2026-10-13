@@ -1,11 +1,60 @@
 package profile
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rtxnik/workspace-cli/internal/config"
 )
+
+// TestCheckDeletable: a built-in profile, an invalid name, a profile that is
+// not there — a dangling symlink included — are refused with the words
+// Delete has always used; a permission denied while looking is that error,
+// not "not found"; a profile that is there is deletable, and Delete refuses
+// what CheckDeletable refuses.
+func TestCheckDeletable(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{ProfilesDir: dir}
+	if err := os.Mkdir(filepath.Join(dir, "mine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "gone"), filepath.Join(dir, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, want string }{
+		{"default", `cannot delete built-in profile "default"`},
+		{"nosuch", `profile "nosuch" not found`},
+		{"dangling", `profile "dangling" not found`},
+	} {
+		if err := CheckDeletable(cfg, c.name); err == nil || err.Error() != c.want {
+			t.Errorf("CheckDeletable(%q) = %v; want %q", c.name, err, c.want)
+		}
+		if err := Delete(cfg, c.name); err == nil || err.Error() != c.want {
+			t.Errorf("Delete(%q) = %v; want %q", c.name, err, c.want)
+		}
+	}
+	if err := CheckDeletable(cfg, "Bad Name"); err == nil || err.Error() != ValidateName("Bad Name").Error() {
+		t.Errorf("CheckDeletable(%q) = %v; want the name's own refusal", "Bad Name", err)
+	}
+	if err := CheckDeletable(cfg, "mine"); err != nil {
+		t.Errorf("CheckDeletable(mine) = %v; want nil", err)
+	}
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory it has no permission on")
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if err := CheckDeletable(cfg, "mine"); !errors.Is(err, fs.ErrPermission) || strings.Contains(err.Error(), "not found") {
+		t.Errorf("CheckDeletable under a directory it cannot search = %v; want the permission error, not not found", err)
+	}
+}
 
 func TestParseDockerfileBase(t *testing.T) {
 	tests := []struct {

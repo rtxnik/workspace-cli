@@ -17,8 +17,9 @@ package cmd
 //   - Default invocation NEVER mutates state — only reports + remediation hints.
 //   - --kill-orphans gates mutation #1 (kill detected orphan PIDs).
 //   - --clear-stale-locks gates mutation #2 (remove stale lock files).
-//   - BOTH require --yes OR an interactive output.Confirm acceptance before
-//     the actual kill/remove fires.
+//   - BOTH require --yes OR an interactive output.Confirm acceptance
+//     before the actual kill/remove fires. Without --yes and without a
+//     terminal to ask on, the doctor refuses before it checks anything.
 //
 // Mutation discipline is structurally enforced by TestVaultDoctorReadOnlyByDefault
 // which mocks the kill/remove fns and asserts call-count = 0 when no flags
@@ -37,6 +38,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -406,11 +408,13 @@ func vaultDoctorReport(checks []*doctorCheck, worst statusBand, code int) output
 }
 
 // applyMutations executes the opt-in mutations gated by --kill-orphans and
-// --clear-stale-locks. Each gate independently requires --yes OR Confirm
-// acceptance before invoking the kill/remove fn.
+// --clear-stale-locks. Each gate independently requires --yes or the
+// operator's yes before invoking the kill/remove fn. A prompt that does not
+// answer — cancelled, or failed — stops the run there: its error is
+// returned, and a later gate is not reached.
 //
-// Returns silently when neither flag is set (the read-only-by-default path).
-func applyMutations(cmd *cobra.Command, checks []*doctorCheck) {
+// Returns nil when neither flag is set (the read-only-by-default path).
+func applyMutations(cmd *cobra.Command, checks []*doctorCheck) error {
 	killOrphans, _ := cmd.Flags().GetBool("kill-orphans")
 	clearLocks, _ := cmd.Flags().GetBool("clear-stale-locks")
 	yes, _ := cmd.Flags().GetBool("yes")
@@ -427,12 +431,18 @@ func applyMutations(cmd *cobra.Command, checks []*doctorCheck) {
 		if orphan != nil && len(orphan.PIDs) > 0 {
 			proceed := yes
 			if !proceed {
+				// Killing a live session by mistake is destructive (Phase 22
+				// D-10 manual-recovery discipline): the operator decides.
 				title := fmt.Sprintf("Kill %d orphan MCP subprocess(es)?", len(orphan.PIDs))
 				desc := fmt.Sprintf(
-					"This will SIGTERM PIDs %v (5s grace then SIGKILL). Falsely killing a legitimate session is destructive per Phase 22 D-10 manual-recovery discipline.",
+					"Sends SIGTERM to PIDs %v, then SIGKILL after 5s. A session still in use that is killed by mistake loses its work.",
 					orphan.PIDs,
 				)
-				proceed = doctorConfirmFn(title, desc)
+				ok, err := doctorConfirmFn(title, desc)
+				if err != nil {
+					return err
+				}
+				proceed = ok
 			}
 			if proceed {
 				if err := doctorKillFn(orphan.PIDs); err != nil {
@@ -441,7 +451,7 @@ func applyMutations(cmd *cobra.Command, checks []*doctorCheck) {
 					output.Success(fmt.Sprintf("Killed %d orphan MCP subprocess(es)", len(orphan.PIDs)))
 				}
 			} else {
-				output.Info("Aborted --kill-orphans (operator declined or Confirm returned false)")
+				output.Info("Aborted --kill-orphans")
 			}
 		}
 	}
@@ -458,9 +468,15 @@ func applyMutations(cmd *cobra.Command, checks []*doctorCheck) {
 		if stale != nil && len(stale.LockPaths) > 0 {
 			proceed := yes
 			if !proceed {
+				// A lock still held guards the audit chain (Phase 14 lock-file
+				// invariants).
 				title := fmt.Sprintf("Remove %d stale lock file(s)?", len(stale.LockPaths))
-				desc := fmt.Sprintf("Paths: %v. Removing a legitimate active lock could corrupt audit chain state per Phase 14 lock-file invariants.", stale.LockPaths)
-				proceed = doctorConfirmFn(title, desc)
+				desc := fmt.Sprintf("Paths: %v. Removing a lock that is still held can corrupt the vault's audit chain.", stale.LockPaths)
+				ok, err := doctorConfirmFn(title, desc)
+				if err != nil {
+					return err
+				}
+				proceed = ok
 			}
 			if proceed {
 				if err := doctorRemoveFn(stale.LockPaths); err != nil {
@@ -469,21 +485,41 @@ func applyMutations(cmd *cobra.Command, checks []*doctorCheck) {
 					output.Success(fmt.Sprintf("Removed %d stale lock file(s)", len(stale.LockPaths)))
 				}
 			} else {
-				output.Info("Aborted --clear-stale-locks (operator declined or Confirm returned false)")
+				output.Info("Aborted --clear-stale-locks")
 			}
 		}
 	}
+	return nil
+}
+
+// doctorPromptFailed is the error of a doctor's prompt that did not answer
+// and was not cancelled, err being the prompt's. The report is already on
+// stdout and has announced its band, so the run exits with the band's code,
+// at least 1 — the kill prompt runs only on a red band, and a failure must
+// not lower it — and the root prints the prompt's Problem under the report:
+// for no terminal, the one that names the stream and the step with --yes;
+// otherwise the error itself.
+func doctorPromptFailed(cmd *cobra.Command, args []string, err error, code int) error {
+	p, ok := output.ProblemOf(promptProblem(cmd, args, err, confirmNoTerminal, "yes"))
+	if !ok {
+		p = output.Problem{Title: err.Error()}
+	}
+	return &output.ProblemError{P: p, Err: &cliErrorWithExit{code: max(code, 1), msg: err.Error()}}
 }
 
 func newVaultDoctorCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose MCP subprocess + token + xrepo contract health (read-only by default)",
-		Long: "Runs 5 read-only diagnostic checks per CONTEXT D-12: orphan MCP subprocesses, " +
-			"stale lock files, VAULT_AI_TOKEN presence, MCP fd-pass handshake, xrepo contract parity. " +
-			"Exit 0 (all green) / 1 (≥1 yellow) / 2 (≥1 red). " +
-			"Mutation is opt-in only via --kill-orphans + --clear-stale-locks (each gated by --yes or " +
-			"output.Confirm) per memory feedback_no_auto_state_mutation + Phase 22 D-09/D-10 lineage.",
+		// The checks are the five CONTEXT D-12 numbers; the mutations are
+		// opt-in and confirmed, never automatic (CONTEXT D-13, Phase 22
+		// D-09/D-10 manual-recovery discipline).
+		Long: "Runs five read-only checks: orphan MCP subprocesses, stale lock files, " +
+			"VAULT_AI_TOKEN presence, the MCP fd-pass handshake and cross-repo contract parity. " +
+			"Exits 0 when every check passes, 1 when one is degraded, 2 when one failed. " +
+			"It changes nothing unless asked to: --kill-orphans and --clear-stale-locks each ask " +
+			"for confirmation before they act, or act at once with --yes; without --yes and " +
+			"without a terminal to ask on, the doctor refuses before it runs any check.",
 		Annotations: vaultAnnotation,
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -491,6 +527,19 @@ func newVaultDoctorCmd() *cobra.Command {
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
+			}
+
+			// A mutation without --yes asks, and with no terminal to ask on
+			// the doctor refuses before any check runs, whatever the checks
+			// would find: its rc 1 must not follow a report whose band
+			// shares that number.
+			killOrphans, _ := cmd.Flags().GetBool("kill-orphans")
+			clearLocks, _ := cmd.Flags().GetBool("clear-stale-locks")
+			yes, _ := cmd.Flags().GetBool("yes")
+			if (killOrphans || clearLocks) && !yes {
+				if err := promptReadyFn(); err != nil {
+					return promptProblem(cmd, args, err, confirmNoTerminal, "yes")
+				}
 			}
 
 			checks := runVaultChecks(ctx)
@@ -506,8 +555,15 @@ func newVaultDoctorCmd() *cobra.Command {
 			}
 
 			// Apply opt-in mutations AFTER rendering so the operator sees the
-			// detected state before any mutation fires.
-			applyMutations(cmd, checks)
+			// detected state before any mutation fires. A cancelled prompt
+			// goes to the root, which dies of its signal, the report kept.
+			if err := applyMutations(cmd, checks); err != nil {
+				var cancelled *output.Cancelled
+				if errors.As(err, &cancelled) {
+					return err
+				}
+				return doctorPromptFailed(cmd, args, err, code)
+			}
 
 			if code == 0 {
 				return nil
@@ -517,8 +573,8 @@ func newVaultDoctorCmd() *cobra.Command {
 			return &cliErrorWithExit{code: code, msg: ""}
 		},
 	}
-	cmd.Flags().Bool("kill-orphans", false, "Kill detected orphan MCP subprocesses (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)")
-	cmd.Flags().Bool("clear-stale-locks", false, "Remove stale lock files (opt-in mutation; gated by --yes / Confirm per CONTEXT D-13)")
-	cmd.Flags().Bool("yes", false, "Skip confirmation prompts for --kill-orphans / --clear-stale-locks (Phase 22 D-09/D-10 discipline)")
+	cmd.Flags().Bool("kill-orphans", false, "Kill the orphan MCP subprocesses found, once confirmed")
+	cmd.Flags().Bool("clear-stale-locks", false, "Remove the stale lock files found, once confirmed")
+	cmd.Flags().Bool("yes", false, "Confirm --kill-orphans and --clear-stale-locks without asking (needed without a terminal)")
 	return cmd
 }

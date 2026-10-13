@@ -42,8 +42,9 @@ import (
 //   - Closed. The next task starts, or Run returns.
 //
 // A signal and a panic take the same path out, from whichever state the task
-// is in. The owner catches SIGINT, SIGTERM and SIGHUP — each one that is not
-// ignored when Run starts, so `ws … &` from a script stays deaf to SIGINT —
+// is in. The owner catches SIGINT, SIGTERM and SIGHUP — each one the process
+// was not started with ignored (the start snapshot, signal.go), so `ws … &`
+// from a script stays deaf to SIGINT even after a prompt asked for it —
 // on a terminal and off it: the messages a task queued would otherwise die
 // with the process. It drains as above with the result line "✗ <title>
 // interrupted after <time>", then restores the signal's default disposition
@@ -125,8 +126,7 @@ type runner struct {
 	tick func() (ticks <-chan time.Time, stop func())
 	// signals starts catching the signals the runner drains for and returns
 	// their channel, and the function that stops catching them; a nil
-	// channel catches nothing. die restores sig's default disposition and
-	// sends it to the process.
+	// channel catches nothing. die ends the process by sig: ExitBySignal.
 	signals func() (sigs <-chan os.Signal, stop func())
 	die     func(sig os.Signal)
 	// grace is how long a second signal waits for the first one's drain
@@ -195,10 +195,13 @@ func newRunner(s *Stream) *runner {
 		},
 		signals: func() (<-chan os.Signal, func()) {
 			// Catching a signal the process was started with ignored would
-			// start delivering it: `ws … &` from a script must stay deaf.
+			// start delivering it: `ws … &` from a script must stay deaf. The
+			// start snapshot answers, not signal.Ignored: a prompt before this
+			// Run has asked for SIGINT, which clears the runtime's record that
+			// it was ignored.
 			var caught []os.Signal
 			for _, sig := range drainedSignals {
-				if !signal.Ignored(sig) {
+				if !ignoredAtStart(sig) {
 					caught = append(caught, sig)
 				}
 			}
@@ -215,15 +218,7 @@ func newRunner(s *Stream) *runner {
 			return c, func() { signal.Stop(c); signal.Stop(pipe) }
 		},
 		grace: time.Second,
-		die: func(sig os.Signal) {
-			signal.Reset(sig)
-			num, _ := sig.(syscall.Signal)
-			_ = syscall.Kill(syscall.Getpid(), num)
-			// The signal ends the process. Should it not within a second,
-			// exit with the status a shell gives a death by that signal.
-			time.Sleep(time.Second)
-			os.Exit(128 + int(num))
-		},
+		die:   ExitBySignal,
 	}
 }
 

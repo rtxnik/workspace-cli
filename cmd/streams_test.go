@@ -176,6 +176,9 @@ type streamsRow struct {
 	// child reaches through DOCKER_HOST, with the fake docker CLI on PATH for
 	// route lookups. Unset, the child's DOCKER_HOST reaches nothing.
 	docker *fakeDockerState
+	// inHome runs the child in the fixture's home rather than where the test
+	// runs, for a row whose arguments name a file there.
+	inHome bool
 }
 
 // reportCheck is the stdout check of a report row whose whole stdout the
@@ -228,6 +231,9 @@ func runStreamsChild(t *testing.T, fx streamsFixture, row streamsRow) (code int,
 	if row.docker != nil {
 		cmd.Env = append(cmd.Env, "DOCKER_HOST="+startFakeDocker(t, *row.docker))
 		writeFakeDockerCLI(t, fx.bin)
+	}
+	if row.inHome {
+		cmd.Dir = fx.home
 	}
 	if v, ok := os.LookupEnv("GOCOVERDIR"); ok {
 		cmd.Env = append(cmd.Env, "GOCOVERDIR="+v)
@@ -314,6 +320,59 @@ var streamsRows = []streamsRow{
 		after: func(t *testing.T, fx streamsFixture) {
 			if _, err := os.Stat(filepath.Join(fx.home, "workspaces", "ops")); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("the workspace directory is still there: %v", err)
+			}
+		}},
+	{name: "ws delete: no terminal", args: []string{"delete", "ops"}, code: 1, stderr: deleteNoTerminal,
+		after: workspaceKept("ops")},
+	{name: "ws delete: no terminal, TERM=dumb", args: []string{"delete", "ops"}, env: []string{"TERM=dumb"}, code: 1,
+		stderr: deleteNoTerminal, after: workspaceKept("ops")},
+	{name: "ws delete --force: no terminal", args: []string{"delete", "--force", "ops"},
+		stderr: "~ Deleting workspace \"ops\"\n✓ Deleting workspace \"ops\"  <t>\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, "workspaces", "ops")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the workspace directory is still there: %v", err)
+			}
+		}},
+	{name: "ws ssh: no terminal", args: []string{"ssh"}, code: 1, stderr: selectNoTerminal("ws ssh <name>")},
+	{name: "ws code: no terminal", args: []string{"code"}, code: 1, stderr: selectNoTerminal("ws code <name>")},
+	{name: "ws ssh api: no terminal", args: []string{"ssh", "api"}},
+	{name: "ws code api: no terminal", args: []string{"code", "api"},
+		stdout: "[12:01:30] info up api: step one\n[12:01:32] done up api\n",
+		stderr: "Opening workspace \"api\" in VS Code...\n[12:01:31] info up api: step two\n"},
+	{name: "ws profile-delete: no terminal", args: []string{"profile-delete", "zig"}, code: 1,
+		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
+			"  stdin and stderr are not terminals\n" +
+			"\n" +
+			"  1. Skip the prompt  ws profile-delete --force zig\n",
+		after: profileKept("zig")},
+	{name: "ws profile-delete nosuch: not found before the prompt", args: []string{"profile-delete", "nosuch"}, code: 1,
+		stderr: "✗ profile \"nosuch\" not found\n"},
+	{name: "ws profile-delete --force: no terminal", args: []string{"profile-delete", "--force", "zig"},
+		stderr: "✓ Profile \"zig\" deleted\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, ".config", "workspaces", "profiles", "zig")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the profile directory is still there: %v", err)
+			}
+		}},
+	{name: "ws proxy profile rm: no terminal", args: []string{"proxy", "profile", "rm", "backup-nl"}, code: 1,
+		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
+			"  stdin and stderr are not terminals\n" +
+			"\n" +
+			"  1. Skip the prompt  ws proxy profile rm --force backup-nl\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, ".config", "xray", "profiles", "backup-nl.json")); err != nil {
+				t.Errorf("the proxy profile backup-nl is gone: %v", err)
+			}
+		}},
+	{name: "ws proxy profile rm primary: the active one, before the prompt", args: []string{"proxy", "profile", "rm", "primary"},
+		code: 1,
+		stderr: "✗ cannot remove active profile \"primary\" (run `ws proxy profile use <other>`\n" +
+			"  first)\n"},
+	{name: "ws proxy profile rm --force: no terminal", args: []string{"proxy", "profile", "rm", "--force", "backup-nl"},
+		stderr: "✓ Profile \"backup-nl\" removed\n",
+		after: func(t *testing.T, fx streamsFixture) {
+			if _, err := os.Stat(filepath.Join(fx.home, ".config", "xray", "profiles", "backup-nl.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the proxy profile backup-nl is still there: %v", err)
 			}
 		}},
 	{name: "ws proxy check: no daemon", args: []string{"proxy", "check"}, code: 1,
@@ -403,6 +462,28 @@ var streamsRows = []streamsRow{
 	{name: "ws vault doctor: mixed bands", args: []string{"vault", "doctor"}, stub: "vault-doctor-mixed", code: 2,
 		check: reportCheck("Vault doctor", "  ⚠ degraded  stale-lock-files", "  ✗ failed    vault-ai-token",
 			"              Fix: provision via chezmoi+age per ADR-ai-06 §Auth; see dotfiles", "Overall: red (exit 2)")},
+	{name: "ws vault doctor --kill-orphans: no terminal", args: []string{"vault", "doctor", "--kill-orphans"},
+		stub: "vault-doctor-mixed", code: 1,
+		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
+			"  stdin and stderr are not terminals\n" +
+			"\n" +
+			"  1. Skip the prompt  ws vault doctor --kill-orphans --yes\n"},
+	{name: "ws vault doctor --kill-orphans --yes: no terminal", args: []string{"vault", "doctor", "--kill-orphans", "--yes"},
+		stub: "vault-doctor-mixed", code: 2,
+		check: reportCheck("Vault doctor", "  ⚠ degraded  stale-lock-files", "  ✗ failed    vault-ai-token", "Overall: red (exit 2)")},
+	{name: "ws vault ingest --dedup-force: no terminal",
+		args:  []string{"vault", "ingest", "note.md", "--dedup-force", "--reason", "duplicate of the weekly note"},
+		setup: withIngestNote, inHome: true, code: 1,
+		stderr: "✗ Cannot ask for confirmation: no terminal\n" +
+			"  stdin and stderr are not terminals\n" +
+			"\n" +
+			"  1. Skip the prompt\n" +
+			"     ws vault ingest --dedup-force '--reason=duplicate of the weekly note' \\\n" +
+			"       --yes note.md\n"},
+	{name: "ws vault ingest --dedup-force --yes: no terminal",
+		args:  []string{"vault", "ingest", "note.md", "--dedup-force", "--reason", "duplicate of the weekly note", "--yes"},
+		setup: withIngestNote, inHome: true, stub: "vault-ingest-created",
+		stdout: "{\n  \"id\": \"zettel-20261011-stand-up\",\n  \"path\": \"30_Resources/zettel-20261011-stand-up.md\"\n}\n"},
 	{name: "ws vault status: mixed bands", args: []string{"vault", "status"}, stub: "vault-status-mixed", code: 1,
 		check: reportCheck("Vault status", "  ✓ ok        MCP liveness", "  ⚠ degraded  cost-tracker headroom",
 			"Overall: yellow (exit 1)")},
@@ -449,6 +530,32 @@ var streamsRows = []streamsRow{
 			"✗ proxy recipe drift: Dockerfile (missing), entrypoint.sh (missing). Run\n" +
 			"  'chezmoi apply' to restore the canonical recipe, or rebuild intentionally with\n" +
 			"  'ws proxy rebuild --allow-drift'\n"},
+	{name: "ws proxy down: workspaces connected, no terminal", args: []string{"proxy", "down"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy down --force")},
+	{name: "ws proxy rebuild: workspaces connected, no terminal", args: []string{"proxy", "rebuild"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy rebuild --force")},
+	{name: "ws proxy restart: workspaces connected, no terminal", args: []string{"proxy", "restart"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy restart --force")},
+	{name: "ws proxy recreate: workspaces connected, no terminal", args: []string{"proxy", "recreate"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy recreate --force")},
+	{name: "ws proxy update: workspaces connected, no terminal", args: []string{"proxy", "update", "v26.2.6"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy update --force v26.2.6")},
+	{name: "ws proxy debug: workspaces connected, no terminal", args: []string{"proxy", "debug", "on"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: proxyNoTerminal("ws proxy debug --force on")},
+	{name: "ws proxy debug maybe: workspaces connected", args: []string{"proxy", "debug", "maybe"}, docker: &fakeHealthyProxy,
+		code: 1, stderr: "✗ usage: ws proxy debug <on|off>\n"},
+	{name: "ws proxy debug maybe: no docker", args: []string{"proxy", "debug", "maybe"},
+		code: 1, stderr: "✗ usage: ws proxy debug <on|off>\n"},
+	{name: "ws proxy restart --force: no docker, no terminal", args: []string{"proxy", "restart", "--force"}, code: 1,
+		stderr: "✗ proxy restart failed: stop proxy: Cannot connect to the Docker daemon at\n" +
+			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
+			"  running? -- proxy left running, restart aborted\n"},
+	{name: "ws proxy recreate --force: no docker, no terminal", args: []string{"proxy", "recreate", "--force"}, code: 1,
+		stderr: "✗ proxy recreate failed: inspect proxy: Cannot connect to the Docker daemon at\n" +
+			"  unix:///nonexistent/ws-error-baseline/docker.sock. Is the docker daemon\n" +
+			"  running?\n"},
+	{name: "ws proxy debug --force: no docker, no terminal", args: []string{"proxy", "debug", "on", "--force"},
+		stderr: "✓ Log level set to \"debug\"\n"},
 	{name: "ws proxy rebuild: docker writes to the log", args: []string{"proxy", "rebuild", "--force", "--allow-drift"},
 		setup: withFakeDockerBuild, code: 1,
 		stderr: "~ Building proxy image\n" +
@@ -596,11 +703,69 @@ func withFakeDockerBuild(t *testing.T, fx streamsFixture) {
 	}
 }
 
+// withIngestNote writes note.md, a note that passes ws vault ingest's input
+// checks, into the fixture's home.
+func withIngestNote(t *testing.T, fx streamsFixture) {
+	t.Helper()
+	note := "---\ntype: zettel\nzone: 30_Resources\ntitle: Stand-up\n---\n\n# Stand-up\n\nWhat was decided.\n"
+	if err := os.WriteFile(filepath.Join(fx.home, "note.md"), []byte(note), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // deleteNotFound is what ws delete prints for a workspace that is not there.
 const deleteNotFound = "✗ Workspace \"nosuch\" not found\n" +
 	"\n" +
 	"  1. List workspaces        ws list\n" +
 	"  2. Remove it from devpod  devpod delete nosuch\n"
+
+// deleteNoTerminal is what ws delete ops prints when it cannot ask: the
+// child's stdin is the null device and its stderr a pipe.
+const deleteNoTerminal = "✗ Cannot ask for confirmation: no terminal\n" +
+	"  stdin and stderr are not terminals\n" +
+	"\n" +
+	"  1. Skip the prompt  ws delete --force ops\n"
+
+// selectNoTerminal is what ws ssh or ws code prints without a name when it
+// cannot ask which workspace: step names the command with a name.
+func selectNoTerminal(step string) string {
+	return "✗ Cannot choose a workspace: no terminal\n" +
+		"  stdin and stderr are not terminals\n" +
+		"\n" +
+		"  1. Name the workspace  " + step + "\n" +
+		"  2. List workspaces     ws list\n"
+}
+
+// proxyNoTerminal is what a proxy mutator prints when workspaces are
+// connected and it cannot ask: step is the invocation with --force.
+func proxyNoTerminal(step string) string {
+	return "✗ Cannot ask for confirmation: no terminal\n" +
+		"  stdin and stderr are not terminals\n" +
+		"\n" +
+		"  1. Skip the prompt  " + step + "\n"
+}
+
+// workspaceKept is the after of a row that must leave the workspace name
+// where it was.
+func workspaceKept(name string) func(t *testing.T, fx streamsFixture) {
+	return func(t *testing.T, fx streamsFixture) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(fx.home, "workspaces", name)); err != nil {
+			t.Errorf("the workspace directory of %s is gone: %v", name, err)
+		}
+	}
+}
+
+// profileKept is the after of a row that must leave the workspace profile
+// name where it was.
+func profileKept(name string) func(t *testing.T, fx streamsFixture) {
+	return func(t *testing.T, fx streamsFixture) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(fx.home, ".config", "workspaces", "profiles", name)); err != nil {
+			t.Errorf("the profile directory of %s is gone: %v", name, err)
+		}
+	}
+}
 
 func TestStreams(t *testing.T) {
 	for _, row := range streamsRows {
@@ -782,9 +947,98 @@ func TestWorkspaceRefusalsReturnTheirProblem(t *testing.T) {
 	} {
 		err := c.cmd.RunE(c.cmd, c.args)
 		p, ok := output.ProblemOf(err)
-		if !ok || p.Title != c.title || len(p.Steps) != 2 || p.Steps[1] != c.next {
+		if !ok || p.Title != c.title || len(p.Steps) != 2 || !reflect.DeepEqual(p.Steps[1], c.next) {
 			t.Errorf("ws %s %s returned %v (Problem %+v); want the error carrying %q with the step %+v",
 				c.cmd.Name(), c.args[0], err, p, c.title, c.next)
+		}
+	}
+}
+
+// selectorFakeDevpod is the devpod TestWorkspaceSelectorOutcomes puts on
+// PATH: it lists api and ops and answers their status, as listing the
+// workspaces asks, and logs every other call to $FAKE_DEVPOD_LOG.
+const selectorFakeDevpod = `#!/bin/sh
+case "$1" in
+list) echo '[{"id":"api"},{"id":"ops"}]' ;;
+status) echo "info Workspace '$2' is 'Running'" ;;
+*) echo "$*" >> "$FAKE_DEVPOD_LOG" ;;
+esac
+`
+
+// TestWorkspaceSelectorOutcomes runs ws ssh and ws code without a name in
+// process, a fake devpod on PATH so that listing the workspaces prints
+// nothing of its own. The selector's answer is the workspace devpod opens.
+// With no terminal the command returns the Problem whose steps need no
+// selector, prints nothing and calls devpod for nothing; a cancelled
+// selector is returned as it is, for the root to die of its signal, with
+// nothing printed either.
+func TestWorkspaceSelectorOutcomes(t *testing.T) {
+	root := t.TempDir()
+	bin, wsRoot, devpodLog := filepath.Join(root, "bin"), filepath.Join(root, "workspaces"), filepath.Join(root, "devpod.log")
+	for _, dir := range []string{bin, filepath.Join(wsRoot, "api"), filepath.Join(wsRoot, "ops")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bin, "devpod"), []byte(selectorFakeDevpod), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("FAKE_DEVPOD_LOG", devpodLog)
+	t.Setenv("WORKSPACES_DIR", wsRoot)
+	orig := selectFn
+	t.Cleanup(func() { selectFn = orig })
+	devpodCalls := func() string {
+		b, _ := os.ReadFile(devpodLog)
+		_ = os.Remove(devpodLog)
+		return string(b)
+	}
+
+	for _, c := range []struct {
+		name   string
+		leaf   *cobra.Command
+		devpod string
+	}{
+		{"ssh", sshCmd, "ssh api\n"},
+		{"code", codeCmd, "up api --ide vscode\n"},
+	} {
+		resetFlags(t, c.leaf)
+		selectFn = func(string, []output.SelectOption) (string, error) { return "api", nil }
+		var err error
+		captureStd(t, func() { _, _, err = execCapture(t, c.name) })
+		if err != nil || devpodCalls() != c.devpod {
+			t.Errorf("ws %s answered api: returned %v; want devpod called as %q", c.name, err, c.devpod)
+		}
+
+		resetFlags(t, c.leaf)
+		selectFn = func(string, []output.SelectOption) (string, error) { return "", errNoTerminal }
+		stdout, stderr := captureStd(t, func() { _, _, err = execCapture(t, c.name) })
+		if !errors.Is(err, output.ErrNoTTY) {
+			t.Errorf("ws %s, no terminal: errors.Is(%v, ErrNoTTY) = false; want true", c.name, err)
+		}
+		want := output.Problem{
+			Title: "Cannot choose a workspace: no terminal",
+			Cause: "stdin is not a terminal",
+			Steps: []output.Remedy{{Label: "Name the workspace", Cmd: "ws " + c.name + " <name>"}, {Label: "List workspaces", Cmd: "ws list"}},
+		}
+		if p, ok := output.ProblemOf(err); !ok || !reflect.DeepEqual(p, want) {
+			t.Errorf("ws %s, no terminal: the Problem is %+v, %t; want %+v", c.name, p, ok, want)
+		}
+		if printed := stdout + stderr + devpodCalls(); printed != "" {
+			t.Errorf("ws %s, no terminal: printed or called %q; want nothing", c.name, printed)
+		}
+
+		resetFlags(t, c.leaf)
+		selectFn = func(string, []output.SelectOption) (string, error) {
+			return "", &output.Cancelled{Signal: syscall.SIGTERM}
+		}
+		stdout, stderr = captureStd(t, func() { _, _, err = execCapture(t, c.name) })
+		var cancelled *output.Cancelled
+		if !errors.As(err, &cancelled) || cancelled.Signal != syscall.SIGTERM {
+			t.Errorf("ws %s, cancelled: returned %v; want the SIGTERM cancellation", c.name, err)
+		}
+		if printed := stdout + stderr + devpodCalls(); printed != "" {
+			t.Errorf("ws %s, cancelled: printed or called %q; want nothing", c.name, printed)
 		}
 	}
 }

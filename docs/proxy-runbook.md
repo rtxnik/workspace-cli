@@ -42,7 +42,7 @@ profile fails `ws proxy doctor`'s `xray -test` check.
 ws proxy recreate
 ```
 
-Tears down and re-creates the `dev-proxy` container so it picks up the upgraded inbound config written in Step 2. Faster than a full rebuild; preserves the existing image.
+Tears down and re-creates the `dev-proxy` container so it picks up the upgraded inbound config written in Step 2. Faster than a full rebuild; preserves the existing image. While workspaces are connected, it names them and asks before it interrupts their network; `--force` skips the question, as in Step 1, and is needed without a terminal.
 
 ### Step 4 — Ordered diagnostic (expect all green)
 

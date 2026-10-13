@@ -73,7 +73,7 @@ var proxyDownCmd = &cobra.Command{
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			if proceed, err := confirmProxyMutation(cfg); !proceed {
+			if proceed, err := confirmProxyMutation(cmd, cfg); !proceed {
 				return err
 			}
 		}
@@ -176,7 +176,7 @@ var proxyRebuildCmd = &cobra.Command{
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			if proceed, err := confirmProxyMutation(cfg); !proceed {
+			if proceed, err := confirmProxyMutation(cmd, cfg); !proceed {
 				return err
 			}
 		}
@@ -280,22 +280,24 @@ var proxyDebugCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
 		cfg := config.Load()
-		force, _ := cmd.Flags().GetBool("force")
-		if !force {
-			if proceed, err := confirmProxyMutation(cfg); !proceed {
-				return err
-			}
-		}
-		mode := args[0]
 
+		// The mode is checked before the gate, so that a wrong one is said
+		// whatever the proxy's state, and never asked about.
 		var level string
-		switch mode {
+		switch args[0] {
 		case "on":
 			level = "debug"
 		case "off":
 			level = "warning"
 		default:
 			return errors.New("usage: ws proxy debug <on|off>")
+		}
+
+		force, _ := cmd.Flags().GetBool("force")
+		if !force {
+			if proceed, err := confirmProxyMutation(cmd, cfg); !proceed {
+				return err
+			}
 		}
 
 		if err := setXrayLogLevel(cfg, level); err != nil {
@@ -325,7 +327,7 @@ var proxyUpdateCmd = &cobra.Command{
 		cfg := config.Load()
 		force, _ := cmd.Flags().GetBool("force")
 		if !force {
-			if proceed, err := confirmProxyMutation(cfg); !proceed {
+			if proceed, err := confirmProxyMutation(cmd, cfg); !proceed {
 				return err
 			}
 		}
@@ -446,17 +448,16 @@ var proxyInitCmd = &cobra.Command{
 	},
 }
 
-// warnConfirmFn is the confirmation seam: production wires to output.Confirm;
-// tests override it to decide the operator's answer without a TTY. The
-// connected-workspace enumeration reuses the package's existing
-// proxyConnectedContainersFn seam (declared in proxy_doctor.go) — it is NOT
-// redeclared here.
+// warnConfirmFn is the confirmation seam: production wires to
+// output.Confirm; tests override it to decide the operator's answer, or the
+// contract's error, without a TTY. The connected-workspace enumeration reuses
+// the package's existing proxyConnectedContainersFn seam (declared in
+// proxy_doctor.go) — it is NOT redeclared here.
 var warnConfirmFn = output.Confirm
 
 // errAborted signals the operator declined a mutation at the connected-workspace
 // prompt. Every mutator turns it into the same clean no-op — "Aborted" on stderr
-// and exit 0: proxy restart and recreate inline, the others through
-// confirmProxyMutation.
+// and exit 0 — through confirmProxyMutation.
 var errAborted = errors.New("aborted by user")
 
 // warnProxyConnected gates a mutating proxy operation on operator confirmation
@@ -467,6 +468,8 @@ var errAborted = errors.New("aborted by user")
 //   - no connected workspaces (nil/empty) -> nil: proceed, no prompt.
 //   - connected workspaces + operator declines -> errAborted.
 //   - connected workspaces + operator confirms -> nil: proceed.
+//   - connected workspaces + a prompt with no terminal, cancelled or failed ->
+//     the prompt's error, as the contract returned it.
 func warnProxyConnected(cfg config.Config) error {
 	names, err := proxyConnectedContainersFn(cfg)
 	if err != nil {
@@ -477,28 +480,35 @@ func warnProxyConnected(cfg config.Config) error {
 	}
 
 	desc := fmt.Sprintf("Active workspaces: %s\nThis will interrupt network for these workspaces.", strings.Join(names, ", "))
-	if !warnConfirmFn("Continue?", desc) {
+	ok, err := warnConfirmFn("Continue?", desc)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return errAborted
 	}
 	return nil
 }
 
-// confirmProxyMutation gates a mutating proxy command on the connected-
-// workspace prompt. proceed is false when the command must stop: either the
-// operator declined — "Aborted" has been printed and err is nil, so the
-// command returns nil and exits 0 — or the connected workspaces could not be
-// enumerated, and err says why (fail-closed). Every caller is therefore
+// confirmProxyMutation gates cmd, a mutating proxy command, on the connected-
+// workspace prompt; it is the one gate of all six. proceed is false when the
+// command must stop: either the operator declined — "Aborted" has been
+// printed and err is nil, so the command returns nil and exits 0 — or err
+// says why: the connected workspaces could not be enumerated (fail-closed);
+// the prompt had no terminal, and err is the Problem whose step is cmd's
+// invocation with --force; or the prompt was cancelled or failed. Every
+// caller is therefore
 //
-//	if proceed, err := confirmProxyMutation(cfg); !proceed {
+//	if proceed, err := confirmProxyMutation(cmd, cfg); !proceed {
 //		return err
 //	}
-func confirmProxyMutation(cfg config.Config) (proceed bool, err error) {
+func confirmProxyMutation(cmd *cobra.Command, cfg config.Config) (proceed bool, err error) {
 	if err := warnProxyConnected(cfg); err != nil {
 		if errors.Is(err, errAborted) {
 			output.Info("Aborted")
 			return false, nil
 		}
-		return false, err
+		return false, promptProblem(cmd, cmd.Flags().Args(), err, confirmNoTerminal, "force")
 	}
 	return true, nil
 }

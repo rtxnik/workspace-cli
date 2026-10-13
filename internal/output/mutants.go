@@ -52,9 +52,10 @@ package output
 //     rest of the run, with `go test -race ./...` green and nothing to say so.
 //
 // This file is NEVER build-tagged (decision D-11). Production code branches
-// on these switches directly — measured with the last of them wired: 39
-// references over seven files, run.go 9, blocks.go 8, alloc.go 7, stream.go
-// 5, glyph.go 4, text.go 3, message.go 3 — so tagging the DECLARATION out
+// on these switches directly — measured with the prompt contract's wired:
+// 45 references over nine files, run.go 9, blocks.go 8, alloc.go 6,
+// stream.go 5, prompt.go 4, glyph.go 4, text.go 3, prompt_input.go 3,
+// message.go 3 — so tagging the DECLARATION out
 // breaks the ordinary build rather than the harness. The tag goes on the
 // mutation harness and only there. The cost in the shipped binary is one
 // zero-valued struct.
@@ -164,6 +165,15 @@ type mutantSwitches struct {
 	FrameOffTerminal   bool // the frame is drawn whatever the stream, as huh/spinner drew into a pipe
 	NoMessageQueue     bool // a message is written while a task runs, under the frame
 	ResultCarriesError bool // a failed task's result line carries the error, which the root prints again
+
+	// ---------------------------------------- phase-6 §4.10 the prompt contract
+	PromptNoTerminalIsNo     bool // a Confirm that could not ask returns the operator's "no", as the bool form did
+	PromptCancelledIsNo      bool // a Confirm a signal or a Ctrl-C cancelled returns "no"
+	PromptSIGTERMIsAnswer    bool // a SIGTERM that raced the operator's Enter is read as the answer
+	PromptWatchdogNeverFires bool // a recorded signal arms no watchdog, so a run Bubble Tea hung stays hung
+	PromptEOFIsAnswer        bool // the screen-reader mode reads the end of input as the answer, huh's default
+	PromptEOFNotLatched      bool // the screen-reader mode reads stdin again after its end of input
+	PromptDrawnOnStdout      bool // the screen-reader mode draws its prompt on stdout, huh's default
 
 	// ------------------------------------------- §4.7 / §4.2 / §4.5 contract
 	MessagesToStdout      bool // the message helpers write to stdout
